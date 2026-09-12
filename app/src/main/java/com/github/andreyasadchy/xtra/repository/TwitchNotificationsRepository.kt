@@ -23,7 +23,7 @@ class TwitchNotificationsRepository(
     private var accountKey: String? = null
     private val cacheCommitGate = MetadataCacheCommitGate()
 
-    suspend fun getNotifications(cursor: String? = null, limit: Int = 20): TwitchNotificationPage {
+    suspend fun getNotifications(cursor: String? = null, limit: Int = NOTIFICATIONS_PAGE_SIZE): TwitchNotificationPage {
         val key = requireAccount()
         val generationAtStart = cacheCommitGate.generationAtStart()
         val result = privateGqlClient.executeDocument(
@@ -60,12 +60,13 @@ class TwitchNotificationsRepository(
     }
 
     suspend fun markAllNotificationsRead(): Set<String> {
+        val seenCursors = mutableSetOf<String>()
         val ids = buildList {
             var cursor: String? = null
             while (true) {
-                val page = getNotifications(cursor, limit = 50)
+                val page = getNotifications(cursor, limit = NOTIFICATIONS_PAGE_SIZE)
                 addAll(page.notifications.filter { it.isUnread }.map { it.id })
-                val next = page.nextCursor?.takeIf { page.hasNextPage && it.isNotBlank() && it != cursor }
+                val next = nextNotificationCursorOrThrow(page, seenCursors)
                 if (next == null) break
                 cursor = next
             }
@@ -148,8 +149,14 @@ class TwitchNotificationsRepository(
 
 }
 
+internal fun nextNotificationCursorOrThrow(page: TwitchNotificationPage, seenCursors: MutableSet<String>): String? {
+    if (!page.hasNextPage) return null
+    return page.nextCursor?.takeIf { it.isNotBlank() && seenCursors.add(it) }
+        ?: throw TwitchInboxException(TwitchInboxError.PrivateApiChanged(TwitchPrivateGqlOperations.notificationsList.operationName))
+}
+
 internal fun buildNotificationVariables(cursor: String?, limit: Int, language: String) = buildJsonObject {
-    put("first", limit.coerceIn(1, 50))
+    put("first", limit.coerceIn(1, NOTIFICATIONS_PAGE_SIZE))
     cursor?.let { put("after", it) }
     put("language", language)
     put("displayType", "VIEWER")
@@ -158,3 +165,5 @@ internal fun buildNotificationVariables(cursor: String?, limit: Int, language: S
 private val SUPPORTED_NOTIFICATION_LANGUAGES = setOf(
     "ar", "cs", "de", "en", "es", "fr", "id", "it", "ja", "ko", "pl", "pt", "ru", "sk", "tr", "zh",
 )
+
+private const val NOTIFICATIONS_PAGE_SIZE = 20
