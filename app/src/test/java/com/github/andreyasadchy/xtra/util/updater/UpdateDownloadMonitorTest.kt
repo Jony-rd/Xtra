@@ -6,14 +6,41 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CopyOnWriteArrayList
 
 class UpdateDownloadMonitorTest {
+    @Test
+    fun queryFailureIncludesExceptionTypeAndStopReason() = runBlocking {
+        val events = CopyOnWriteArrayList<UpdateDownloadEvent>()
+        val stopped = CompletableDeferred<String>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val monitor = UpdateDownloadMonitor(
+            store = ThrowingStore(),
+            scope = scope,
+            pollMillis = 1L,
+        )
+
+        try {
+            monitor.start(1L, { events += it }) { _, reason -> stopped.complete(reason) }
+            withTimeout(2_000L) { stopped.await() }
+        } finally {
+            monitor.cancel()
+            scope.cancel()
+        }
+
+        val failure = events.single() as UpdateDownloadEvent.Failed
+        assertTrue(failure.queryFailed)
+        assertEquals("IllegalStateException", failure.queryErrorType)
+        assertEquals("QUERY_ERROR", stopped.await())
+    }
+
     @Test
     fun pendingDownloadEventuallyExposesRecovery() = runBlocking {
         val records = ArrayDeque(
@@ -114,5 +141,11 @@ class UpdateDownloadMonitorTest {
         override fun enqueue(release: UpdateRelease, asset: UpdateAsset, fileName: String): Long = 1L
         override fun remove(id: Long) = Unit
         override fun query(id: Long): UpdateDownloadRecord? = records.removeFirstOrNull()
+    }
+
+    private class ThrowingStore : UpdateDownloadStore {
+        override fun enqueue(release: UpdateRelease, asset: UpdateAsset, fileName: String): Long = 1L
+        override fun remove(id: Long) = Unit
+        override fun query(id: Long): UpdateDownloadRecord? = throw IllegalStateException("query unavailable")
     }
 }

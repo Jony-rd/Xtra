@@ -7,6 +7,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 
 sealed interface UpdateDownloadEvent {
     data class Progress(
@@ -19,6 +20,7 @@ sealed interface UpdateDownloadEvent {
         val record: UpdateDownloadRecord?,
         val reason: Int?,
         val queryFailed: Boolean = false,
+        val queryErrorType: String? = null,
     ) : UpdateDownloadEvent
     data object Cancelled : UpdateDownloadEvent
 }
@@ -31,23 +33,47 @@ class UpdateDownloadMonitor(
     private val pollMillis: Long = 400L,
     private val pendingRestartAfterMs: Long = 15_000L,
 ) {
+    @Volatile
     private var job: Job? = null
+    @Volatile
     private var monitoredId: Long? = null
 
-    fun start(id: Long, onEvent: suspend (UpdateDownloadEvent) -> Unit) {
-        if (job?.isActive == true && monitoredId == id) return
+    fun start(id: Long, onEvent: suspend (UpdateDownloadEvent) -> Unit): Boolean {
+        return start(id, onEvent, null)
+    }
+
+    fun start(
+        id: Long,
+        onEvent: suspend (UpdateDownloadEvent) -> Unit,
+        onStopped: ((Long, String) -> Unit)?,
+    ): Boolean {
+        if (job?.isActive == true && monitoredId == id) return false
         job?.cancel()
         monitoredId = id
         job = scope.launch {
             val estimator = TransferRateEstimator()
             var pendingSinceMs: Long? = null
+            var stopReason: String? = null
             try {
                 while (isActive && monitoredId == id) {
-                    val record = runCatching { store.query(id) }.getOrElse {
-                        onEvent(UpdateDownloadEvent.Failed(null, null, queryFailed = true))
+                    val record = try {
+                        store.query(id)
+                    } catch (cancellation: CancellationException) {
+                        throw cancellation
+                    } catch (error: Throwable) {
+                        stopReason = "QUERY_ERROR"
+                        onEvent(
+                            UpdateDownloadEvent.Failed(
+                                record = null,
+                                reason = null,
+                                queryFailed = true,
+                                queryErrorType = error.javaClass.simpleName,
+                            ),
+                        )
                         break
                     }
                     if (record == null) {
+                        stopReason = "RECORD_MISSING"
                         onEvent(UpdateDownloadEvent.Failed(null, null))
                         break
                     }
@@ -103,10 +129,12 @@ class UpdateDownloadMonitor(
                             )
                         }
                         DownloadManager.STATUS_SUCCESSFUL -> {
+                            stopReason = "COMPLETED"
                             onEvent(UpdateDownloadEvent.Completed(record))
                             break
                         }
                         else -> {
+                            stopReason = "DOWNLOAD_FAILED"
                             onEvent(UpdateDownloadEvent.Failed(record, record.reason))
                             break
                         }
@@ -114,13 +142,19 @@ class UpdateDownloadMonitor(
                     delay(pollMillis)
                 }
             } finally {
+                val wasCancelled = !isActive || monitoredId != id
                 if (monitoredId == id) {
                     monitoredId = null
                     job = null
                 }
+                val reason = stopReason ?: if (wasCancelled) "CANCELLED" else "UNEXPECTED"
+                runCatching { onStopped?.invoke(id, reason) }
             }
         }
+        return true
     }
+
+    fun isMonitoring(id: Long): Boolean = job?.isActive == true && monitoredId == id
 
     fun cancel() {
         monitoredId = null
