@@ -97,6 +97,7 @@ class UpdateRepository(
     private val downloadMonitor = downloadStore?.let { store ->
         UpdateDownloadMonitor(store, scope)
     }
+    private val downloadTelemetry = UpdateDownloadTelemetry(preferences)
     // Lock order is check -> install -> download. Check claims install ownership for its state
     // transition and each result publication; download and install callbacks must take their
     // corresponding lock before inspecting or publishing ownership-backed state.
@@ -517,8 +518,17 @@ class UpdateRepository(
             }
             clearSuppressionForExplicitDownload(release)
             val fileName = fileNameFor(release, asset)
-            val id = downloadStore?.enqueue(selectedRelease, asset, fileName)
-                ?: throw UpdateException(UpdateError.DownloadFailed)
+            val attemptId = downloadTelemetry.begin(selectedRelease, asset)
+            val id = try {
+                downloadStore?.enqueue(selectedRelease, asset, fileName)
+                    ?: throw UpdateException(UpdateError.DownloadFailed)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (error: Throwable) {
+                downloadTelemetry.recordEnqueueFailure(error)
+                throw error
+            }
+            downloadTelemetry.recordEnqueued(attemptId, id)
             activeDownloadId = id
             if (!preferences.edit()
                     .putLong(C.UPDATE_DOWNLOAD_ID, id)
@@ -554,6 +564,7 @@ class UpdateRepository(
             ready.await()
             downloadLock.withLock {
                 val cancelledDownloadId = activeDownloadId
+                downloadTelemetry.recordCancelled(cancelledDownloadId)
                 clearDownloadReference()
                 removeDownload(cancelledDownloadId)
                 _state.value = loadPersistedRelease()?.let(::stateForUnownedRelease) ?: UpdateState.Idle
@@ -567,6 +578,7 @@ class UpdateRepository(
             downloadLock.withLock {
                 val current = _state.value as? UpdateState.Downloading ?: return@withLock
                 val oldDownloadId = activeDownloadId
+                downloadTelemetry.recordCancelled(oldDownloadId)
                 clearDownloadReference()
                 removeDownload(oldDownloadId)
                 _state.value = UpdateState.Available(current.release)
@@ -848,7 +860,16 @@ class UpdateRepository(
         assetName = preferences.getString(C.UPDATE_AVAILABLE_ASSET_NAME, null),
         lastSuccessfulCheck = lastSuccessfulCheck.takeIf { it > 0L },
         lastAttemptedCheck = lastAttemptedCheck.takeIf { it > 0L },
-        downloadRecord = activeDownloadId?.let { id -> runCatching { downloadStore?.query(id) }.getOrNull() },
+        downloadRecord = activeDownloadId?.let { id ->
+            runCatching { downloadStore?.query(id) }
+                .onFailure { error -> downloadTelemetry.recordQueryFailure(id, error.javaClass.simpleName) }
+                .getOrNull()
+        },
+        downloadAttempt = downloadTelemetry.snapshot(),
+        monitorActive = activeDownloadId?.let { id -> downloadMonitor?.isMonitoring(id) },
+        foreground = runCatching { foregroundChecker() }.getOrNull(),
+        network = UpdateDiagnostics.network(context),
+        availableStorageBytes = UpdateDiagnostics.availableStorageBytes(context),
     )
 
     fun selectedAssetInfo(): UpdateSelectedAssetInfo? {
@@ -1069,6 +1090,7 @@ class UpdateRepository(
             }
             downloadLock.withLock {
                 val currentRelease = loadPersistedRelease() ?: return@withLock
+                activeDownloadId?.let(downloadTelemetry::recordProcessRecovery)
                 reconcileDownload(currentRelease)
             }
         }
@@ -1111,6 +1133,7 @@ class UpdateRepository(
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (error: Throwable) {
+            downloadTelemetry.recordQueryFailure(id, error.javaClass.simpleName)
             _state.value = UpdateState.Error(
                 UpdateStage.DOWNLOAD,
                 UpdateErrorMapper.fromDownloadThrowable(error),
@@ -1120,6 +1143,9 @@ class UpdateRepository(
             return
         }
         if (record == null) {
+            if (downloadMonitor?.isMonitoring(id) != true) {
+                downloadTelemetry.recordMissing(id)
+            }
             clearDownloadReference()
             _state.value = if (activeInstallSessionId != null && activeInstallReleaseId == release.id) {
                 installState(release)
@@ -1171,38 +1197,66 @@ class UpdateRepository(
 
     private fun monitorDownload(release: UpdateRelease) {
         val id = activeDownloadId ?: return
-        downloadMonitor?.start(id) { event ->
-            downloadLock.withLock {
-                if (activeDownloadId != id) return@withLock
-                when (event) {
-                    is UpdateDownloadEvent.Progress -> reconcileDownload(
-                        release,
-                        observedRecord = event.record,
-                        observedProgress = event.telemetry,
-                    )
-                    is UpdateDownloadEvent.Completed -> reconcileDownload(
-                        release,
-                        observedRecord = event.record,
-                    )
-                    is UpdateDownloadEvent.Failed -> {
-                        if (event.record == null && !event.queryFailed) {
-                            reconcileDownload(release)
-                            return@withLock
+        val started = downloadMonitor?.start(
+            id,
+            onEvent = { event ->
+                downloadLock.withLock {
+                    if (activeDownloadId != id) return@withLock
+                    when (event) {
+                        is UpdateDownloadEvent.Progress -> {
+                            downloadTelemetry.recordObservation(id, event.record, event.telemetry)
+                            reconcileDownload(
+                                release,
+                                observedRecord = event.record,
+                                observedProgress = event.telemetry,
+                            )
                         }
-                        val error = UpdateErrorMapper.fromDownloadReason(event.reason)
-                        clearDownloadReference()
-                        _state.value = UpdateState.Error(
-                            UpdateStage.DOWNLOAD,
-                            error,
-                            UpdatePolicy.isRetryable(UpdateStage.DOWNLOAD, error),
-                            release,
-                            downloadManagerReason = event.reason,
-                        )
+                        is UpdateDownloadEvent.Completed -> {
+                            downloadTelemetry.recordObservation(
+                                id,
+                                event.record,
+                                DownloadProgress(event.record.downloadedBytes, event.record.totalBytes),
+                            )
+                            downloadTelemetry.recordCompleted(id)
+                            reconcileDownload(
+                                release,
+                                observedRecord = event.record,
+                            )
+                        }
+                        is UpdateDownloadEvent.Failed -> {
+                            if (event.queryFailed) {
+                                downloadTelemetry.recordQueryFailure(id, event.queryErrorType ?: "Unknown")
+                            }
+                            if (event.record == null && !event.queryFailed) {
+                                downloadTelemetry.recordMissing(id)
+                                reconcileDownload(release)
+                                return@withLock
+                            }
+                            val error = UpdateErrorMapper.fromDownloadReason(event.reason)
+                            event.record?.let {
+                                downloadTelemetry.recordObservation(
+                                    id,
+                                    it,
+                                    DownloadProgress(it.downloadedBytes, it.totalBytes),
+                                )
+                            }
+                            downloadTelemetry.recordFailed(id, event.reason, event.queryErrorType)
+                            clearDownloadReference()
+                            _state.value = UpdateState.Error(
+                                UpdateStage.DOWNLOAD,
+                                error,
+                                UpdatePolicy.isRetryable(UpdateStage.DOWNLOAD, error),
+                                release,
+                                downloadManagerReason = event.reason,
+                            )
+                        }
+                        UpdateDownloadEvent.Cancelled -> Unit
                     }
-                    UpdateDownloadEvent.Cancelled -> Unit
                 }
-            }
-        }
+            },
+            onStopped = downloadTelemetry::recordMonitorStopped,
+        )
+        if (started == true) downloadTelemetry.recordMonitorStarted(id)
     }
 
     private fun replacePersistedRelease(release: UpdateRelease, asset: UpdateAsset) {

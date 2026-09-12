@@ -1330,6 +1330,30 @@
     <string name="update_diagnostics_last_attempt">Last attempted check: %1$s</string>
     <string name="update_diagnostics_error">Last error: %1$s</string>
     <string name="update_diagnostics_timestamp">Snapshot: %1$s</string>
+    <string name="update_diagnostics_unknown" translatable="false">unknown</string>
+    <string name="update_diagnostics_attempt" translatable="false">Attempt ID: %1$s</string>
+    <string name="update_diagnostics_download_id" translatable="false">DownloadManager ID: %1$d</string>
+    <string name="update_diagnostics_endpoint" translatable="false">Endpoint: %1$s</string>
+    <string name="update_diagnostics_attempt_created" translatable="false">Attempt created: %1$s</string>
+    <string name="update_diagnostics_enqueued" translatable="false">Enqueued: %1$s</string>
+    <string name="update_diagnostics_attempt_progress" translatable="false">Persisted attempt progress: %1$s / %2$s, rate=%3$s</string>
+    <string name="update_diagnostics_monitor" translatable="false">Monitor: persisted=%1$s, active=%2$s</string>
+    <string name="update_diagnostics_last_poll" translatable="false">Last poll: %1$s (%2$s)</string>
+    <string name="update_diagnostics_first_byte" translatable="false">First byte: %1$s</string>
+    <string name="update_diagnostics_last_byte" translatable="false">Last byte: %1$s</string>
+    <string name="update_diagnostics_observed_status" translatable="false">Observed status: %1$s</string>
+    <string name="update_diagnostics_status_age" translatable="false">Status since: %1$s (%2$s)</string>
+    <string name="update_diagnostics_observed_reason" translatable="false">Observed reason: %1$s (%2$d)</string>
+    <string name="update_diagnostics_polls" translatable="false">Polls: %1$d</string>
+    <string name="update_diagnostics_query_failures" translatable="false">Query failures: %1$d</string>
+    <string name="update_diagnostics_process_recoveries" translatable="false">Process recoveries: %1$d</string>
+    <string name="update_diagnostics_monitor_stop" translatable="false">Monitor stop reason: %1$s</string>
+    <string name="update_diagnostics_query_error" translatable="false">Last query error: %1$s</string>
+    <string name="update_diagnostics_outcome" translatable="false">Outcome: %1$s</string>
+    <string name="update_diagnostics_event" translatable="false">Event: %1$s %2$s</string>
+    <string name="update_diagnostics_network" translatable="false">Network: active=%1$s, validated=%2$s, metered=%3$s, transport=%4$s</string>
+    <string name="update_diagnostics_storage" translatable="false">Available update storage: %1$s</string>
+    <string name="update_diagnostics_foreground" translatable="false">App foreground: %1$s</string>
     <string name="none">None</string>
     <plurals name="update_eta_seconds">
         <item quantity="one">%d sec</item>

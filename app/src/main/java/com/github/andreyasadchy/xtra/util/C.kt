@@ -390,6 +390,7 @@ object C {
     const val UPDATE_DOWNLOADED_VERSION = "update_downloaded_version"
     const val UPDATE_DOWNLOAD_ID = "update_download_id"
     const val UPDATE_DOWNLOAD_FILE = "update_download_file"
+    const val UPDATE_DOWNLOAD_DIAGNOSTICS = "update_download_diagnostics"
     const val UPDATE_INSTALL_SESSION_ID = "update_install_session_id"
     const val UPDATE_INSTALL_RELEASE_ID = "update_install_release_id"
     const val UPDATE_INSTALL_COMMIT_STARTED = "update_install_commit_started"

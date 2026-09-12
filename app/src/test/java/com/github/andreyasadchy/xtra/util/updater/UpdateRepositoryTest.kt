@@ -711,6 +711,47 @@ class UpdateRepositoryTest {
     }
 
     @Test
+    fun recoveryQueryFailureIsRetainedInDownloadDiagnostics() = runBlocking {
+        val preferences = MemoryPreferences().apply {
+            persistDownloadedRelease("v2.58.6-build.125", 125L)
+        }
+        val asset = UpdateAsset(
+            name = "app-release.apk",
+            contentType = UpdateRepository.APK_MIME_TYPE,
+            downloadUrl = "https://example.test/old.apk",
+            size = 10L,
+        )
+        val release = UpdateRelease(
+            tagName = "v2.58.6-build.125",
+            versionName = "2.58.6",
+            buildNumber = 125L,
+            title = "Xtra",
+            releaseNotes = emptyList(),
+            rawBody = "",
+            releaseUrl = "https://example.test/releases/125",
+            publishedAt = null,
+            assets = listOf(asset),
+            prerelease = false,
+            draft = false,
+        )
+        val telemetry = UpdateDownloadTelemetry(preferences) { 1_000L }
+        val attemptId = telemetry.begin(release, asset)
+        telemetry.recordEnqueued(attemptId, 125L)
+
+        val repository = UpdateRepository(
+            TestContext(preferences),
+            QueueReleaseSource(emptyList()),
+            downloadStore = ThrowingDownloadStore(),
+        )
+        awaitState(repository) { it is UpdateState.Error }
+
+        val diagnostics = UpdateDownloadTelemetry(preferences).snapshot()
+        assertNotNull(diagnostics)
+        assertEquals(1L, diagnostics?.queryFailureCount)
+        assertEquals("IOException", diagnostics?.lastErrorType)
+    }
+
+    @Test
     fun downloadCompletionEntryPointReturnsAfterStateIsDurable() = runBlocking {
         val preferences = MemoryPreferences()
         val downloads = MemoryDownloadStore().apply {
