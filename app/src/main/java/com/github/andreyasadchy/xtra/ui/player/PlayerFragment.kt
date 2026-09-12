@@ -141,6 +141,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
     private var keyboardLayoutListener: ViewTreeObserver.OnGlobalLayoutListener? = null
     private var resizeMode = 0
     private var chatWidthLandscape = 0
+    private var phoneChatOverlayGesture: PhoneChatOverlayGestureController? = null
 
     private var activePointerId = -1
     private var lastX = 0f
@@ -606,6 +607,15 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
             binding.dragView.requestFocus()
         }
         with(binding) {
+            phoneChatOverlayGesture = PhoneChatOverlayGestureController(
+                context = requireContext(),
+                chat = chatLayout,
+                parent = slidingLayout,
+                dragHandle = phoneChatOverlayHandle,
+                dispatchChatTouch = { event -> chatLinearLayout.dispatchTouchEvent(event) },
+                onChatTouchActiveChanged = { active -> chatTouchActive = active },
+                isInteractionLocked = { isInteractionLocked },
+            )
             val ignoreCutouts = requireContext().prefs().getBoolean(C.UI_DRAW_BEHIND_CUTOUTS, false)
             val cornerPadding = requireContext().prefs().getBoolean(C.PLAYER_ROUNDED_CORNER_PADDING, false)
             ViewCompat.setOnApplyWindowInsetsListener(view) { _, windowInsets ->
@@ -1016,6 +1026,9 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
             }
             chatTouchView.setOnTouchListener { _, event ->
                 if (isInteractionLocked) {
+                    return@setOnTouchListener true
+                }
+                if (phoneChatOverlayGesture?.onOverlayTouch(event) == true) {
                     return@setOnTouchListener true
                 }
 
@@ -1772,7 +1785,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                             if (currentBinding.slidingLayout.isKeyboardShown) {
                                 if (!isKeyboardShown) {
                                     isKeyboardShown = true
-                                    if (!isPortrait && !currentContext.isTelevision()) {
+                                    if (!isPortrait && !currentContext.isTelevision() && !phoneChatOverlayEnabled(currentContext)) {
                                         currentBinding.chatLayout.updateLayoutParams { width = (currentBinding.slidingLayout.width / 1.8f).toInt() }
                                         showStatusBar()
                                     }
@@ -1781,7 +1794,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                                 if (isKeyboardShown) {
                                     isKeyboardShown = false
                                     currentBinding.chatLayout.clearFocus()
-                                    if (!isPortrait && !currentContext.isTelevision()) {
+                                    if (!isPortrait && !currentContext.isTelevision() && !phoneChatOverlayEnabled(currentContext)) {
                                         currentBinding.chatLayout.updateLayoutParams { width = effectiveLandscapeChatWidth() }
                                         if (isMaximized) {
                                             hideStatusBar()
@@ -2115,15 +2128,20 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
             if (isPortrait) {
                 requireActivity().window.decorView.setOnSystemUiVisibilityChangeListener(null)
                 showStatusBar()
+                phoneChatOverlayGesture?.setActive(false)
+                resetPhoneChatOverlayPresentation(chatLayout, phoneChatOverlayHandle)
+                resetPhoneChatOverlayLayout(
+                    chatLayout,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    Gravity.BOTTOM,
+                )
+                playerLayout.isPortrait = true
+                chatLayout.isPortrait = true
                 playerLayout.updateLayoutParams<FrameLayout.LayoutParams> {
                     width = ViewGroup.LayoutParams.MATCH_PARENT
                     height = ViewGroup.LayoutParams.MATCH_PARENT
                     marginEnd = 0
-                }
-                chatLayout.updateLayoutParams<FrameLayout.LayoutParams> {
-                    width = ViewGroup.LayoutParams.MATCH_PARENT
-                    height = ViewGroup.LayoutParams.MATCH_PARENT
-                    gravity = Gravity.BOTTOM
                 }
                 if (isMaximized) {
                     setChatLayoutVisibility(View.VISIBLE)
@@ -2149,8 +2167,6 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                     }
                 }
                 aspectRatioFrameLayout.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                playerLayout.isPortrait = true
-                chatLayout.isPortrait = true
                 with(playerControls) {
                     if (requireContext().prefs().getBoolean(C.PLAYER_FULLSCREEN, true)) {
                         fullscreen.visibility = View.VISIBLE
@@ -2177,25 +2193,36 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 }
                 if (isMaximized) {
                     hideStatusBar()
-                    val chatWidth = if (isChatOpen) effectiveLandscapeChatWidth() else 0
+                    val phoneOverlay = phoneChatOverlayEnabled(requireContext())
+                    val chatWidth = if (isChatOpen && !phoneOverlay) effectiveLandscapeChatWidth() else 0
                     playerLayout.updateLayoutParams<FrameLayout.LayoutParams> {
                         width = ViewGroup.LayoutParams.MATCH_PARENT
                         height = ViewGroup.LayoutParams.MATCH_PARENT
-                        marginEnd = chatWidth
+                        marginEnd = if (phoneOverlay) 0 else chatWidth
                     }
                     chatLayout.updateLayoutParams<FrameLayout.LayoutParams> {
-                        width = chatWidth
+                        width = if (phoneOverlay) ViewGroup.LayoutParams.MATCH_PARENT else chatWidth
                         height = ViewGroup.LayoutParams.MATCH_PARENT
-                        gravity = Gravity.END
+                        gravity = if (phoneOverlay) Gravity.TOP or Gravity.START else Gravity.END
+                        leftMargin = 0
+                        topMargin = 0
+                        rightMargin = 0
+                        bottomMargin = 0
                     }
-                    slidingLayout.doOnLayout {
-                        if (!isPortrait && isMaximized && isChatOpen) {
-                            val effectiveChatWidth = effectiveLandscapeChatWidth()
-                            playerLayout.updateLayoutParams<FrameLayout.LayoutParams> {
-                                marginEnd = effectiveChatWidth
-                            }
-                            chatLayout.updateLayoutParams<FrameLayout.LayoutParams> {
-                                width = effectiveChatWidth
+                    if (!phoneOverlay) {
+                        slidingLayout.doOnLayout {
+                            if (!phoneChatOverlayEnabled(requireContext()) && !isPortrait && isMaximized && isChatOpen) {
+                                val effectiveChatWidth = effectiveLandscapeChatWidth()
+                                playerLayout.updateLayoutParams<FrameLayout.LayoutParams> {
+                                    marginEnd = effectiveChatWidth
+                                }
+                                chatLayout.updateLayoutParams<FrameLayout.LayoutParams> {
+                                    width = effectiveChatWidth
+                                    leftMargin = 0
+                                    topMargin = 0
+                                    rightMargin = 0
+                                    bottomMargin = 0
+                                }
                             }
                         }
                     }
@@ -2220,6 +2247,10 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                         width = chatWidthLandscape
                         height = ViewGroup.LayoutParams.MATCH_PARENT
                         gravity = Gravity.END
+                        leftMargin = 0
+                        topMargin = 0
+                        rightMargin = 0
+                        bottomMargin = 0
                     }
                     setChatLayoutVisibility(View.GONE)
                     val (minimizedScaleX, minimizedScaleY) = getScaleValues()
@@ -2293,6 +2324,8 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
             }
             if (requireContext().isTelevision() && !isPortrait) {
                 applyTvChatPresentation(chatLayout, playerLayout, slidingLayout, isChatOpen)
+            } else if (!isPortrait) {
+                applyPhoneChatPresentation(isChatOpen)
             }
         }
     }
@@ -2384,13 +2417,20 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
         resizeMode = (resizeMode + 1).let { if (it < 5) it else 0 }
         binding.aspectRatioFrameLayout.resizeMode = resizeMode
         if (!isPortrait && isMaximized && isChatOpen) {
-            val chatWidth = effectiveLandscapeChatWidth()
+            val phoneOverlay = phoneChatOverlayEnabled(requireContext())
+            val chatWidth = if (phoneOverlay) 0 else effectiveLandscapeChatWidth()
             binding.playerLayout.updateLayoutParams<FrameLayout.LayoutParams> {
-                marginEnd = chatWidth
+                marginEnd = if (phoneOverlay) 0 else chatWidth
             }
             binding.chatLayout.updateLayoutParams<FrameLayout.LayoutParams> {
-                width = chatWidth
+                width = if (phoneOverlay) ViewGroup.LayoutParams.MATCH_PARENT else chatWidth
+                gravity = if (phoneOverlay) Gravity.TOP or Gravity.START else Gravity.END
+                leftMargin = 0
+                topMargin = 0
+                rightMargin = 0
+                bottomMargin = 0
             }
+            if (phoneOverlay) applyPhoneChatPresentation(true)
         }
         requireContext().prefs().edit { putInt(C.ASPECT_RATIO_LANDSCAPE, resizeMode) }
     }
@@ -2550,6 +2590,8 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
             setChatLayoutVisibility(View.GONE)
             if (requireContext().isTelevision()) {
                 applyTvChatPresentation(chatLayout, playerLayout, slidingLayout, false)
+            } else if (!isPortrait) {
+                applyPhoneChatPresentation(false)
             }
         }
     }
@@ -2561,22 +2603,79 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
 
     private fun showChatLayout() {
         with(binding) {
-            val chatWidth = effectiveLandscapeChatWidth()
+            val phoneOverlay = !isPortrait && isMaximized && phoneChatOverlayEnabled(requireContext())
+            val chatWidth = when {
+                phoneOverlay -> 0
+                isPortrait -> ViewGroup.LayoutParams.MATCH_PARENT
+                else -> effectiveLandscapeChatWidth()
+            }
+            val chatGravity = when {
+                phoneOverlay -> Gravity.TOP or Gravity.START
+                isPortrait -> Gravity.BOTTOM
+                else -> Gravity.END
+            }
             playerLayout.updateLayoutParams<FrameLayout.LayoutParams> {
                 width = ViewGroup.LayoutParams.MATCH_PARENT
                 height = ViewGroup.LayoutParams.MATCH_PARENT
-                marginEnd = chatWidth
+                marginEnd = if (phoneOverlay || isPortrait) 0 else chatWidth
             }
             chatLayout.updateLayoutParams<FrameLayout.LayoutParams> {
-                width = chatWidth
+                width = if (phoneOverlay) ViewGroup.LayoutParams.MATCH_PARENT else chatWidth
                 height = ViewGroup.LayoutParams.MATCH_PARENT
-                gravity = Gravity.END
+                gravity = chatGravity
+                leftMargin = 0
+                topMargin = 0
+                rightMargin = 0
+                bottomMargin = 0
+            }
+            if (!phoneOverlay) {
+                resetPhoneChatOverlayPresentation(chatLayout, phoneChatOverlayHandle)
+                chatLayout.isPortrait = isPortrait
+                phoneChatOverlayGesture?.setActive(false)
             }
             setChatLayoutVisibility(View.VISIBLE)
             if (requireContext().isTelevision()) {
                 applyTvChatPresentation(chatLayout, playerLayout, slidingLayout, true)
+            } else if (!isPortrait) {
+                applyPhoneChatPresentation(true)
             }
         }
+    }
+
+    private fun applyPhoneChatPresentation(visible: Boolean) {
+        val overlayMode = !isPortrait && isMaximized && phoneChatOverlayEnabled(requireContext())
+        if (!overlayMode) {
+            phoneChatOverlayGesture?.setActive(false)
+            resetPhoneChatOverlayPresentation(binding.chatLayout, binding.phoneChatOverlayHandle)
+            if (visible && isMaximized && !isPortrait) {
+                val chatWidth = effectiveLandscapeChatWidth()
+                binding.playerLayout.updateLayoutParams<FrameLayout.LayoutParams> {
+                    marginEnd = chatWidth
+                }
+                binding.chatLayout.updateLayoutParams<FrameLayout.LayoutParams> {
+                    width = chatWidth
+                    height = ViewGroup.LayoutParams.MATCH_PARENT
+                    gravity = Gravity.END
+                    leftMargin = 0
+                    topMargin = 0
+                    rightMargin = 0
+                    bottomMargin = 0
+                }
+            }
+            return
+        }
+        val applied = applyPhoneChatOverlayPresentation(
+            chat = binding.chatLayout,
+            player = binding.playerLayout,
+            parent = binding.slidingLayout,
+            dragHandle = binding.phoneChatOverlayHandle,
+            visible = visible,
+            isCurrent = {
+                isAdded && view != null && !isPortrait && isMaximized &&
+                    phoneChatOverlayEnabled(requireContext()) && isChatOpen == visible
+            },
+        )
+        phoneChatOverlayGesture?.setActive(applied && visible && overlayMode)
     }
 
     private fun effectiveLandscapeChatWidth(): Int {
@@ -2974,6 +3073,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
 
         val currentBinding = _binding ?: return
         if (locked && !isInteractionLocked) {
+            phoneChatOverlayGesture?.cancel()
             if (chatTouchActive) {
                 MotionEvent.obtain(
                     SystemClock.uptimeMillis(),
@@ -3355,6 +3455,8 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
         super.onResume()
         if (requireContext().isTelevision() && !isPortrait) {
             applyTvChatPresentation(binding.chatLayout, binding.playerLayout, binding.slidingLayout, isChatOpen)
+        } else if (!isPortrait) {
+            applyPhoneChatPresentation(isChatOpen)
         }
         val isInPIPMode = when {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> requireActivity().isInPictureInPictureMode
@@ -3738,6 +3840,8 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
     }
 
     override fun onDestroyView() {
+        phoneChatOverlayGesture?.detach()
+        phoneChatOverlayGesture = null
         _binding?.let { binding ->
             keyboardLayoutListener?.let(binding.slidingLayout.viewTreeObserver::removeOnGlobalLayoutListener)
         }

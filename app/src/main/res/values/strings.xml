@@ -486,6 +486,14 @@
     <string name="settings_chat_history_page">History</string>
     <string name="settings_chat_translation_page">Translation</string>
     <string name="settings_chat_visibility">Message visibility</string>
+    <string name="settings_phone_chat">Phone fullscreen chat</string>
+    <string name="settings_phone_chat_overlay">Floating chat in fullscreen</string>
+    <string name="settings_phone_chat_overlay_summary">Show chat over the video in landscape. Drag the top handle to move it; pinch to resize.</string>
+    <string name="settings_phone_chat_width">Floating chat width</string>
+    <string name="settings_phone_chat_height">Floating chat height</string>
+    <string name="settings_phone_chat_opacity">Floating chat opacity</string>
+    <string name="settings_phone_chat_reset">Reset floating chat layout</string>
+    <string name="player_move_chat">Move floating chat</string>
     <string name="settings_user_card_category">Chat user pop-out</string>
     <string name="settings_user_card_account_created">Account creation date</string>
     <string name="settings_user_card_account_created_summary">Show when a chatter created their Twitch account.</string>

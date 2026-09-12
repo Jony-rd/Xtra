@@ -96,6 +96,9 @@ import com.github.andreyasadchy.xtra.ui.following.overview.FollowingOverviewSect
 import com.github.andreyasadchy.xtra.ui.login.TwitchWebLoginActivity
 import com.github.andreyasadchy.xtra.ui.main.LiveNotificationScheduler
 import com.github.andreyasadchy.xtra.ui.main.LiveNotificationService
+import com.github.andreyasadchy.xtra.ui.player.PhoneChatOverlayConfig
+import com.github.andreyasadchy.xtra.ui.player.persistPhoneChatOverlayConfig
+import com.github.andreyasadchy.xtra.ui.player.phoneChatOverlayConfig
 import com.github.andreyasadchy.xtra.ui.settings.SettingsViewModel.Companion.SettingsViewModelFactory
 import com.github.andreyasadchy.xtra.ui.tv.TvChatOverlayAnchor
 import com.github.andreyasadchy.xtra.ui.tv.TvChatOverlayConfig
@@ -2303,6 +2306,7 @@ class SettingsActivity : AppCompatActivity() {
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.chat_preferences, rootKey)
             configureTvChatPreferences()
+            configurePhoneChatPreferences()
             findPreference<Preference>("chat_appearance_page")?.setOnPreferenceClickListener { findNavController().navigate(R.id.chatAppearanceFragment); true }
             findPreference<Preference>("chat_username_page")?.setOnPreferenceClickListener { findNavController().navigate(R.id.chatUsernameFragment); true }
             findPreference<Preference>("chat_emotes_page")?.setOnPreferenceClickListener { findNavController().navigate(R.id.chatEmotesFragment); true }
@@ -2446,6 +2450,53 @@ class SettingsActivity : AppCompatActivity() {
                 width?.value = config.widthPercent
                 height?.value = config.heightPercent
                 opacity?.value = config.opacityPercent
+                true
+            }
+        }
+
+        private fun configurePhoneChatPreferences() {
+            val category = findPreference<PreferenceCategory>("phone_chat_category") ?: return
+            category.isVisible = !requireContext().isTelevision()
+            if (!category.isVisible) return
+
+            val enabled = findPreference<SwitchPreferenceCompat>(C.PHONE_CHAT_OVERLAY_ENABLED)
+            val width = findPreference<SeekBarPreference>(C.PHONE_CHAT_OVERLAY_WIDTH_PERCENT)
+            val height = findPreference<SeekBarPreference>(C.PHONE_CHAT_OVERLAY_HEIGHT_PERCENT)
+            val opacity = findPreference<SeekBarPreference>(C.PHONE_CHAT_OVERLAY_OPACITY)
+            val markChanged = { (requireActivity() as? SettingsActivity)?.setResult() }
+
+            enabled?.setOnPreferenceChangeListener { _, _ ->
+                markChanged()
+                true
+            }
+            width?.setOnPreferenceChangeListener { _, value ->
+                requireContext().prefs().edit {
+                    putInt(C.PHONE_CHAT_OVERLAY_WIDTH_PERCENT, (value as Int).coerceIn(22, 70))
+                }
+                markChanged()
+                true
+            }
+            height?.setOnPreferenceChangeListener { _, value ->
+                requireContext().prefs().edit {
+                    putInt(C.PHONE_CHAT_OVERLAY_HEIGHT_PERCENT, (value as Int).coerceIn(25, 90))
+                }
+                markChanged()
+                true
+            }
+            opacity?.setOnPreferenceChangeListener { _, value ->
+                requireContext().prefs().edit {
+                    putInt(C.PHONE_CHAT_OVERLAY_OPACITY, (value as Int).coerceIn(40, 100))
+                }
+                markChanged()
+                true
+            }
+            findPreference<Preference>("phone_chat_overlay_reset")?.setOnPreferenceClickListener {
+                val config = PhoneChatOverlayConfig()
+                persistPhoneChatOverlayConfig(requireContext(), config)
+                width?.value = config.widthPercent
+                height?.value = config.heightPercent
+                opacity?.value = config.opacityPercent
+                markChanged()
                 true
             }
         }

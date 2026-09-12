@@ -24,4 +24,7 @@
     <dimen name="tv_chat_overlay_margin">32dp</dimen>
     <dimen name="tv_chat_overlay_min_width">160dp</dimen>
     <dimen name="tv_chat_overlay_min_height">120dp</dimen>
+    <dimen name="phone_chat_overlay_margin">8dp</dimen>
+    <dimen name="phone_chat_overlay_min_width">220dp</dimen>
+    <dimen name="phone_chat_overlay_min_height">160dp</dimen>
 </resources>
