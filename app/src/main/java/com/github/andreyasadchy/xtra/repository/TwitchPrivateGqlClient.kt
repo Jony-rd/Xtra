@@ -126,7 +126,12 @@ class TwitchPrivateGqlClient(
         val errors = body["errors"]?.jsonArray
         if (errors != null && errors.isNotEmpty()) {
             val message = errors.firstOrNull()?.jsonObject?.get("message")?.jsonPrimitive?.content
-            logger?.finishRequest(token, successful = false, httpStatus = response.statusCode, code = "graphql_error")
+            logger?.finishRequest(
+                token,
+                successful = false,
+                httpStatus = response.statusCode,
+                code = "graphql_error_${diagnosticsGraphQlCode(message, response.statusCode)}",
+            )
             throw TwitchInboxException(mapError(operationName, message, response.statusCode))
         }
         logger?.finishRequest(token, successful = true, httpStatus = response.statusCode)
@@ -196,6 +201,19 @@ class TwitchPrivateGqlClient(
             continuation.invokeOnCancellation { request.cancel(); timeout.stop() }
         }
         return Response(response.info.httpStatusCode, response.body.decodeToString())
+    }
+}
+
+internal fun diagnosticsGraphQlCode(message: String?, statusCode: Int): String {
+    val lower = message.orEmpty().lowercase()
+    return when {
+        statusCode == 401 || lower.contains("unauthenticated") || lower.contains("authentication") ||
+            lower.contains("token expired") || lower.contains("invalid token") -> "authentication"
+        statusCode == 429 || lower.contains("rate limit") -> "rate_limited"
+        lower.contains("first") && (lower.contains("limit") || lower.contains("maximum") || lower.contains("greater")) -> "invalid_page_size"
+        lower.contains("persistedquerynotfound") || lower.contains("persisted query not found") -> "persisted_query_missing"
+        lower.contains("internal server") || lower.contains("service unavailable") -> "server_error"
+        else -> "rejected"
     }
 }
 

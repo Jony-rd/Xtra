@@ -60,6 +60,12 @@ class TwitchInboxRequestTest {
     }
 
     @Test
+    fun graphqlDiagnosticsUseAllowlistedCategories() {
+        assertEquals("invalid_page_size", diagnosticsGraphQlCode("first cannot be greater than 20", 200))
+        assertEquals("rejected", diagnosticsGraphQlCode("user-specific server details", 200))
+    }
+
+    @Test
     fun localWhisperSearchKeepsExistingConversationMatches() {
         val peer = TwitchUserSummary("peer-1", "coldblackice", "Coldblackice", null)
         val thread = WhisperThread(

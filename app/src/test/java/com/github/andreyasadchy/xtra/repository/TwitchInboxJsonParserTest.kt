@@ -1,6 +1,8 @@
 package com.github.andreyasadchy.xtra.repository
 
 import com.github.andreyasadchy.xtra.model.twitchinbox.TwitchNotificationAction
+import com.github.andreyasadchy.xtra.model.twitchinbox.TwitchInboxException
+import com.github.andreyasadchy.xtra.model.twitchinbox.TwitchNotificationPage
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -35,8 +37,26 @@ class TwitchInboxJsonParserTest {
         assertFalse(first.containsKey("after"))
 
         val next = buildNotificationVariables("cursor-2", 200, "unsupported")
-        assertEquals("50", next.getValue("first").jsonPrimitive.content)
+        assertEquals("20", next.getValue("first").jsonPrimitive.content)
         assertEquals("cursor-2", next.getValue("after").jsonPrimitive.content)
+    }
+
+    @Test
+    fun refusesToMarkPartialResultsWhenNotificationCursorIsMalformed() {
+        val page = TwitchNotificationPage(emptyList(), nextCursor = null, hasNextPage = true, unreadCount = null)
+
+        val error = runCatching { nextNotificationCursorOrThrow(page, mutableSetOf()) }.exceptionOrNull()
+
+        assertTrue(error is TwitchInboxException)
+    }
+
+    @Test
+    fun refusesToFollowAPreviouslySeenNotificationCursor() {
+        val page = TwitchNotificationPage(emptyList(), nextCursor = "cursor-1", hasNextPage = true, unreadCount = null)
+
+        val error = runCatching { nextNotificationCursorOrThrow(page, mutableSetOf("cursor-1")) }.exceptionOrNull()
+
+        assertTrue(error is TwitchInboxException)
     }
 
     @Test
