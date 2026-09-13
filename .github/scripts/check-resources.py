@@ -99,6 +99,8 @@ INTENTIONAL_FALLBACK_RESOURCES = {
     "settings_diagnostics_live_summary",
     "diagnostics_enable",
     "diagnostics_enable_summary",
+    "diagnostics_account_context",
+    "diagnostics_account_context_summary",
     "diagnostics_category_filter",
     "diagnostics_severity_filter",
     "diagnostics_filter_apply",

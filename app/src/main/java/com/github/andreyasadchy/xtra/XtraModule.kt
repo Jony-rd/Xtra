@@ -294,6 +294,7 @@ class XtraModule(application: Application) {
         UpdateRepository(
             application,
             ReleaseClient(httpEngine, cronetEngine, cronetExecutor, okHttpClient, json),
+            diagnosticsLogger = diagnosticsLogger,
         )
     }
 

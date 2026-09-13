@@ -430,6 +430,7 @@ object C {
     const val LIVE_NOTIFICATION_BASELINE_INITIALIZED = "live_notification_baseline_initialized"
     const val NETWORK_LIBRARY = "network_library"
     const val DIAGNOSTICS_ENABLED = "diagnostics_enabled"
+    const val DIAGNOSTICS_ACCOUNT_CONTEXT_ENABLED = "diagnostics_account_context_enabled"
     const val PLAYER = "player"
     const val DEBUG_CHAT_FULL_MSG = "debug_chat_fullmsg"
     const val DEBUG_API_COMMANDS = "debug_api_commands"

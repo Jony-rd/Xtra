@@ -5,7 +5,12 @@ import android.util.Log
 import com.github.andreyasadchy.xtra.model.id.ValidationResponse
 import com.github.andreyasadchy.xtra.repository.AuthRepository
 import com.github.andreyasadchy.xtra.repository.MissingAuthenticationException
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsCategory
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsField
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsFieldKey
 import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsLogger
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsSeverity
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsTransport
 import com.github.andreyasadchy.xtra.util.C
 import com.github.andreyasadchy.xtra.util.TwitchApiHelper
 import com.github.andreyasadchy.xtra.util.prefs
@@ -198,6 +203,7 @@ class TwitchWebSessionManager(
         send: suspend (Map<String, String>) -> T,
         diagnosticsOperation: String? = null,
         diagnosticsCorrelationId: String? = null,
+        onRetry: () -> Unit = {},
     ): T = IntegrityAwareGqlExecutor<T>(
         isWebSessionActive = ::isWebSessionActive,
         isCurrentAuthorization = ::isCurrentGeckoAuthorization,
@@ -212,6 +218,7 @@ class TwitchWebSessionManager(
         send = send,
         diagnosticsOperation = diagnosticsOperation,
         diagnosticsCorrelationId = diagnosticsCorrelationId,
+        onRetry = onRetry,
     )
 
     /** Debug-only fault injection for exercising the server-rejection recovery path. */
@@ -276,6 +283,8 @@ class TwitchWebSessionManager(
                 rejectedCandidateToken = null
                 authSessionMaintainer.onAuthenticationStateChanged()
                 _state.value = TwitchWebSessionState.SignedOut
+                diagnosticsLogger?.clearAccountContext()
+                logAuthenticationState("signed_out", DiagnosticsSeverity.INFO)
             }
             nativeCleared
         }
@@ -530,6 +539,7 @@ class TwitchWebSessionManager(
                 login = response.login,
                 accountChanged = previous?.userId?.let { it != userId } == true,
             )
+            logAuthenticated(userId, response.login, previous?.userId?.let { it != userId } == true)
         } catch (error: CancellationException) {
             throw error
         } catch (error: TwitchAuthHttpException) {
@@ -582,6 +592,35 @@ class TwitchWebSessionManager(
         clearAcceptedCookieSnapshot()
         authSessionMaintainer.onAuthenticationStateChanged()
         _state.value = TwitchWebSessionState.SignedOut
+        diagnosticsLogger?.clearAccountContext()
+        logAuthenticationState("browser_session_missing", DiagnosticsSeverity.WARN)
+    }
+
+    private fun logAuthenticated(userId: String, login: String?, accountChanged: Boolean) {
+        diagnosticsLogger?.setAccountContext(userId, login)
+        logAuthenticationState(
+            state = "authenticated",
+            severity = DiagnosticsSeverity.INFO,
+            fields = listOf(
+                DiagnosticsField(DiagnosticsFieldKey.AUTHENTICATED, "true"),
+                DiagnosticsField(DiagnosticsFieldKey.ACCOUNT_CHANGED, accountChanged.toString()),
+            ),
+        )
+    }
+
+    private fun logAuthenticationState(
+        state: String,
+        severity: DiagnosticsSeverity,
+        fields: List<DiagnosticsField> = emptyList(),
+    ) {
+        diagnosticsLogger?.event(
+            category = DiagnosticsCategory.AUTH,
+            severity = severity,
+            transport = DiagnosticsTransport.AUTH,
+            operation = "web_session",
+            event = "state_changed",
+            fields = fields + DiagnosticsField(DiagnosticsFieldKey.SESSION_STATE, state),
+        )
     }
 
     private suspend fun publishAcceptedCookies(

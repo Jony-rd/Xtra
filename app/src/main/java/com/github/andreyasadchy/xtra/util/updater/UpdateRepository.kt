@@ -8,6 +8,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.net.Uri
 import android.os.Build
 import androidx.core.content.edit
 import androidx.core.app.NotificationCompat
@@ -15,6 +16,11 @@ import androidx.core.app.NotificationManagerCompat
 import com.github.andreyasadchy.xtra.BuildConfig
 import com.github.andreyasadchy.xtra.R
 import com.github.andreyasadchy.xtra.XtraApp
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsCategory
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsField
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsFieldKey
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsLogger
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsTransport
 import com.github.andreyasadchy.xtra.ui.main.MainActivity
 import com.github.andreyasadchy.xtra.util.C
 import com.github.andreyasadchy.xtra.util.prefs
@@ -74,6 +80,7 @@ class UpdateRepository(
         context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     },
     private val supportedAbis: () -> List<String> = { Build.SUPPORTED_ABIS?.toList().orEmpty() },
+    private val diagnosticsLogger: DiagnosticsLogger? = null,
 ) {
 
     private val preferences = context.tokenPrefs()
@@ -104,7 +111,9 @@ class UpdateRepository(
     private val downloadLock = Mutex()
     private val installLock = Mutex()
     private var activeDownloadId: Long? = preferences.getLong(C.UPDATE_DOWNLOAD_ID, -1L).takeIf { it >= 0L }
+    private var activeDownloadDiagnosticsToken: DiagnosticsLogger.RequestToken? = null
     private var activeInstallSessionId: Int? = preferences.getInt(C.UPDATE_INSTALL_SESSION_ID, -1).takeIf { it >= 0 }
+    private var activeInstallDiagnosticsToken: DiagnosticsLogger.RequestToken? = null
     private var activeInstallReleaseId: String? = preferences.getString(C.UPDATE_INSTALL_RELEASE_ID, null)
     private var installCommitStarted: Boolean = preferences.getBoolean(C.UPDATE_INSTALL_COMMIT_STARTED, false)
     private val installGate = UpdateInstallGate(activeInstallSessionId)
@@ -154,6 +163,7 @@ class UpdateRepository(
             val executingJob = coroutineContext[Job]
             activeCheckJob = executingJob
             var activeCheck: CheckStart? = null
+            var diagnosticsToken: DiagnosticsLogger.RequestToken? = null
             try {
                     ready.await()
                     ensureCurrentCheck(generation)
@@ -170,6 +180,12 @@ class UpdateRepository(
                         }
                     } ?: return@withLock
                     activeCheck = checkStart
+                    diagnosticsToken = diagnosticsLogger?.takeIf { it.isEnabled }?.beginRequest(
+                        category = DiagnosticsCategory.UPDATER,
+                        transport = DiagnosticsTransport.UPDATER,
+                        operation = "update_check",
+                        fields = updateDiagnosticsFields(networkLibrary, url),
+                    )
                     val previousState = checkStart.previousState
                     val preservedAction = previousState.preservedAction()
                     markAttempted()
@@ -196,14 +212,15 @@ class UpdateRepository(
                         ensureCurrentCheck(generation)
                         val now = System.currentTimeMillis()
                         val deferred = isDeferred(release)
-                        when (UpdatePolicy.decide(
+                        val decision = UpdatePolicy.decide(
                             installedVersionName = BuildConfig.VERSION_NAME,
                             installedBuildNumber = installedBuildNumber,
                             release = release,
                             ignoredReleaseId = ignoredReleaseId,
                             automatic = automatic,
                             deferred = deferred,
-                        )) {
+                        )
+                        when (decision) {
                             UpdateDecision.Available -> {
                                 stage = UpdateStage.ASSET_SELECTION
                                 val asset = UpdatePolicy.selectAsset(release, supportedAbis()).getOrElse { throw it }
@@ -272,13 +289,34 @@ class UpdateRepository(
                         }
                         ensureCurrentCheck(generation)
                         markSuccessful(now)
+                        diagnosticsLogger?.finishRequest(
+                            diagnosticsToken,
+                            successful = true,
+                            code = decision::class.simpleName?.lowercase() ?: "completed",
+                            fields = listOf(
+                                DiagnosticsField(DiagnosticsFieldKey.STATE, updateStateName(_state.value)),
+                                DiagnosticsField(DiagnosticsFieldKey.COUNT, _releaseHistory.value.size.toString()),
+                            ),
+                        )
                     } catch (cancellation: CancellationException) {
+                        diagnosticsLogger?.finishRequest(
+                            diagnosticsToken,
+                            successful = false,
+                            code = "cancelled",
+                            fields = listOf(DiagnosticsField(DiagnosticsFieldKey.STATE, "cancelled")),
+                        )
                         throw cancellation
                     } catch (error: Throwable) {
                         if (automatic && previousState is UpdateState.Deferred && isDeferred(previousState.release)) {
                             publishCheckResult(generation, checkStart.installSessionId) {
                                 _state.value = previousState
                             }
+                            diagnosticsLogger?.finishRequest(
+                                diagnosticsToken,
+                                successful = true,
+                                code = "deferred",
+                                fields = listOf(DiagnosticsField(DiagnosticsFieldKey.STATE, "deferred")),
+                            )
                             return@withLock
                         }
                         val errorStage = (error as? UpdateException)?.stage ?: stage
@@ -293,6 +331,12 @@ class UpdateRepository(
                                 preservedAction = preservedAction?.action,
                             )
                         }
+                        diagnosticsLogger?.finishRequest(
+                            diagnosticsToken,
+                            successful = false,
+                            code = "check_failed",
+                            fields = listOf(DiagnosticsField(DiagnosticsFieldKey.STATE, errorStage.name.lowercase())),
+                        )
                     }
                 } catch (cancellation: CancellationException) {
                     val check = activeCheck
@@ -505,12 +549,31 @@ class UpdateRepository(
             _state.value is UpdateState.AwaitingUserAction
         ) return
         try {
+            finishUpdaterRequest(
+                token = activeDownloadDiagnosticsToken,
+                successful = false,
+                code = "superseded",
+                state = "superseded",
+            )
+            activeDownloadDiagnosticsToken = null
+            activeDownloadDiagnosticsToken = beginUpdaterRequest("update_download", "starting")
             val asset = UpdatePolicy.selectAsset(release, supportedAbis()).getOrElse { throw it }
             val selectedRelease = release.copy(expectedSha256 = release.expectedSha256For(asset))
             if (activeDownloadId != null) {
                 if (loadPersistedRelease()?.id == release.id) {
                     clearSuppressionForExplicitDownload(release)
                     reconcileDownload(release)
+                    if (_state.value !is UpdateState.Downloading) {
+                        val successful = _state.value is UpdateState.Downloaded
+                        finishUpdaterRequest(
+                            token = activeDownloadDiagnosticsToken,
+                            successful = successful,
+                            code = if (successful) "downloaded" else "download_resume_failed",
+                            state = updateStateName(_state.value),
+                            resultCount = if (successful) 1 else 0,
+                        )
+                        activeDownloadDiagnosticsToken = null
+                    }
                     return
                 }
                 downloadStore?.remove(activeDownloadId!!)
@@ -546,8 +609,22 @@ class UpdateRepository(
             )
             monitorDownload(selectedRelease)
         } catch (cancellation: CancellationException) {
+            finishUpdaterRequest(
+                token = activeDownloadDiagnosticsToken,
+                successful = false,
+                code = "cancelled",
+                state = "cancelled",
+            )
+            activeDownloadDiagnosticsToken = null
             throw cancellation
         } catch (error: Throwable) {
+            finishUpdaterRequest(
+                token = activeDownloadDiagnosticsToken,
+                successful = false,
+                code = "download_failed",
+                state = "failed",
+            )
+            activeDownloadDiagnosticsToken = null
             val cause = UpdateErrorMapper.fromDownloadThrowable(error)
             val stage = (error as? UpdateException)?.stage ?: UpdateStage.DOWNLOAD
             _state.value = UpdateState.Error(
@@ -565,6 +642,13 @@ class UpdateRepository(
             downloadLock.withLock {
                 val cancelledDownloadId = activeDownloadId
                 downloadTelemetry.recordCancelled(cancelledDownloadId)
+                finishUpdaterRequest(
+                    token = activeDownloadDiagnosticsToken,
+                    successful = false,
+                    code = "cancelled",
+                    state = "cancelled",
+                )
+                activeDownloadDiagnosticsToken = null
                 clearDownloadReference()
                 removeDownload(cancelledDownloadId)
                 _state.value = loadPersistedRelease()?.let(::stateForUnownedRelease) ?: UpdateState.Idle
@@ -579,6 +663,13 @@ class UpdateRepository(
                 val current = _state.value as? UpdateState.Downloading ?: return@withLock
                 val oldDownloadId = activeDownloadId
                 downloadTelemetry.recordCancelled(oldDownloadId)
+                finishUpdaterRequest(
+                    token = activeDownloadDiagnosticsToken,
+                    successful = false,
+                    code = "cancelled",
+                    state = "restarting",
+                )
+                activeDownloadDiagnosticsToken = null
                 clearDownloadReference()
                 removeDownload(oldDownloadId)
                 _state.value = UpdateState.Available(current.release)
@@ -609,6 +700,7 @@ class UpdateRepository(
                         return@withLock
                     }
                     if (!installGate.tryBegin()) return@withLock
+                    activeInstallDiagnosticsToken = beginUpdaterRequest("update_install", "starting")
                     _state.value = UpdateState.Installing(downloaded.release, downloaded.artifact, null)
                     var prepared: PreparedUpdateInstall? = null
                     var commitStarted = false
@@ -628,7 +720,22 @@ class UpdateRepository(
                         }
                         commitStarted = true
                         preparedInstall.commit()
+                        diagnosticsLogger?.event(
+                            category = DiagnosticsCategory.UPDATER,
+                            transport = DiagnosticsTransport.UPDATER,
+                            operation = "update_install",
+                            event = "install_handoff",
+                            correlationId = activeInstallDiagnosticsToken?.correlationId,
+                            fields = updaterDiagnosticsFields(state = "handoff"),
+                        )
                     } catch (cancellation: CancellationException) {
+                        finishUpdaterRequest(
+                            token = activeInstallDiagnosticsToken,
+                            successful = false,
+                            code = "cancelled",
+                            state = "cancelled",
+                        )
+                        activeInstallDiagnosticsToken = null
                         prepared?.abandon()
                         if (activeInstallSessionId != null) {
                             abandonActiveInstallSession()
@@ -638,6 +745,13 @@ class UpdateRepository(
                         }
                         throw cancellation
                     } catch (error: Throwable) {
+                        finishUpdaterRequest(
+                            token = activeInstallDiagnosticsToken,
+                            successful = false,
+                            code = "install_failed",
+                            state = "failed",
+                        )
+                        activeInstallDiagnosticsToken = null
                         prepared?.abandon()
                         if (commitStarted) {
                             // commit() is asynchronous, but a synchronous commit failure leaves the
@@ -697,9 +811,30 @@ class UpdateRepository(
         ready.await()
         downloadLock.withLock {
             if (id != activeDownloadId) return@withLock
+            if (activeDownloadDiagnosticsToken == null) {
+                activeDownloadDiagnosticsToken = beginUpdaterRequest("update_download", "callback")
+            }
             try {
                 reconcileDownload(loadPersistedRelease())
+                if (_state.value !is UpdateState.Downloading) {
+                    val successful = _state.value is UpdateState.Downloaded
+                    finishUpdaterRequest(
+                        token = activeDownloadDiagnosticsToken,
+                        successful = successful,
+                        code = if (successful) "downloaded" else "download_callback_failed",
+                        state = updateStateName(_state.value),
+                        resultCount = if (successful) 1 else 0,
+                    )
+                    activeDownloadDiagnosticsToken = null
+                }
             } catch (cancellation: CancellationException) {
+                finishUpdaterRequest(
+                    token = activeDownloadDiagnosticsToken,
+                    successful = false,
+                    code = "cancelled",
+                    state = "cancelled",
+                )
+                activeDownloadDiagnosticsToken = null
                 throw cancellation
             } catch (error: Throwable) {
                 if (id != activeDownloadId) return@withLock
@@ -709,6 +844,13 @@ class UpdateRepository(
                     retryable = true,
                     release = loadPersistedRelease(),
                 )
+                finishUpdaterRequest(
+                    token = activeDownloadDiagnosticsToken,
+                    successful = false,
+                    code = "download_callback_failed",
+                    state = "failed",
+                )
+                activeDownloadDiagnosticsToken = null
             }
         }
     }
@@ -738,16 +880,34 @@ class UpdateRepository(
         }
         val release = loadPersistedRelease()
         val artifact = currentArtifact()
+        if (activeInstallDiagnosticsToken == null) {
+            activeInstallDiagnosticsToken = beginUpdaterRequest("update_install", "callback")
+        }
         when (status) {
             android.content.pm.PackageInstaller.STATUS_SUCCESS -> {
                 clearInstallReference()
                 clearReleaseAndDownload()
                 _state.value = UpdateState.Idle
+                finishUpdaterRequest(
+                    token = activeInstallDiagnosticsToken,
+                    successful = true,
+                    code = "installed",
+                    state = "installed",
+                    resultCount = 1,
+                )
+                activeInstallDiagnosticsToken = null
             }
             android.content.pm.PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                 if (release == null) {
                     abandonActiveInstallSession()
                     _state.value = UpdateState.Error(UpdateStage.INSTALL, UpdateError.DownloadedFileMissing, false)
+                    finishUpdaterRequest(
+                        token = activeInstallDiagnosticsToken,
+                        successful = false,
+                        code = "install_failed",
+                        state = "failed",
+                    )
+                    activeInstallDiagnosticsToken = null
                 } else if (pendingUserAction == null) {
                     abandonActiveInstallSession()
                     _state.value = UpdateState.Error(
@@ -757,6 +917,13 @@ class UpdateRepository(
                         release = release,
                         artifact = artifact,
                     )
+                    finishUpdaterRequest(
+                        token = activeInstallDiagnosticsToken,
+                        successful = false,
+                        code = "install_failed",
+                        state = "failed",
+                    )
+                    activeInstallDiagnosticsToken = null
                 } else {
                     val sessionId = activeInstallSessionId ?: return
                     pendingInstallIntent = pendingUserAction
@@ -769,8 +936,23 @@ class UpdateRepository(
                             release = release,
                             artifact = artifact,
                         )
+                        finishUpdaterRequest(
+                            token = activeInstallDiagnosticsToken,
+                            successful = false,
+                            code = "install_failed",
+                            state = "failed",
+                        )
+                        activeInstallDiagnosticsToken = null
                     } else {
                         _state.value = UpdateState.AwaitingUserAction(release, artifact, sessionId)
+                        diagnosticsLogger?.event(
+                            category = DiagnosticsCategory.UPDATER,
+                            transport = DiagnosticsTransport.UPDATER,
+                            operation = "update_install",
+                            event = "install_awaiting_user_action",
+                            correlationId = activeInstallDiagnosticsToken?.correlationId,
+                            fields = updaterDiagnosticsFields(state = "awaiting_user_action"),
+                        )
                         if (foregroundChecker()) {
                             resumePendingInstallInternal()
                         } else {
@@ -793,6 +975,13 @@ class UpdateRepository(
                 } else {
                     UpdateState.Error(UpdateStage.INSTALL, error, UpdatePolicy.isRetryable(UpdateStage.INSTALL, error), release)
                 }
+                finishUpdaterRequest(
+                    token = activeInstallDiagnosticsToken,
+                    successful = false,
+                    code = "install_failed",
+                    state = "failed",
+                )
+                activeInstallDiagnosticsToken = null
             }
         }
     }
@@ -903,6 +1092,72 @@ class UpdateRepository(
             BuildConfig.VERSION_CODE.toLong(),
             BuildConfig.CI_VERSION_CODE_BASE.toLong(),
         )
+
+    private fun beginUpdaterRequest(operation: String, state: String): DiagnosticsLogger.RequestToken? {
+        val logger = diagnosticsLogger ?: return null
+        if (!logger.isEnabled) return null
+        return logger.beginRequest(
+            category = DiagnosticsCategory.UPDATER,
+            transport = DiagnosticsTransport.UPDATER,
+            operation = operation,
+            fields = updaterDiagnosticsFields(state = state),
+        )
+    }
+
+    private fun finishUpdaterRequest(
+        token: DiagnosticsLogger.RequestToken?,
+        successful: Boolean,
+        code: String,
+        state: String,
+        resultCount: Int? = null,
+    ) {
+        diagnosticsLogger?.finishRequest(
+            token = token,
+            successful = successful,
+            code = code,
+            fields = updaterDiagnosticsFields(state = state, resultCount = resultCount),
+        )
+    }
+
+    private fun updaterDiagnosticsFields(
+        state: String? = null,
+        resultCount: Int? = null,
+    ): List<DiagnosticsField> {
+        if (diagnosticsLogger?.isEnabled != true) return emptyList()
+        return buildList {
+            state?.let { add(DiagnosticsField(DiagnosticsFieldKey.STATE, it)) }
+            resultCount?.let {
+                add(DiagnosticsField(DiagnosticsFieldKey.RESULT_COUNT, it.coerceAtLeast(0).toString()))
+            }
+        }
+    }
+
+    private fun updateDiagnosticsFields(networkLibrary: String?, url: String): List<DiagnosticsField> {
+        if (diagnosticsLogger?.isEnabled != true) return emptyList()
+        return buildList {
+            networkLibrary?.let {
+                add(DiagnosticsField(DiagnosticsFieldKey.NETWORK_LIBRARY, it))
+            }
+            runCatching { Uri.parse(url).host }
+                .getOrNull()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { add(DiagnosticsField(DiagnosticsFieldKey.HOST, it)) }
+        }
+    }
+
+    private fun updateStateName(state: UpdateState): String = when (state) {
+        UpdateState.Idle -> "idle"
+        UpdateState.Checking -> "checking"
+        is UpdateState.Available -> "available"
+        is UpdateState.Skipped -> "skipped"
+        is UpdateState.Deferred -> "deferred"
+        is UpdateState.UpToDate -> "up_to_date"
+        is UpdateState.Downloading -> "downloading"
+        is UpdateState.Downloaded -> "downloaded"
+        is UpdateState.Installing -> "installing"
+        is UpdateState.AwaitingUserAction -> "awaiting_user_action"
+        is UpdateState.Error -> "error"
+    }
 
     private data class PreservedAction(
         val release: UpdateRelease,
@@ -1222,6 +1477,15 @@ class UpdateRepository(
                                 release,
                                 observedRecord = event.record,
                             )
+                            val downloadedSuccessfully = event.record.fileAvailable && event.record.downloadedBytes > 0L && _state.value is UpdateState.Downloaded
+                            finishUpdaterRequest(
+                                token = activeDownloadDiagnosticsToken,
+                                successful = downloadedSuccessfully,
+                                code = if (downloadedSuccessfully) "downloaded" else "artifact_missing",
+                                state = updateStateName(_state.value),
+                                resultCount = if (downloadedSuccessfully) 1 else 0,
+                            )
+                            activeDownloadDiagnosticsToken = null
                         }
                         is UpdateDownloadEvent.Failed -> {
                             if (event.queryFailed) {
@@ -1229,6 +1493,13 @@ class UpdateRepository(
                             }
                             if (event.record == null && !event.queryFailed) {
                                 downloadTelemetry.recordMissing(id)
+                                finishUpdaterRequest(
+                                    token = activeDownloadDiagnosticsToken,
+                                    successful = false,
+                                    code = "download_missing",
+                                    state = "missing",
+                                )
+                                activeDownloadDiagnosticsToken = null
                                 reconcileDownload(release)
                                 return@withLock
                             }
@@ -1249,12 +1520,30 @@ class UpdateRepository(
                                 release,
                                 downloadManagerReason = event.reason,
                             )
+                            finishUpdaterRequest(
+                                token = activeDownloadDiagnosticsToken,
+                                successful = false,
+                                code = if (event.queryFailed) "download_query_failed" else "download_failed",
+                                state = updateStateName(_state.value),
+                            )
+                            activeDownloadDiagnosticsToken = null
                         }
                         UpdateDownloadEvent.Cancelled -> Unit
                     }
                 }
             },
-            onStopped = downloadTelemetry::recordMonitorStopped,
+            onStopped = { stoppedId, reason ->
+                downloadTelemetry.recordMonitorStopped(stoppedId, reason)
+                if (stoppedId == activeDownloadId && activeDownloadDiagnosticsToken != null) {
+                    finishUpdaterRequest(
+                        token = activeDownloadDiagnosticsToken,
+                        successful = false,
+                        code = "monitor_stopped",
+                        state = reason.lowercase(),
+                    )
+                    activeDownloadDiagnosticsToken = null
+                }
+            },
         )
         if (started == true) downloadTelemetry.recordMonitorStarted(id)
     }

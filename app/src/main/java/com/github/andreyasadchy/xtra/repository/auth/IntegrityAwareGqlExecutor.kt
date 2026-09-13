@@ -2,6 +2,8 @@ package com.github.andreyasadchy.xtra.repository.auth
 
 import com.github.andreyasadchy.xtra.repository.MissingAuthenticationException
 import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsCategory
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsField
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsFieldKey
 import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsLogger
 import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsSeverity
 import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsTransport
@@ -23,8 +25,16 @@ internal class IntegrityAwareGqlExecutor<T>(
         send: suspend (Map<String, String>) -> T,
         diagnosticsOperation: String? = null,
         diagnosticsCorrelationId: String? = null,
+        onRetry: () -> Unit = {},
     ): T {
-        fun log(event: String, severity: DiagnosticsSeverity = DiagnosticsSeverity.DEBUG, code: String? = null) {
+        fun log(
+            event: String,
+            severity: DiagnosticsSeverity = DiagnosticsSeverity.DEBUG,
+            code: String? = null,
+            correlationId: String? = diagnosticsCorrelationId,
+            parentCorrelationId: String? = null,
+            fields: List<DiagnosticsField> = emptyList(),
+        ) {
             val logger = diagnosticsLogger ?: return
             if (!logger.isEnabled) return
             logger.event(
@@ -34,7 +44,9 @@ internal class IntegrityAwareGqlExecutor<T>(
                 operation = diagnosticsOperation ?: "authenticated_gql",
                 event = event,
                 code = code,
-                correlationId = diagnosticsCorrelationId,
+                correlationId = correlationId,
+                parentCorrelationId = parentCorrelationId,
+                fields = fields,
             )
         }
 
@@ -52,12 +64,26 @@ internal class IntegrityAwareGqlExecutor<T>(
 
         var request = currentRequest()
         if (request == null) {
-            log("integrity_refresh_start")
+            val refreshCorrelationId = diagnosticsLogger?.newCorrelationId()
+            log(
+                "integrity_refresh_start",
+                correlationId = refreshCorrelationId,
+                parentCorrelationId = diagnosticsCorrelationId,
+                fields = listOf(DiagnosticsField(DiagnosticsFieldKey.STATE, "started")),
+            )
             val refreshed = refresh()
             log(
                 if (refreshed) "integrity_refresh_success" else "integrity_refresh_failed",
                 if (refreshed) DiagnosticsSeverity.INFO else DiagnosticsSeverity.ERROR,
                 if (refreshed) null else "refresh_failed",
+                correlationId = refreshCorrelationId,
+                parentCorrelationId = diagnosticsCorrelationId,
+                fields = listOf(
+                    DiagnosticsField(
+                        DiagnosticsFieldKey.STATE,
+                        if (refreshed) "ready" else "failed",
+                    ),
+                ),
             )
             if (!refreshed) {
                 throw MissingAuthenticationException("authenticated Twitch GQL")
@@ -75,7 +101,7 @@ internal class IntegrityAwareGqlExecutor<T>(
             // and retry this operation once with the newer identity.
             currentRequest()?.let { newerRequest ->
                 log("identity_superseded", DiagnosticsSeverity.INFO, "newer_identity_available")
-                log("integrity_retry_start")
+                onRetry()
                 val retried = send(newerRequest.headers)
                 val retryFailed = isFailedIntegrityCheck(retried)
                 log(
@@ -86,12 +112,26 @@ internal class IntegrityAwareGqlExecutor<T>(
                 return retried
             }
         }
-        log("integrity_refresh_start")
+        val refreshCorrelationId = diagnosticsLogger?.newCorrelationId()
+        log(
+            "integrity_refresh_start",
+            correlationId = refreshCorrelationId,
+            parentCorrelationId = diagnosticsCorrelationId,
+            fields = listOf(DiagnosticsField(DiagnosticsFieldKey.STATE, "started")),
+        )
         val refreshed = refresh()
         log(
             if (refreshed) "integrity_refresh_success" else "integrity_refresh_failed",
             if (refreshed) DiagnosticsSeverity.INFO else DiagnosticsSeverity.ERROR,
             if (refreshed) null else "refresh_failed",
+            correlationId = refreshCorrelationId,
+            parentCorrelationId = diagnosticsCorrelationId,
+            fields = listOf(
+                DiagnosticsField(
+                    DiagnosticsFieldKey.STATE,
+                    if (refreshed) "ready" else "failed",
+                ),
+            ),
         )
         if (!refreshed) {
             if (!isWebSessionActive()) {
@@ -106,7 +146,7 @@ internal class IntegrityAwareGqlExecutor<T>(
             }
             return response
         }
-        log("integrity_retry_start")
+        onRetry()
         val retried = send(refreshedRequest.headers)
         val retryFailed = isFailedIntegrityCheck(retried)
         log(

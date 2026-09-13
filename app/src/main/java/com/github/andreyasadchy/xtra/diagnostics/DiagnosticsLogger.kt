@@ -1,8 +1,10 @@
 package com.github.andreyasadchy.xtra.diagnostics
 
 import android.content.Context
+import android.os.Build
 import android.os.SystemClock
 import androidx.core.content.edit
+import com.github.andreyasadchy.xtra.BuildConfig
 import com.github.andreyasadchy.xtra.util.C
 import com.github.andreyasadchy.xtra.util.prefs
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -31,6 +33,16 @@ internal class DiagnosticsEntryRing(
 
     @Synchronized
     fun snapshotNewestFirst(): List<DiagnosticsEntry> = entries.toList().asReversed()
+
+    @Synchronized
+    fun redactFields(keys: Set<DiagnosticsFieldKey>) {
+        if (keys.isEmpty()) return
+        val retained = entries.map { entry ->
+            entry.copy(fields = entry.fields.filterNot { it.key in keys })
+        }
+        entries.clear()
+        retained.forEach(entries::addLast)
+    }
 }
 
 internal class DiagnosticsCorrelationIdGenerator {
@@ -62,14 +74,73 @@ class DiagnosticsLogger(
     @Volatile
     private var enabled = preferences.getBoolean(C.DIAGNOSTICS_ENABLED, false)
 
+    @Volatile
+    private var accountContext: AccountContext? = null
+
+    @Volatile
+    private var accountContextEnabled = preferences.getBoolean(
+        C.DIAGNOSTICS_ACCOUNT_CONTEXT_ENABLED,
+        false,
+    )
+
     val changes: SharedFlow<Unit> = _changes.asSharedFlow()
     val isEnabled: Boolean get() = enabled
+    val isAccountContextEnabled: Boolean get() = accountContextEnabled
+
+    fun environment(): DiagnosticsEnvironment = DiagnosticsEnvironment(
+        appVersion = BuildConfig.VERSION_NAME,
+        appBuild = BuildConfig.VERSION_CODE.toString(),
+        androidApi = Build.VERSION.SDK_INT,
+        deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}".trim().ifBlank { "unknown" },
+    )
 
     fun setEnabled(value: Boolean) {
         enabled = value
         preferences.edit { putBoolean(C.DIAGNOSTICS_ENABLED, value) }
-        if (!value) clear()
+        if (!value) {
+            accountContext = null
+            clear()
+        }
         else _changes.tryEmit(Unit)
+    }
+
+    /** Enables raw Twitch account metadata only after an explicit user choice. */
+    fun setAccountContextEnabled(value: Boolean) {
+        accountContextEnabled = value
+        preferences.edit { putBoolean(C.DIAGNOSTICS_ACCOUNT_CONTEXT_ENABLED, value) }
+        if (!value) {
+            accountContext = null
+            synchronized(entries) {
+                entries.redactFields(ACCOUNT_CONTEXT_KEYS)
+            }
+        }
+        _changes.tryEmit(Unit)
+    }
+
+    /** Updates the in-memory account context; credentials are never accepted here. */
+    fun setAccountContext(userId: String?, login: String?) {
+        if (!accountContextEnabled) return
+        val normalizedUserId = userId?.trim()?.takeIf { it.isNotEmpty() }
+        val normalizedLogin = login?.trim()?.takeIf { it.isNotEmpty() }
+        if (normalizedUserId == null && normalizedLogin == null) {
+            clearAccountContext()
+            return
+        }
+        val next = AccountContext(normalizedUserId, normalizedLogin)
+        if (accountContext != next) {
+            synchronized(entries) {
+                entries.redactFields(ACCOUNT_CONTEXT_KEYS)
+            }
+        }
+        accountContext = next
+    }
+
+    fun clearAccountContext() {
+        accountContext = null
+        synchronized(entries) {
+            entries.redactFields(ACCOUNT_CONTEXT_KEYS)
+        }
+        _changes.tryEmit(Unit)
     }
 
     fun clear() {
@@ -102,10 +173,10 @@ class DiagnosticsLogger(
             severity = DiagnosticsSeverity.DEBUG,
             transport = transport,
             operation = operation,
-            event = "request",
+            event = DiagnosticsLifecycleEvent.REQUEST_STARTED.value,
             phase = DiagnosticsPhase.REQUEST,
             correlationId = token.correlationId,
-            fields = fields,
+            fields = fields + DiagnosticsField(DiagnosticsFieldKey.ATTEMPT, "1"),
         )
         return token
     }
@@ -124,13 +195,41 @@ class DiagnosticsLogger(
             severity = if (successful) DiagnosticsSeverity.INFO else DiagnosticsSeverity.WARN,
             transport = token.transport,
             operation = token.operation,
-            event = if (successful) "completed" else "rejected",
+            event = if (successful) {
+                DiagnosticsLifecycleEvent.REQUEST_COMPLETED.value
+            } else {
+                DiagnosticsLifecycleEvent.REQUEST_REJECTED.value
+            },
             phase = if (successful) DiagnosticsPhase.RESULT else DiagnosticsPhase.ERROR,
             httpStatus = httpStatus,
             code = code,
             elapsedMs = elapsedRealtime().minus(token.startedAtElapsedMs).coerceAtLeast(0L),
             correlationId = token.correlationId,
-            fields = fields,
+            fields = fields + DiagnosticsField(
+                DiagnosticsFieldKey.ATTEMPT,
+                token.currentAttempt().toString(),
+            ),
+        )
+    }
+
+    fun retryRequest(
+        token: RequestToken?,
+        fields: List<DiagnosticsField> = emptyList(),
+    ) {
+        token ?: return
+        val attempt = token.nextAttempt()
+        event(
+            category = token.category,
+            severity = DiagnosticsSeverity.WARN,
+            transport = token.transport,
+            operation = token.operation,
+            event = DiagnosticsLifecycleEvent.REQUEST_RETRY.value,
+            phase = DiagnosticsPhase.REQUEST,
+            correlationId = token.correlationId,
+            fields = fields + listOf(
+                DiagnosticsField(DiagnosticsFieldKey.ATTEMPT, attempt.toString()),
+                DiagnosticsField(DiagnosticsFieldKey.RETRY, "true"),
+            ),
         )
     }
 
@@ -146,14 +245,19 @@ class DiagnosticsLogger(
             severity = DiagnosticsSeverity.ERROR,
             transport = token.transport,
             operation = token.operation,
-            event = "failed",
+            event = DiagnosticsLifecycleEvent.REQUEST_FAILED.value,
             phase = DiagnosticsPhase.ERROR,
             code = code,
             elapsedMs = elapsedRealtime().minus(token.startedAtElapsedMs).coerceAtLeast(0L),
             correlationId = token.correlationId,
-            fields = fields,
+            fields = fields + DiagnosticsField(
+                DiagnosticsFieldKey.ATTEMPT,
+                token.currentAttempt().toString(),
+            ),
         )
     }
+
+    fun newCorrelationId(): String? = nextCorrelationId.next().takeIf { enabled }
 
     fun event(
         category: DiagnosticsCategory,
@@ -166,6 +270,7 @@ class DiagnosticsLogger(
         code: String? = null,
         elapsedMs: Long? = null,
         correlationId: String? = null,
+        parentCorrelationId: String? = null,
         fields: List<DiagnosticsField> = emptyList(),
     ) {
         if (!enabled) return
@@ -180,6 +285,7 @@ class DiagnosticsLogger(
             code = code,
             elapsedMs = elapsedMs,
             correlationId = correlationId,
+            parentCorrelationId = parentCorrelationId,
             fields = fields,
         )
     }
@@ -195,6 +301,7 @@ class DiagnosticsLogger(
         code: String? = null,
         elapsedMs: Long? = null,
         correlationId: String? = null,
+        parentCorrelationId: String? = null,
         fields: List<DiagnosticsField> = emptyList(),
     ) {
         if (!enabled) return
@@ -212,7 +319,8 @@ class DiagnosticsLogger(
                 code = code,
                 elapsedMs = elapsedMs,
                 correlationId = correlationId,
-                fields = fields,
+                parentCorrelationId = parentCorrelationId,
+                fields = fields + accountContextFields(),
             ),
         )
         synchronized(entries) {
@@ -230,11 +338,35 @@ class DiagnosticsLogger(
         val operation: String,
     ) {
         private val terminal = AtomicBoolean(false)
+        private val attempt = AtomicLong(1L)
 
         internal fun tryFinish(): Boolean = terminal.compareAndSet(false, true)
+
+        internal fun nextAttempt(): Long = attempt.incrementAndGet()
+
+        internal fun currentAttempt(): Long = attempt.get()
     }
 
     companion object {
         const val MAX_ENTRIES = 500
+
+        private val ACCOUNT_CONTEXT_KEYS = setOf(
+            DiagnosticsFieldKey.ACCOUNT_ID,
+            DiagnosticsFieldKey.ACCOUNT_LOGIN,
+        )
+    }
+
+    private data class AccountContext(
+        val userId: String?,
+        val login: String?,
+    )
+
+    private fun accountContextFields(): List<DiagnosticsField> {
+        if (!accountContextEnabled) return emptyList()
+        val context = accountContext ?: return emptyList()
+        return buildList {
+            context.userId?.let { add(DiagnosticsField(DiagnosticsFieldKey.ACCOUNT_ID, it)) }
+            context.login?.let { add(DiagnosticsField(DiagnosticsFieldKey.ACCOUNT_LOGIN, it)) }
+        }
     }
 }

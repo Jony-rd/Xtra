@@ -568,6 +568,8 @@
     <string name="settings_diagnostics_live_summary">Capture safe Twitch request and event details in memory for troubleshooting.</string>
     <string name="diagnostics_enable">Enable diagnostics</string>
     <string name="diagnostics_enable_summary">Only safe metadata is kept in memory. Logs are cleared when you disable this or when Xtra exits.</string>
+    <string name="diagnostics_account_context">Include account context</string>
+    <string name="diagnostics_account_context_summary">Adds your Twitch user ID and login to in-memory entries for troubleshooting. Copy and share stay redacted. Never includes credentials, cookies, chat text or request bodies.</string>
     <string name="diagnostics_category_filter">Categories</string>
     <string name="diagnostics_severity_filter">Severity</string>
     <string name="diagnostics_filter_apply">Apply</string>

@@ -63,6 +63,7 @@ class HermesWebSocket(
     private var privateSubscriptionsSent = false
     private var subscriptionsSentNotified = false
     private var subscriptionsReconnected = false
+    private var reconnectCount = 0
 
     private inline fun logDiagnostics(block: DiagnosticsLogger.() -> Unit) {
         val logger = diagnosticsLogger ?: return
@@ -70,6 +71,7 @@ class HermesWebSocket(
     }
 
     fun connect(coroutineScope: CoroutineScope): Job {
+        reconnectCount = 0
         logDiagnostics {
             event(
             category = DiagnosticsCategory.HERMES,
@@ -77,8 +79,10 @@ class HermesWebSocket(
             operation = "HermesWebSocket",
             event = "connect_start",
             fields = listOf(
+                DiagnosticsField(DiagnosticsFieldKey.CHANNEL_ID, channelId),
                 DiagnosticsField(DiagnosticsFieldKey.AUTHENTICATED, (!userId.isNullOrBlank() && !gqlToken.isNullOrBlank()).toString()),
                 DiagnosticsField(DiagnosticsFieldKey.ACTIVE, listenForDrops.toString()),
+                DiagnosticsField(DiagnosticsFieldKey.RECONNECT_COUNT, reconnectCount.toString()),
             ),
             )
         }
@@ -177,8 +181,13 @@ class HermesWebSocket(
             operation = "HermesWebSocket",
             event = "subscriptions_sent",
             fields = listOf(
-                DiagnosticsField(DiagnosticsFieldKey.COUNT, topics.size.toString()),
+                DiagnosticsField(DiagnosticsFieldKey.SUBSCRIPTION_COUNT, topics.size.toString()),
+                DiagnosticsField(
+                    DiagnosticsFieldKey.COUNT,
+                    topics.count { !needsAuthentication || !isPrivateTopic(it.value) }.toString(),
+                ),
                 DiagnosticsField(DiagnosticsFieldKey.AUTHENTICATED, needsAuthentication.toString()),
+                DiagnosticsField(DiagnosticsFieldKey.PRIVATE, topics.any { isPrivateTopic(it.value) }.toString()),
                 DiagnosticsField(DiagnosticsFieldKey.STATE, if (subscriptionsReconnected) "reconnected" else "initial"),
             ),
             )
@@ -269,6 +278,7 @@ class HermesWebSocket(
                 operation = "HermesWebSocket",
                 event = "authenticated",
                 severity = DiagnosticsSeverity.INFO,
+                fields = listOf(DiagnosticsField(DiagnosticsFieldKey.STATE, "accepted")),
                 )
             }
             Log.d(WatchCreditTelemetry.LOG_TAG, "Hermes authentication accepted")
@@ -282,6 +292,7 @@ class HermesWebSocket(
                 event = "authentication_rejected",
                 severity = DiagnosticsSeverity.WARN,
                 code = "authentication_rejected",
+                fields = listOf(DiagnosticsField(DiagnosticsFieldKey.STATE, "rejected")),
                 )
             }
             Log.w(
@@ -317,7 +328,10 @@ class HermesWebSocket(
                 operation = "HermesWebSocket",
                 event = "subscription_result",
                 severity = DiagnosticsSeverity.INFO,
-                fields = listOf(DiagnosticsField(DiagnosticsFieldKey.STATE, "accepted")),
+                fields = listOf(
+                    DiagnosticsField(DiagnosticsFieldKey.STATE, "accepted"),
+                    DiagnosticsField(DiagnosticsFieldKey.PRIVATE, (topic?.let(::isPrivateTopic) == true).toString()),
+                ),
                 )
             }
         } else {
@@ -333,7 +347,10 @@ class HermesWebSocket(
                 event = "subscription_result",
                 severity = DiagnosticsSeverity.WARN,
                 code = "subscription_rejected",
-                fields = listOf(DiagnosticsField(DiagnosticsFieldKey.STATE, "rejected")),
+                fields = listOf(
+                    DiagnosticsField(DiagnosticsFieldKey.STATE, "rejected"),
+                    DiagnosticsField(DiagnosticsFieldKey.PRIVATE, (topic?.let(::isPrivateTopic) == true).toString()),
+                ),
                 )
             }
         }
@@ -449,14 +466,39 @@ class HermesWebSocket(
                                     when {
                                         messageType.startsWith("points-earned") -> {
                                             Log.d(WatchCreditTelemetry.LOG_TAG, "Hermes points-earned received")
+                                            logDiagnostics {
+                                                event(
+                                                    category = DiagnosticsCategory.CHANNEL_POINTS,
+                                                    transport = DiagnosticsTransport.HERMES,
+                                                    operation = "community_points",
+                                                    event = "points_earned_received",
+                                                )
+                                            }
                                             listener.onPointsEarned(message)
                                         }
                                         messageType.startsWith("points-spent") -> {
                                             Log.d(WatchCreditTelemetry.LOG_TAG, "Hermes points-spent received")
+                                            logDiagnostics {
+                                                event(
+                                                    category = DiagnosticsCategory.CHANNEL_POINTS,
+                                                    transport = DiagnosticsTransport.HERMES,
+                                                    operation = "community_points",
+                                                    event = "points_spent_received",
+                                                )
+                                            }
                                             listener.onPointsSpent(message)
                                         }
                                         messageType.startsWith("claim-available") -> {
                                             Log.d(WatchCreditTelemetry.LOG_TAG, "Hermes claim-available received")
+                                            logDiagnostics {
+                                                event(
+                                                    category = DiagnosticsCategory.CHANNEL_POINTS,
+                                                    transport = DiagnosticsTransport.HERMES,
+                                                    operation = "community_points",
+                                                    event = "claim_available_received",
+                                                    fields = listOf(DiagnosticsField(DiagnosticsFieldKey.CLAIMABLE, "true")),
+                                                )
+                                            }
                                             listener.onClaimAvailable(message)
                                         }
                                         else -> {
@@ -466,7 +508,17 @@ class HermesWebSocket(
                                         }
                                     }
                                 }
-                                topic.startsWith("user-drop-events") -> listener.onDropMessage(message)
+                                topic.startsWith("user-drop-events") -> {
+                                    logDiagnostics {
+                                        event(
+                                            category = DiagnosticsCategory.DROPS,
+                                            transport = DiagnosticsTransport.HERMES,
+                                            operation = "drop_progress",
+                                            event = "drop_event_received",
+                                        )
+                                    }
+                                    listener.onDropMessage(message)
+                                }
                                 topic.startsWith("raid") -> {
                                     when {
                                         messageType.startsWith("raid_update") -> listener.onRaidUpdate(message, false)
@@ -491,6 +543,7 @@ class HermesWebSocket(
                             operation = "HermesWebSocket",
                             event = "authenticated",
                             severity = DiagnosticsSeverity.INFO,
+                            fields = listOf(DiagnosticsField(DiagnosticsFieldKey.STATE, "accepted")),
                             )
                         }
                         Log.d(WatchCreditTelemetry.LOG_TAG, "Hermes authentication accepted")
@@ -498,6 +551,7 @@ class HermesWebSocket(
                         maybeStartMinuteWatchedTimer()
                     }
                     "reconnect" -> {
+                        reconnectCount += 1
                         logDiagnostics {
                             event(
                             category = DiagnosticsCategory.HERMES,
@@ -505,6 +559,9 @@ class HermesWebSocket(
                             operation = "HermesWebSocket",
                             event = "reconnect_requested",
                             severity = DiagnosticsSeverity.WARN,
+                            fields = listOf(
+                                DiagnosticsField(DiagnosticsFieldKey.RECONNECT_COUNT, reconnectCount.toString()),
+                            ),
                             )
                         }
                         //val reconnect = json.optJSONObject("reconnect")
@@ -513,20 +570,22 @@ class HermesWebSocket(
                         webSocket.reconnect()
                     }
                     "welcome" -> {
+                        val welcome = json.optJSONObject("welcome")
+                        val keepaliveSec = welcome?.optInt("keepaliveSec")?.takeIf { it > 0 }
                         logDiagnostics {
                             event(
                             category = DiagnosticsCategory.HERMES,
                             transport = DiagnosticsTransport.HERMES,
                             operation = "HermesWebSocket",
                             event = "welcome",
+                            fields = listOfNotNull(
+                                keepaliveSec?.let {
+                                    DiagnosticsField(DiagnosticsFieldKey.KEEPALIVE_SEC, it.toString())
+                                },
+                            ),
                             )
                         }
-                        val welcome = json.optJSONObject("welcome")
-                        if (welcome?.isNull("keepaliveSec") == false) {
-                            welcome.optInt("keepaliveSec").takeIf { it > 0 }?.let {
-                                timeout = it * 1000L
-                            }
-                        }
+                        keepaliveSec?.let { timeout = it * 1000L }
                         pongTimer?.cancel()
                         startPongTimer()
                         Log.d(WatchCreditTelemetry.LOG_TAG, "Hermes welcome received collectPoints=$collectPoints listenForDrops=$listenForDrops userIdPresent=${!userId.isNullOrBlank()} gqlTokenPresent=${!gqlToken.isNullOrBlank()}")
@@ -561,6 +620,10 @@ class HermesWebSocket(
                 event = "disconnected",
                 severity = DiagnosticsSeverity.WARN,
                 code = "disconnected",
+                fields = listOf(
+                    DiagnosticsField(DiagnosticsFieldKey.MESSAGE_BYTES, message.toByteArray().size.toString()),
+                    DiagnosticsField(DiagnosticsFieldKey.PRIVATE, (fullMsg != null).toString()),
+                ),
                 )
             }
             Log.w(WatchCreditTelemetry.LOG_TAG, "Hermes disconnected message=$message")

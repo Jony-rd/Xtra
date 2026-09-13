@@ -16,6 +16,8 @@ import com.apollographql.apollo.api.json.writeObject
 import com.apollographql.apollo.api.parseResponse
 import com.github.andreyasadchy.xtra.BuildConfig
 import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsCategory
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsField
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsFieldKey
 import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsLogger
 import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsTransport
 import com.github.andreyasadchy.xtra.db.FavoriteEmotesDao
@@ -84,6 +86,8 @@ import org.chromium.net.apihelpers.UploadDataProviders
 
 import org.json.JSONException
 import org.json.JSONObject
+import java.io.FilterInputStream
+import java.io.InputStream
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.URI
@@ -385,27 +389,63 @@ class PlayerRepository(
     }
 
     suspend fun loadStreamPlaylistUrl(context: Context, networkLibrary: String?, gqlHeaders: Map<String, String>, channelLogin: String, randomDeviceId: Boolean?, xDeviceId: String?, playerType: String?, supportedCodecs: String?, proxyPlaybackAccessToken: Boolean, proxyHost: String?, proxyPort: Int?, proxyUser: String?, proxyPassword: String?, lowLatency: Boolean = context.prefs().getBoolean(C.PLAYER_LOW_LATENCY, C.DEFAULT_PLAYER_LOW_LATENCY)): String = withContext(Dispatchers.IO) {
-        val accessToken = loadStreamPlaybackAccessToken(context, networkLibrary, gqlHeaders, channelLogin, randomDeviceId, xDeviceId, playerType, proxyPlaybackAccessToken, proxyHost, proxyPort, proxyUser, proxyPassword).let { token ->
-            if (token.second?.contains("\"forbidden\":true") == true && !gqlHeaders[C.HEADER_TOKEN].isNullOrBlank()) {
-                loadStreamPlaybackAccessToken(context, networkLibrary, gqlHeaders.filterNot { it.key == C.HEADER_TOKEN }, channelLogin, randomDeviceId, xDeviceId, playerType, proxyPlaybackAccessToken, proxyHost, proxyPort, proxyUser, proxyPassword)
-            } else token
+        val logger = diagnosticsLogger
+        val diagnosticsToken = if (logger?.isEnabled == true) {
+            logger.beginRequest(
+                category = DiagnosticsCategory.PLAYBACK,
+                transport = DiagnosticsTransport.PLAYER,
+                operation = "stream_playlist",
+                fields = playbackDiagnosticsFields(
+                    networkLibrary = networkLibrary,
+                    host = "gql.twitch.tv",
+                    authenticated = !gqlHeaders[C.HEADER_TOKEN].isNullOrBlank(),
+                ),
+            )
+        } else null
+        try {
+            val accessToken = loadStreamPlaybackAccessToken(context, networkLibrary, gqlHeaders, channelLogin, randomDeviceId, xDeviceId, playerType, proxyPlaybackAccessToken, proxyHost, proxyPort, proxyUser, proxyPassword).let { token ->
+                if (token.second?.contains("\"forbidden\":true") == true && !gqlHeaders[C.HEADER_TOKEN].isNullOrBlank()) {
+                    logger?.retryRequest(
+                        diagnosticsToken,
+                        fields = playbackDiagnosticsFields(state = "auth_fallback"),
+                    )
+                    loadStreamPlaybackAccessToken(context, networkLibrary, gqlHeaders.filterNot { it.key == C.HEADER_TOKEN }, channelLogin, randomDeviceId, xDeviceId, playerType, proxyPlaybackAccessToken, proxyHost, proxyPort, proxyUser, proxyPassword)
+                } else token
+            }
+            val signature = accessToken.first
+            val token = accessToken.second
+            val playlistUrl = "https://usher.ttvnw.net/api/v2/channel/hls/${channelLogin}.m3u8".toUri().buildUpon().apply {
+                appendQueryParameter("allow_source", "true")
+                appendQueryParameter("allow_audio_only", "true")
+                if (lowLatency) {
+                    appendQueryParameter("fast_bread", "true")
+                }
+                appendQueryParameter("p", Random.nextInt(9999999).toString())
+                if (supportedCodecs?.contains("av1", true) == true) {
+                    appendQueryParameter("platform", "web")
+                }
+                signature?.let { appendQueryParameter("sig", it) }
+                supportedCodecs?.let { appendQueryParameter("supported_codecs", it) }
+                token?.let { appendQueryParameter("token", it) }
+            }.build().toString()
+            logger?.finishRequest(
+                diagnosticsToken,
+                successful = true,
+                code = "source_ready",
+                fields = playbackDiagnosticsFields(
+                    state = "ready",
+                    resultCount = 1,
+                    host = "usher.ttvnw.net",
+                ),
+            )
+            playlistUrl
+        } catch (e: CancellationException) {
+            logger?.finishRequest(diagnosticsToken, successful = false, code = "cancelled")
+            throw e
+        } catch (e: Exception) {
+            logger?.finishRequest(diagnosticsToken, successful = false, code = "source_resolution_failed")
+            throw e
         }
-        val signature = accessToken.first
-        val token = accessToken.second
-        "https://usher.ttvnw.net/api/v2/channel/hls/${channelLogin}.m3u8".toUri().buildUpon().apply {
-            appendQueryParameter("allow_source", "true")
-            appendQueryParameter("allow_audio_only", "true")
-            if (lowLatency) {
-                appendQueryParameter("fast_bread", "true")
-            }
-            appendQueryParameter("p", Random.nextInt(9999999).toString())
-            if (supportedCodecs?.contains("av1", true) == true) {
-                appendQueryParameter("platform", "web")
-            }
-            signature?.let { appendQueryParameter("sig", it) }
-            supportedCodecs?.let { appendQueryParameter("supported_codecs", it) }
-            token?.let { appendQueryParameter("token", it) }
-        }.build().toString()
     }
 
     /**
@@ -471,8 +511,7 @@ class PlayerRepository(
 
     private suspend fun containsAdMarkers(masterUrl: String): Boolean? = withContext(Dispatchers.IO) {
         try {
-            val master = okHttpClient.value.newCall(Request.Builder().url(masterUrl).build())
-                .executeAsync().use { response -> response.body.string() }
+            val master = fetchPlaylistText(masterUrl, "playlist_probe_master") ?: return@withContext null
             var mediaPath: String? = null
             var expectMediaPlaylist = false
             for (line in master.lineSequence()) {
@@ -489,20 +528,133 @@ class PlayerRepository(
                 runCatching { URI(masterUrl).resolve(it).toString() }.getOrNull() ?: it
             }
             if (mediaUrl == null) {
-                return@withContext TwitchAdDetector.isAd(
-                    PlaylistUtils.parseMediaPlaylist(master.byteInputStream())
+                val adMarkers = TwitchAdDetector.isAd(PlaylistUtils.parseMediaPlaylist(master.byteInputStream()))
+                diagnosticsLogger?.event(
+                    category = DiagnosticsCategory.PLAYBACK,
+                    transport = DiagnosticsTransport.PLAYER,
+                    operation = "playlist_probe",
+                    event = "probe_completed",
+                    fields = playbackDiagnosticsFields(
+                        state = if (adMarkers) "ad_markers" else "clean",
+                        resultCount = 1,
+                    ),
                 )
+                return@withContext adMarkers
             }
-            okHttpClient.value.newCall(Request.Builder().url(mediaUrl).build())
-                .executeAsync().use { response ->
-                    response.body.byteStream().use { input ->
-                        TwitchAdDetector.isAd(PlaylistUtils.parseMediaPlaylist(input))
-                    }
-                }
+            val adMarkers = inspectPlaylistMarkers(mediaUrl, "playlist_probe_media") ?: return@withContext null
+            diagnosticsLogger?.event(
+                category = DiagnosticsCategory.PLAYBACK,
+                transport = DiagnosticsTransport.PLAYER,
+                operation = "playlist_probe",
+                event = "probe_completed",
+                fields = playbackDiagnosticsFields(
+                    state = if (adMarkers) "ad_markers" else "clean",
+                    resultCount = 1,
+                ),
+            )
+            adMarkers
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             logAd("playlist inspection failed error=${e.javaClass.simpleName}")
+            null
+        }
+    }
+
+    private suspend fun inspectPlaylistMarkers(url: String, operation: String): Boolean? = withContext(Dispatchers.IO) {
+        val logger = diagnosticsLogger
+        val diagnosticsToken = if (logger?.isEnabled == true) {
+            logger.beginRequest(
+                category = DiagnosticsCategory.PLAYBACK,
+                transport = DiagnosticsTransport.PLAYER,
+                operation = operation,
+                fields = playbackDiagnosticsFields(
+                    networkLibrary = "okhttp",
+                    host = urlHost(url),
+                ),
+            )
+        } else null
+        try {
+            var responseCode = 0
+            var responseBytes: Long? = null
+            val adMarkers = okHttpClient.value.newCall(Request.Builder().url(url).build())
+                .executeAsync().use { response ->
+                    responseCode = response.code
+                    val body = response.body
+                    val contentLength = body.contentLength()
+                    if (diagnosticsToken != null) {
+                        responseBytes = contentLength.takeIf { it >= 0L }
+                    }
+                    if (!response.isSuccessful) {
+                        null
+                    } else if (diagnosticsToken == null) {
+                        body.byteStream().use { input ->
+                            TwitchAdDetector.isAd(PlaylistUtils.parseMediaPlaylist(input))
+                        }
+                    } else {
+                        val countingInput = CountingInputStream(body.byteStream())
+                        val result = countingInput.use { input ->
+                            TwitchAdDetector.isAd(PlaylistUtils.parseMediaPlaylist(input))
+                        }
+                        if (responseBytes == null) responseBytes = countingInput.bytesRead
+                        result
+                    }
+                }
+            val successful = responseCode in 200..299 && adMarkers != null
+            logger?.finishRequest(
+                diagnosticsToken,
+                successful = successful,
+                httpStatus = responseCode,
+                code = if (successful) null else "http_error",
+                fields = playbackDiagnosticsFields(responseBytes = responseBytes),
+            )
+            adMarkers
+        } catch (e: CancellationException) {
+            logger?.finishRequest(diagnosticsToken, successful = false, code = "cancelled")
+            throw e
+        } catch (e: Exception) {
+            logger?.finishRequest(diagnosticsToken, successful = false, code = "request_failed")
+            null
+        }
+    }
+
+    private suspend fun fetchPlaylistText(url: String, operation: String): String? = withContext(Dispatchers.IO) {
+        val logger = diagnosticsLogger
+        val diagnosticsToken = if (logger?.isEnabled == true) {
+            logger.beginRequest(
+                category = DiagnosticsCategory.PLAYBACK,
+                transport = DiagnosticsTransport.PLAYER,
+                operation = operation,
+                fields = playbackDiagnosticsFields(
+                    networkLibrary = "okhttp",
+                    host = urlHost(url),
+                ),
+            )
+        } else null
+        try {
+            val response = okHttpClient.value.newCall(Request.Builder().url(url).build())
+                .executeAsync().use { response ->
+                    val contentLength = response.body.contentLength()
+                    val body = response.body.string()
+                    val responseBytes = if (diagnosticsToken != null) {
+                        contentLength.takeIf { it >= 0L } ?: body.toByteArray().size.toLong()
+                    } else null
+                    PlaylistTextResponse(response.code, body, responseBytes)
+                }
+            val successful = response.statusCode in 200..299
+            logger?.finishRequest(
+                diagnosticsToken,
+                successful = successful,
+                httpStatus = response.statusCode,
+                code = if (successful) null else "http_error",
+                fields = playbackDiagnosticsFields(responseBytes = response.responseBytes),
+            )
+            response.body.takeIf { successful }
+        } catch (e: CancellationException) {
+            logger?.finishRequest(diagnosticsToken, successful = false, code = "cancelled")
+            throw e
+        } catch (e: Exception) {
+            logger?.finishRequest(diagnosticsToken, successful = false, code = "request_failed")
             null
         }
     }
@@ -737,61 +889,98 @@ class PlayerRepository(
     }
 
     suspend fun loadVideoPlaylistUrl(networkLibrary: String?, gqlHeaders: Map<String, String>, videoId: String?, playerType: String?, supportedCodecs: String?): Pair<String, List<String>> = withContext(Dispatchers.IO) {
-        val accessTokenHeaders = getPlaybackAccessTokenHeaders(gqlHeaders = gqlHeaders, randomDeviceId = true)
-        val accessToken = try {
-            val response = graphQLRepository.loadPlaybackAccessToken(
-                networkLibrary = networkLibrary,
-                headers = accessTokenHeaders,
-                vodId = videoId,
-                playerType = playerType
+        val logger = diagnosticsLogger
+        val diagnosticsToken = if (logger?.isEnabled == true) {
+            logger.beginRequest(
+                category = DiagnosticsCategory.PLAYBACK,
+                transport = DiagnosticsTransport.PLAYER,
+                operation = "vod_playlist",
+                fields = playbackDiagnosticsFields(
+                    networkLibrary = networkLibrary,
+                    host = "gql.twitch.tv",
+                    authenticated = !gqlHeaders[C.HEADER_TOKEN].isNullOrBlank(),
+                ),
             )
-            response.data!!.videoPlaybackAccessToken!!.let {
-                it.signature to it.value
+        } else null
+        try {
+            val accessTokenHeaders = getPlaybackAccessTokenHeaders(gqlHeaders = gqlHeaders, randomDeviceId = true)
+            val accessToken = try {
+                val response = graphQLRepository.loadPlaybackAccessToken(
+                    networkLibrary = networkLibrary,
+                    headers = accessTokenHeaders,
+                    vodId = videoId,
+                    playerType = playerType,
+                )
+                response.data!!.videoPlaybackAccessToken!!.let {
+                    it.signature to it.value
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logger?.retryRequest(
+                    diagnosticsToken,
+                    fields = playbackDiagnosticsFields(state = "legacy_fallback"),
+                )
+                val response = graphQLRepository.loadQueryVideoPlaybackAccessToken(
+                    networkLibrary = networkLibrary,
+                    headers = accessTokenHeaders,
+                    videoId = videoId!!,
+                    platform = "web",
+                    playerType = playerType ?: "",
+                )
+                response.data!!.videoPlaybackAccessToken!!.let {
+                    it.signature to it.value
+                }
             }
-        } catch (e: Exception) {
-            val response = graphQLRepository.loadQueryVideoPlaybackAccessToken(
-                networkLibrary = networkLibrary,
-                headers = accessTokenHeaders,
-                videoId = videoId!!,
-                platform = "web",
-                playerType = playerType ?: ""
-            )
-            response.data!!.videoPlaybackAccessToken!!.let {
-                it.signature to it.value
-            }
-        }
-        val signature = accessToken.first
-        val token = accessToken.second
-        val backupQualities = mutableListOf<String>()
-        token?.let { value ->
-            val json = try {
-                JSONObject(value)
-            } catch (e: JSONException) {
-                null
-            }
-            val array = json?.optJSONObject("chansub")?.optJSONArray("restricted_bitrates")
-            if (array != null) {
-                for (i in 0 until array.length()) {
-                    val quality = array.optString(i)
-                    if (!quality.isNullOrBlank()) {
-                        backupQualities.add(quality)
+            val signature = accessToken.first
+            val token = accessToken.second
+            val backupQualities = mutableListOf<String>()
+            token?.let { value ->
+                val json = try {
+                    JSONObject(value)
+                } catch (e: JSONException) {
+                    null
+                }
+                val array = json?.optJSONObject("chansub")?.optJSONArray("restricted_bitrates")
+                if (array != null) {
+                    for (i in 0 until array.length()) {
+                        val quality = array.optString(i)
+                        if (!quality.isNullOrBlank()) {
+                            backupQualities.add(quality)
+                        }
                     }
                 }
             }
+            val url = "https://usher.ttvnw.net/vod/v2/${videoId}.m3u8".toUri().buildUpon().apply {
+                appendQueryParameter("allow_source", "true")
+                appendQueryParameter("allow_audio_only", "true")
+                appendQueryParameter("include_unavailable", "true")
+                appendQueryParameter("p", Random.nextInt(9999999).toString())
+                if (supportedCodecs?.contains("av1", true) == true) {
+                    appendQueryParameter("platform", "web")
+                }
+                signature?.let { appendQueryParameter("sig", it) }
+                supportedCodecs?.let { appendQueryParameter("supported_codecs", it) }
+                token?.let { appendQueryParameter("token", it) }
+            }.build().toString()
+            logger?.finishRequest(
+                diagnosticsToken,
+                successful = true,
+                code = "source_ready",
+                fields = playbackDiagnosticsFields(
+                    state = "ready",
+                    host = "usher.ttvnw.net",
+                    resultCount = backupQualities.size + 1,
+                ),
+            )
+            url to backupQualities
+        } catch (e: CancellationException) {
+            logger?.finishRequest(diagnosticsToken, successful = false, code = "cancelled")
+            throw e
+        } catch (e: Exception) {
+            logger?.finishRequest(diagnosticsToken, successful = false, code = "source_resolution_failed")
+            throw e
         }
-        val url = "https://usher.ttvnw.net/vod/v2/${videoId}.m3u8".toUri().buildUpon().apply {
-            appendQueryParameter("allow_source", "true")
-            appendQueryParameter("allow_audio_only", "true")
-            appendQueryParameter("include_unavailable", "true")
-            appendQueryParameter("p", Random.nextInt(9999999).toString())
-            if (supportedCodecs?.contains("av1", true) == true) {
-                appendQueryParameter("platform", "web")
-            }
-            signature?.let { appendQueryParameter("sig", it) }
-            supportedCodecs?.let { appendQueryParameter("supported_codecs", it) }
-            token?.let { appendQueryParameter("token", it) }
-        }.build().toString()
-        url to backupQualities
     }
 
     private fun getPlaybackAccessTokenHeaders(gqlHeaders: Map<String, String>, randomDeviceId: Boolean?, xDeviceId: String? = null): Map<String, String> {
@@ -825,9 +1014,60 @@ class PlayerRepository(
         return deviceId.length == 16 || deviceId.length == 32
     }
 
+    private data class PlaylistTextResponse(
+        val statusCode: Int,
+        val body: String,
+        val responseBytes: Long?,
+    )
+
+    private class CountingInputStream(input: InputStream) : FilterInputStream(input) {
+        var bytesRead: Long = 0L
+            private set
+
+        override fun read(): Int {
+            val value = super.read()
+            if (value >= 0) bytesRead++
+            return value
+        }
+
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+            val count = super.read(buffer, offset, length)
+            if (count > 0) bytesRead += count
+            return count
+        }
+    }
+
     private fun logAd(message: String) {
         if (BuildConfig.DEBUG) {
             Log.d(AD_TAG, message)
+        }
+    }
+
+    private fun playbackDiagnosticsFields(
+        networkLibrary: String? = null,
+        host: String? = null,
+        authenticated: Boolean? = null,
+        state: String? = null,
+        resultCount: Int? = null,
+        responseBytes: Long? = null,
+    ): List<DiagnosticsField> = buildList {
+        networkLibrary?.let {
+            add(DiagnosticsField(DiagnosticsFieldKey.NETWORK_LIBRARY, it))
+        }
+        host?.let {
+            add(DiagnosticsField(DiagnosticsFieldKey.HOST, it))
+        }
+        authenticated?.let {
+            add(DiagnosticsField(DiagnosticsFieldKey.AUTHENTICATED, it.toString()))
+        }
+        state?.let {
+            add(DiagnosticsField(DiagnosticsFieldKey.STATE, it))
+        }
+        resultCount?.let {
+            add(DiagnosticsField(DiagnosticsFieldKey.RESULT_COUNT, it.coerceAtLeast(0).toString()))
+        }
+        responseBytes?.let {
+            add(DiagnosticsField(DiagnosticsFieldKey.RESPONSE_BYTES, it.coerceAtLeast(0L).toString()))
         }
     }
 
@@ -898,6 +1138,21 @@ class PlayerRepository(
                 category = DiagnosticsCategory.PROGRESSION,
                 transport = DiagnosticsTransport.WATCH_CREDIT,
                 operation = "WatchCredit",
+                fields = buildList {
+                    networkLibrary?.let {
+                        add(DiagnosticsField(DiagnosticsFieldKey.NETWORK_LIBRARY, it))
+                    }
+                    channelId?.let {
+                        add(DiagnosticsField(DiagnosticsFieldKey.CHANNEL_ID, it))
+                    }
+                    streamId?.let {
+                        add(DiagnosticsField(DiagnosticsFieldKey.STREAM_ID, it))
+                    }
+                    gameId?.let {
+                        add(DiagnosticsField(DiagnosticsFieldKey.GAME_ID, it))
+                    }
+                    add(DiagnosticsField(DiagnosticsFieldKey.AUTHENTICATED, (!userId.isNullOrBlank()).toString()))
+                },
             )
         } else null
         try {
@@ -917,6 +1172,18 @@ class PlayerRepository(
                 userId = userId,
             )
             val cachedEndpoint = cachedSpadeEndpoint?.takeIf { it.session == session }
+            if (logger?.isEnabled == true) {
+                logger.event(
+                    category = DiagnosticsCategory.PROGRESSION,
+                    transport = DiagnosticsTransport.SPADE,
+                    operation = "WatchCreditDiscovery",
+                    event = if (cachedEndpoint != null) "cache_hit" else "cache_miss",
+                    fields = listOf(
+                        DiagnosticsField(DiagnosticsFieldKey.CACHE_STATE, if (cachedEndpoint != null) "valid" else "empty"),
+                        DiagnosticsField(DiagnosticsFieldKey.CHANNEL_ID, session.channelId),
+                    ),
+                )
+            }
             if (cachedSpadeEndpoint != null && cachedEndpoint == null) {
                 Log.d(WatchCreditTelemetry.LOG_TAG, "watch session changed; invalidating cached Spade URL")
                 cachedSpadeEndpoint = null
@@ -949,6 +1216,10 @@ class PlayerRepository(
 
             cachedSpadeEndpoint = null
             Log.w(WatchCreditTelemetry.LOG_TAG, "cached Spade URL failed; rediscovering and retrying once")
+            logger?.retryRequest(
+                token,
+                fields = listOf(DiagnosticsField(DiagnosticsFieldKey.STATE, "cached_endpoint_failed")),
+            )
             val retryUrl = discoverSpadeUrl(networkLibrary, channelLogin)
             if (retryUrl.isNullOrBlank()) {
                 Log.w(WatchCreditTelemetry.LOG_TAG, "Spade URL rediscovery failed after heartbeat failure")
@@ -1011,6 +1282,12 @@ class PlayerRepository(
                 category = DiagnosticsCategory.PROGRESSION,
                 transport = DiagnosticsTransport.SPADE,
                 operation = "WatchCreditDiscovery",
+                fields = buildList {
+                    networkLibrary?.let {
+                        add(DiagnosticsField(DiagnosticsFieldKey.NETWORK_LIBRARY, it))
+                    }
+                    add(DiagnosticsField(DiagnosticsFieldKey.HOST, urlHost(url)))
+                },
             )
         } else null
         return try {
@@ -1062,6 +1339,11 @@ class PlayerRepository(
                 successful = result != null,
                 httpStatus = response.statusCode,
                 code = if (result != null) null else "http_error",
+                fields = token?.let {
+                    listOf(
+                        DiagnosticsField(DiagnosticsFieldKey.RESPONSE_BYTES, response.body.toByteArray().size.toString()),
+                    )
+                }.orEmpty(),
             )
             result
         } catch (e: CancellationException) {
@@ -1091,6 +1373,13 @@ class PlayerRepository(
                 category = DiagnosticsCategory.PROGRESSION,
                 transport = DiagnosticsTransport.SPADE,
                 operation = "WatchCredit",
+                fields = buildList {
+                    networkLibrary?.let {
+                        add(DiagnosticsField(DiagnosticsFieldKey.NETWORK_LIBRARY, it))
+                    }
+                    add(DiagnosticsField(DiagnosticsFieldKey.HOST, urlHost(spadeUrl)))
+                    add(DiagnosticsField(DiagnosticsFieldKey.REQUEST_BYTES, spadeRequest.toByteArray().size.toString()))
+                },
             )
         } else null
         return try {
