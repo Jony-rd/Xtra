@@ -91,10 +91,10 @@
                 android:minHeight="48dp"
                 android:paddingStart="14dp"
                 android:paddingEnd="14dp"
-                android:textColor="?attr/colorOnPrimary"
+                android:textColor="@color/twitchOnPurple"
                 android:textSize="14sp"
                 android:textStyle="bold"
-                app:backgroundTint="?attr/colorPrimary"
+                app:backgroundTint="@color/twitchPurple"
                 app:cornerRadius="18dp" />
 
             <ImageButton
