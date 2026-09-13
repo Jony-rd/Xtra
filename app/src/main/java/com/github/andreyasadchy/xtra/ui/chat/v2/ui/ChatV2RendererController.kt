@@ -48,9 +48,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 
-// Keep a small animated tail alive while preventing a busy chat from driving every visible row.
-private const val DEFAULT_ANIMATION_BUDGET = 2
-
 internal fun countNewLiveMessages(
     previousIds: Set<ChatMessageId>?,
     previousTailId: ChatMessageId?,
@@ -105,7 +102,6 @@ class ChatV2RendererController(
     private val messageTextColor: Int? = null,
     private val secondaryTextColor: Int? = null,
     private val presentationLabels: ChatPresentationLabels = ChatPresentationLabels(),
-    animationBudget: Int = DEFAULT_ANIMATION_BUDGET,
     private val onStateChanged: (ChatViewportState) -> Unit = {},
     private val onMessageLongClick: (ChatMessage) -> Unit = {},
     private val profilePopoutGesture: ChatProfilePopoutGesture = ChatProfilePopoutGesture.HOLD,
@@ -143,9 +139,6 @@ class ChatV2RendererController(
         } else null,
         messageTextColor = messageTextColor,
     )
-    init {
-        adapter.setAnimationBudget(animationBudget)
-    }
     private val viewport = ChatViewportController(recyclerView, initialState)
     private var highlightSettings = resolveChatHighlightSettings(recyclerView.context)
     private val presentation = createPresentation(readableUsernameColors, backgroundColor, renderStyle)
