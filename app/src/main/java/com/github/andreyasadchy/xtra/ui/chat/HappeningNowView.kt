@@ -16,6 +16,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.TextView
+import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import com.github.andreyasadchy.xtra.R
 import com.github.andreyasadchy.xtra.model.chat.Poll
@@ -550,11 +551,12 @@ internal class HappeningNowView @JvmOverloads constructor(
         values.forEachIndexed { index, value ->
             val segment = View(context).apply {
                 setBackgroundColor(
-                    themeColor(
+                    ContextCompat.getColor(
+                        context,
                         if (index % 2 == 0) {
-                            androidx.appcompat.R.attr.colorPrimary
+                            R.color.twitchPurpleLight
                         } else {
-                            androidx.appcompat.R.attr.colorAccent
+                            R.color.twitchPurpleDark
                         },
                     ),
                 )

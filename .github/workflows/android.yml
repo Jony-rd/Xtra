@@ -46,6 +46,10 @@ jobs:
         arch: x86_64
         profile: pixel_2
         force-avd-creation: true
+        # Start ADB before launching the emulator to avoid a cold-daemon
+        # race during the runner's initial boot check.
+        pre-emulator-launch-script: |
+          adb start-server
         disable-animations: true
         disable-linux-hw-accel: false
         script: |

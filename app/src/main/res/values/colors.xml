@@ -45,6 +45,11 @@
     <color name="watchStreakProgress">#00D395</color>
     <color name="channel_points_reward_default">#9146FF</color>
     <color name="channel_points_default">#B996F8</color>
+    <color name="twitchPurple">#9146FF</color>
+    <color name="twitchPurpleLight">#BF94FF</color>
+    <color name="twitchPurpleDark">#7137C7</color>
+    <color name="twitchOnPurple">#FFFFFFFF</color>
+    <color name="twitchPurpleBadgeText">#0E0E10</color>
     <color name="modernPrimary">#D0BCFF</color>
     <color name="modernOnPrimary">#381E72</color>
     <color name="modernPrimaryContainer">#4F378B</color>

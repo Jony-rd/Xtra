@@ -274,7 +274,9 @@ class ChatAssetRepositoryTest {
             withTimeout(2_000) { while (repository.peek(key) !is ChatAssetState.Ready) delay(1) }
 
             repository.retryIfDrawableUnavailable(key)
-            withTimeout(2_000) { while (attempts < 2) delay(1) }
+            withTimeout(2_000) {
+                while (repository.peek(key) !is ChatAssetState.Ready) delay(1)
+            }
             assertTrue(repository.peek(key) is ChatAssetState.Ready)
             assertEquals(2, attempts)
             repository.removeObserver(key, listener)
