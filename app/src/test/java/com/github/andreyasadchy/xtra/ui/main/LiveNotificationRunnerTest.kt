@@ -95,4 +95,17 @@ class LiveNotificationRunnerTest {
         assertEquals("latest", wakeController.consumeReason())
         assertTrue(wakeController.signal.tryReceive().isFailure)
     }
+
+    @Test
+    fun fallbackGateCoalescesConcurrentAndRecentRuns() {
+        val start = 100_000L
+
+        assertTrue(LiveNotificationFallbackGate.tryAcquire(start))
+        assertFalse(LiveNotificationFallbackGate.tryAcquire(start + 1L))
+        LiveNotificationFallbackGate.release(success = true, nowElapsedMs = start)
+
+        assertFalse(LiveNotificationFallbackGate.tryAcquire(start + 29_999L))
+        assertTrue(LiveNotificationFallbackGate.tryAcquire(start + 30_000L))
+        LiveNotificationFallbackGate.release(success = false, nowElapsedMs = start + 30_000L)
+    }
 }

@@ -59,6 +59,9 @@ internal fun liveNotificationDiagnostics(context: Context): String = buildString
     appendLine("Live notifications last runtime success: ${timestamp(C.LIVE_NOTIFICATION_LAST_SUCCESS)}")
     appendLine("Live notifications last runtime error: ${timestamp(C.LIVE_NOTIFICATION_LAST_ERROR_AT)}")
     appendLine("Live notifications last runtime API used: ${prefs.getString(C.LIVE_NOTIFICATION_LAST_API, null) ?: "none"}")
+    appendLine("Live notifications last realtime owner heartbeat: ${timestamp(C.LIVE_NOTIFICATION_LAST_OWNER_HEARTBEAT)}")
+    appendLine("Live notifications last watchdog wake: ${timestamp(C.LIVE_NOTIFICATION_LAST_WATCHDOG)}")
+    appendLine("Live notifications last watchdog action: ${prefs.getString(C.LIVE_NOTIFICATION_LAST_WATCHDOG_ACTION, null) ?: "none"}")
     appendLine(
         "Live notifications last runtime error details: " +
                 (sanitizeLiveNotificationTechnicalMessage(

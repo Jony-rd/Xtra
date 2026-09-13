@@ -12,6 +12,35 @@ import com.github.andreyasadchy.xtra.util.sanitizeLiveNotificationTechnicalMessa
 import kotlinx.coroutines.CancellationException
 import androidx.core.content.edit
 
+internal object LiveNotificationFallbackGate {
+
+    private const val COALESCE_WINDOW_MS = 30_000L
+    private val lock = Any()
+    private var running = false
+    private var lastCompletedElapsedMs = 0L
+
+    fun tryAcquire(nowElapsedMs: Long = SystemClock.elapsedRealtime()): Boolean = synchronized(lock) {
+        if (running ||
+            (lastCompletedElapsedMs > 0L &&
+                nowElapsedMs - lastCompletedElapsedMs < COALESCE_WINDOW_MS)
+        ) {
+            false
+        } else {
+            running = true
+            true
+        }
+    }
+
+    fun release(success: Boolean, nowElapsedMs: Long = SystemClock.elapsedRealtime()) {
+        synchronized(lock) {
+            if (success) {
+                lastCompletedElapsedMs = nowElapsedMs
+            }
+            running = false
+        }
+    }
+}
+
 class LiveNotificationWorker(
     private val context: android.content.Context,
     parameters: WorkerParameters,
@@ -27,22 +56,33 @@ class LiveNotificationWorker(
         try {
             if (shouldSkipLiveNotificationWorker(
                     LiveNotificationScheduler.hasHealthyRealtimeOwner(context),
-                )
+            )
             ) {
                 Log.d(TAG, "Skipping fallback reconciliation because a realtime owner is healthy")
                 return Result.success()
             }
-            context.prefs().edit {
-                putLong(C.LIVE_NOTIFICATION_LAST_RUN, startedAt)
-            }
-            val authMaintainer = (context.applicationContext as? XtraApp)?.xtraModule?.authSessionMaintainer
-            if (authMaintainer?.validateIfDue() == AuthSessionMaintenanceState.REAUTHORIZATION_REQUIRED) {
+            if (!LiveNotificationFallbackGate.tryAcquire()) {
+                Log.d(TAG, "Skipping fallback reconciliation because another fallback is active or recent")
                 return Result.success()
             }
-            val result = monitor.poll(baselineOnly = baselineOnly)
-            recordSuccess(startedAt, result.delivered, result.api)
-            Log.d(TAG, "Live notification reconciliation completed in ${SystemClock.elapsedRealtime() - startElapsed}ms; delivered=${result.delivered}")
-            return Result.success()
+            var completed = false
+            try {
+                context.prefs().edit {
+                    putLong(C.LIVE_NOTIFICATION_LAST_RUN, startedAt)
+                }
+                val authMaintainer = (context.applicationContext as? XtraApp)?.xtraModule?.authSessionMaintainer
+                if (authMaintainer?.validateIfDue() == AuthSessionMaintenanceState.REAUTHORIZATION_REQUIRED) {
+                    completed = true
+                    return Result.success()
+                }
+                val result = monitor.poll(baselineOnly = baselineOnly)
+                recordSuccess(startedAt, result.delivered, result.api)
+                Log.d(TAG, "Live notification reconciliation completed in ${SystemClock.elapsedRealtime() - startElapsed}ms; delivered=${result.delivered}")
+                completed = true
+                return Result.success()
+            } finally {
+                LiveNotificationFallbackGate.release(success = completed)
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

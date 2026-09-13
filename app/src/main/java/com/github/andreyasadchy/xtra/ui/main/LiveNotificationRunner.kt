@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.edit
 import com.github.andreyasadchy.xtra.BuildConfig
@@ -87,6 +88,8 @@ class LiveNotificationRunner(
     private val wakeController = LiveNotificationWakeController()
     private val networkAvailable = AtomicBoolean(false)
     private val nextDelayMs = AtomicLong(PARTIAL_EVENTSUB_RECONCILE_INTERVAL_MS)
+    private val lastMonitorActivityElapsedMs = AtomicLong(0L)
+    private val monitorWaiting = AtomicBoolean(false)
     private val eventSubStarted = AtomicBoolean(false)
     private val networkCallbackRegistered = AtomicBoolean(false)
     private val monitor = LiveNotificationMonitor(applicationContext)
@@ -112,6 +115,7 @@ class LiveNotificationRunner(
     private val lifecycleLock = Any()
     private var state = State.NEW
     private var monitorJob: Job? = null
+    private var heartbeatJob: Job? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     fun start() {
@@ -123,14 +127,19 @@ class LiveNotificationRunner(
                         wakeController.signal.trySend(Unit)
                         return
                     }
+                    heartbeatJob?.cancel()
+                    heartbeatJob = null
                     unregisterNetworkCallback()
                     state = State.NEW
                 }
                 State.NEW -> Unit
             }
             state = State.RUNNING
+            lastMonitorActivityElapsedMs.set(0L)
+            monitorWaiting.set(false)
             networkAvailable.set(hasValidatedNetwork())
             registerNetworkCallback()
+            heartbeatJob = scope.launch { ownerHeartbeatLoop() }
             monitorJob = scope.launch { monitorLoop() }
         }
     }
@@ -144,6 +153,8 @@ class LiveNotificationRunner(
             unregisterNetworkCallback()
             monitorJob?.cancel()
             monitorJob = null
+            heartbeatJob?.cancel()
+            heartbeatJob = null
             eventSub.shutdown()
             wakeController.signal.close()
             scope.cancel()
@@ -158,7 +169,23 @@ class LiveNotificationRunner(
         liveNotificationOwnerIsHealthy(
             runnerRunning = state == State.RUNNING && monitorJob?.isActive == true,
             networkWakeAvailable = networkCallbackRegistered.get(),
+            heartbeatFresh = isHeartbeatFresh(),
         )
+    }
+
+    private fun isHeartbeatFresh(): Boolean {
+        val heartbeat = lastMonitorActivityElapsedMs.get()
+        return heartbeat > 0L &&
+            SystemClock.elapsedRealtime() - heartbeat <= LIVE_NOTIFICATION_OWNER_HEALTH_TIMEOUT_MS
+    }
+
+    private suspend fun ownerHeartbeatLoop() {
+        while (currentCoroutineContext().isActive && isMonitoringEnabled()) {
+            if (monitorWaiting.get()) {
+                lastMonitorActivityElapsedMs.set(SystemClock.elapsedRealtime())
+            }
+            delay(LIVE_NOTIFICATION_OWNER_HEARTBEAT_INTERVAL_MS)
+        }
     }
 
     private suspend fun monitorLoop() {
@@ -166,6 +193,7 @@ class LiveNotificationRunner(
         var reconciliationReason = "startup"
         try {
             while (currentCoroutineContext().isActive && isMonitoringEnabled()) {
+                recordMonitorActivity()
                 if (!networkAvailable.get()) {
                     if (!networkCallbackRegistered.get() && hasValidatedNetwork()) {
                         networkAvailable.set(true)
@@ -285,7 +313,13 @@ class LiveNotificationRunner(
                     }
                 }
                 if (retryDelayMs != null) {
-                    awaitLiveNotificationRetry(retryDelayMs, retryDelayInterruptible, wakeController.signal)
+                    awaitWhileMonitorWaiting {
+                        awaitLiveNotificationRetry(
+                            retryDelayMs,
+                            retryDelayInterruptible,
+                            wakeController.signal,
+                        )
+                    }
                     reconciliationReason = wakeController.consumeReason() ?: "rate_limit_retry"
                 } else {
                     reconciliationReason = waitForNextPoll()
@@ -295,6 +329,8 @@ class LiveNotificationRunner(
         } finally {
             val loopJob = currentCoroutineContext()[Job]
             withContext(NonCancellable) {
+                heartbeatJob?.cancel()
+                heartbeatJob = null
                 if (eventSubStarted.getAndSet(false)) {
                     runCatching { eventSub.stop() }
                 }
@@ -313,12 +349,30 @@ class LiveNotificationRunner(
         }
     }
 
+    private fun recordMonitorActivity() {
+        lastMonitorActivityElapsedMs.set(SystemClock.elapsedRealtime())
+        applicationContext.prefs().edit {
+            putLong(C.LIVE_NOTIFICATION_LAST_OWNER_HEARTBEAT, System.currentTimeMillis())
+        }
+    }
+
     private suspend fun waitForNextPoll(timeoutMs: Long = nextDelayMs.get()): String? {
-        val woke = withTimeoutOrNull(timeoutMs) {
-            wakeController.signal.receiveCatching()
-            true
-        } ?: false
-        return if (woke) wakeController.consumeReason() else null
+        return awaitWhileMonitorWaiting {
+            val woke = withTimeoutOrNull(timeoutMs) {
+                wakeController.signal.receiveCatching()
+                true
+            } ?: false
+            if (woke) wakeController.consumeReason() else null
+        }
+    }
+
+    private suspend fun <T> awaitWhileMonitorWaiting(block: suspend () -> T): T {
+        monitorWaiting.set(true)
+        return try {
+            block()
+        } finally {
+            monitorWaiting.set(false)
+        }
     }
 
     internal fun requestImmediateReconciliation(reason: String): Boolean = synchronized(lifecycleLock) {
