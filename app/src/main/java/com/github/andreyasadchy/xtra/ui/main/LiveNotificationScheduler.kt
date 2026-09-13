@@ -1,8 +1,13 @@
 package com.github.andreyasadchy.xtra.ui.main
 
+import android.app.AlarmManager
 import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.edit
 import androidx.work.BackoffPolicy
@@ -70,6 +75,7 @@ object LiveNotificationScheduler {
             }
             migrateMode(context)
             schedulePeriodicFallback(context)
+            scheduleWatchdogAlarm(context)
             when (mode(context)) {
                 C.LIVE_NOTIFICATIONS_MODE_FAST -> {
                     LiveNotificationService.stop(context)
@@ -127,6 +133,52 @@ object LiveNotificationScheduler {
                         context,
                         LiveNotificationProcessOwner.PERSISTENT_FALLBACK,
                     )
+            }
+        }
+    }
+
+    /** Restores process-independent fallback scheduling after a reboot or app update. */
+    fun restoreFallbacks(context: Context) {
+        synchronized(transitionLock) {
+            if (!context.prefs().getBoolean(C.LIVE_NOTIFICATIONS_ENABLED, false) ||
+                !canPostNotifications(context)
+            ) {
+                return
+            }
+            migrateMode(context)
+            schedulePeriodicFallback(context)
+            scheduleWatchdogAlarm(context)
+        }
+    }
+
+    /** Handles the cheap watchdog wake. The worker performs network work if needed. */
+    fun onWatchdogAlarm(context: Context) {
+        synchronized(transitionLock) {
+            val preferences = context.prefs()
+            val enabled = preferences.getBoolean(C.LIVE_NOTIFICATIONS_ENABLED, false)
+            val notificationsAllowed = canPostNotifications(context)
+            val selectedMode = mode(context)
+            preferences.edit {
+                putLong(C.LIVE_NOTIFICATION_LAST_WATCHDOG, System.currentTimeMillis())
+            }
+            if (!shouldScheduleLiveNotificationWatchdog(enabled, notificationsAllowed, selectedMode)) {
+                cancelWatchdogAlarm(context)
+                preferences.edit { putString(C.LIVE_NOTIFICATION_LAST_WATCHDOG_ACTION, "disabled") }
+                return
+            }
+            scheduleWatchdogAlarm(context)
+            val healthyOwner = hasHealthyRealtimeOwner(context)
+            if (shouldRunLiveNotificationWatchdog(
+                    notificationsEnabled = enabled,
+                    notificationsAllowed = notificationsAllowed,
+                    mode = selectedMode,
+                    healthyRealtimeOwner = healthyOwner,
+                )
+            ) {
+                preferences.edit { putString(C.LIVE_NOTIFICATION_LAST_WATCHDOG_ACTION, "fallback_enqueued") }
+                enqueueWatchdogWork(context)
+            } else {
+                preferences.edit { putString(C.LIVE_NOTIFICATION_LAST_WATCHDOG_ACTION, "owner_healthy") }
             }
         }
     }
@@ -227,9 +279,23 @@ object LiveNotificationScheduler {
         WorkManager.getInstance(context).cancelUniqueWork(IMMEDIATE_WORK_NAME)
     }
 
+    private fun enqueueWatchdogWork(context: Context) {
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            WATCHDOG_WORK_NAME,
+            ExistingWorkPolicy.KEEP,
+            immediateWork(
+                Data.Builder()
+                    .putBoolean(LiveNotificationWorker.INPUT_BASELINE_ONLY, false)
+                    .build()
+            ),
+        )
+    }
+
     private fun disableLocked(context: Context) {
         WorkManager.getInstance(context).cancelUniqueWork(PERIODIC_WORK_NAME)
         WorkManager.getInstance(context).cancelUniqueWork(IMMEDIATE_WORK_NAME)
+        WorkManager.getInstance(context).cancelUniqueWork(WATCHDOG_WORK_NAME)
+        cancelWatchdogAlarm(context)
         LiveNotificationRealtimeEngine.stop()
         LiveNotificationService.stop(context)
         context.prefs().edit { remove(C.LIVE_NOTIFICATION_BASELINE_INITIALIZED) }
@@ -252,6 +318,47 @@ object LiveNotificationScheduler {
                 .build(),
         )
     }
+
+    private fun scheduleWatchdogAlarm(context: Context) {
+        val selectedMode = mode(context)
+        val enabled = context.prefs().getBoolean(C.LIVE_NOTIFICATIONS_ENABLED, false)
+        val notificationsAllowed = canPostNotifications(context)
+        if (!shouldScheduleLiveNotificationWatchdog(enabled, notificationsAllowed, selectedMode)) {
+            cancelWatchdogAlarm(context)
+            return
+        }
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val triggerAt = SystemClock.elapsedRealtime() + LIVE_NOTIFICATION_WATCHDOG_INTERVAL_MS
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            alarmManager.setAndAllowWhileIdle(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                triggerAt,
+                watchdogPendingIntent(context),
+            )
+        } else {
+            alarmManager.set(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                triggerAt,
+                watchdogPendingIntent(context),
+            )
+        }
+    }
+
+    private fun cancelWatchdogAlarm(context: Context) {
+        val pendingIntent = watchdogPendingIntent(context)
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        alarmManager.cancel(pendingIntent)
+        pendingIntent.cancel()
+    }
+
+    private fun watchdogPendingIntent(context: Context): PendingIntent = PendingIntent.getBroadcast(
+        context,
+        WATCHDOG_REQUEST_CODE,
+        Intent()
+            .setComponent(ComponentName(context, LiveNotificationWatchdogReceiver::class.java))
+            .setAction(LiveNotificationWatchdogReceiver.ACTION_WATCHDOG),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
 
     private fun immediateWork(input: Data) =
         OneTimeWorkRequestBuilder<LiveNotificationWorker>()
@@ -276,5 +383,7 @@ object LiveNotificationScheduler {
 
     private const val PERIODIC_WORK_NAME = "live_notifications"
     private const val IMMEDIATE_WORK_NAME = "live_notifications_now"
+    private const val WATCHDOG_WORK_NAME = "live_notifications_watchdog"
+    private const val WATCHDOG_REQUEST_CODE = 4300
     private const val LEGACY_CONNECTION_CHANNEL_ID = "xtra_live_connection_channel"
 }

@@ -1,5 +1,6 @@
 package com.github.andreyasadchy.xtra.ui.main
 
+import com.github.andreyasadchy.xtra.util.C
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -113,6 +114,69 @@ class LiveNotificationPolicyTest {
     fun workerSkipsOnlyWithAHealthyRealtimeOwner() {
         assertTrue(shouldSkipLiveNotificationWorker(hasHealthyRealtimeOwner = true))
         assertFalse(shouldSkipLiveNotificationWorker(hasHealthyRealtimeOwner = false))
+    }
+
+    @Test
+    fun realtimeOwnerRequiresARecentHeartbeat() {
+        assertTrue(
+            liveNotificationOwnerIsHealthy(
+                runnerRunning = true,
+                networkWakeAvailable = true,
+                heartbeatFresh = true,
+            )
+        )
+        assertFalse(
+            liveNotificationOwnerIsHealthy(
+                runnerRunning = true,
+                networkWakeAvailable = true,
+                heartbeatFresh = false,
+            )
+        )
+    }
+
+    @Test
+    fun watchdogIsOnlyArmedForRealtimeModes() {
+        assertTrue(
+            shouldScheduleLiveNotificationWatchdog(
+                notificationsEnabled = true,
+                notificationsAllowed = true,
+                mode = C.LIVE_NOTIFICATIONS_MODE_FAST,
+            )
+        )
+        assertTrue(
+            shouldScheduleLiveNotificationWatchdog(
+                notificationsEnabled = true,
+                notificationsAllowed = true,
+                mode = C.LIVE_NOTIFICATIONS_MODE_PERSISTENT,
+            )
+        )
+        assertFalse(
+            shouldScheduleLiveNotificationWatchdog(
+                notificationsEnabled = true,
+                notificationsAllowed = true,
+                mode = C.LIVE_NOTIFICATIONS_MODE_BATTERY,
+            )
+        )
+    }
+
+    @Test
+    fun watchdogDoesNotEnqueueFallbackForAHealthyOwner() {
+        assertFalse(
+            shouldRunLiveNotificationWatchdog(
+                notificationsEnabled = true,
+                notificationsAllowed = true,
+                mode = C.LIVE_NOTIFICATIONS_MODE_FAST,
+                healthyRealtimeOwner = true,
+            )
+        )
+        assertTrue(
+            shouldRunLiveNotificationWatchdog(
+                notificationsEnabled = true,
+                notificationsAllowed = true,
+                mode = C.LIVE_NOTIFICATIONS_MODE_FAST,
+                healthyRealtimeOwner = false,
+            )
+        )
     }
 
     @Test

@@ -9,15 +9,20 @@ import com.github.andreyasadchy.xtra.util.prefs
 class LiveNotificationBootReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent?) {
-        if (intent?.action != Intent.ACTION_BOOT_COMPLETED) {
+        if (intent?.action != Intent.ACTION_BOOT_COMPLETED &&
+            intent?.action != Intent.ACTION_MY_PACKAGE_REPLACED
+        ) {
             return
         }
         val prefs = context.prefs()
         if (prefs.getBoolean(C.LIVE_NOTIFICATIONS_ENABLED, false) &&
-            LiveNotificationScheduler.mode(context) == C.LIVE_NOTIFICATIONS_MODE_PERSISTENT &&
             LiveNotificationScheduler.canPostNotifications(context)
         ) {
-            LiveNotificationScheduler.applyMode(context)
+            if (LiveNotificationScheduler.mode(context) == C.LIVE_NOTIFICATIONS_MODE_PERSISTENT) {
+                LiveNotificationScheduler.applyMode(context)
+            } else {
+                LiveNotificationScheduler.restoreFallbacks(context)
+            }
         }
     }
 }
