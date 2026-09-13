@@ -240,6 +240,8 @@ INTENTIONAL_FALLBACK_RESOURCES = {
     "settings_phone_chat_height",
     "settings_phone_chat_opacity",
     "settings_phone_chat_reset",
+    # Player accessibility status is currently English-only until translated.
+    "player_playing",
     "player_move_chat",
     "third_party_emotes_loading",
     "third_party_emotes_empty",
