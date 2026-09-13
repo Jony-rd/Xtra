@@ -109,6 +109,8 @@ import com.github.andreyasadchy.xtra.model.gql.video.VideoGamesResponse
 import com.github.andreyasadchy.xtra.model.gql.video.VideoMessagesResponse
 import com.github.andreyasadchy.xtra.model.ui.ChannelPointRewardRedemption
 import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsCategory
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsField
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsFieldKey
 import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsLogger
 import com.github.andreyasadchy.xtra.diagnostics.diagnosticsRequestSucceeded
 import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsTransport
@@ -360,16 +362,31 @@ class GraphQLRepository(
         validateResponse: ((String) -> Unit)? = null,
     ): GqlHttpResponse {
         val logger = diagnosticsLogger
+        val authenticated = isAuthenticatedGeckoRequest(headers)
         val token = if (logger?.isEnabled == true) {
             logger.beginRequest(
                 category = DiagnosticsCategory.GQL,
                 transport = DiagnosticsTransport.GQL,
                 operation = operationName,
+                fields = buildList {
+                    networkLibrary?.let {
+                        add(DiagnosticsField(DiagnosticsFieldKey.NETWORK_LIBRARY, it))
+                    }
+                    add(DiagnosticsField(DiagnosticsFieldKey.REQUEST_BYTES, body.toByteArray().size.toString()))
+                    add(DiagnosticsField(DiagnosticsFieldKey.AUTHENTICATED, authenticated.toString()))
+                },
             )
         } else null
         return try {
-            val response = if (isAuthenticatedGeckoRequest(headers)) {
-                sendIntegrityProtectedQuery(networkLibrary, headers, body, operationName, token?.correlationId)
+            val response = if (authenticated) {
+                sendIntegrityProtectedQuery(
+                    networkLibrary = networkLibrary,
+                    fallbackHeaders = headers,
+                    body = body,
+                    operationName = operationName,
+                    correlationId = token?.correlationId,
+                    onRetry = { logger?.retryRequest(token) },
+                )
             } else {
                 sendRawPersistedQuery(networkLibrary, headers, body)
             }
@@ -384,6 +401,7 @@ class GraphQLRepository(
                         successful = false,
                         httpStatus = response.statusCode,
                         code = DIAGNOSTICS_RESPONSE_DECODE_ERROR_CODE,
+                        fields = diagnosticsResponseFields(response.body),
                     )
                     throw error
                 }
@@ -397,6 +415,7 @@ class GraphQLRepository(
                     malformedResponse -> "response_parse_error"
                     else -> null
                 },
+                fields = token?.let { diagnosticsResponseFields(response.body) }.orEmpty(),
             )
             response
         } catch (error: CancellationException) {
@@ -404,8 +423,24 @@ class GraphQLRepository(
             throw error
         } catch (error: Throwable) {
             NetworkInterferenceReporter.report("gql.twitch.tv", error)
-            logger?.failRequest(token, diagnosticsErrorCode(error))
+            logger?.failRequest(
+                token,
+                diagnosticsErrorCode(error),
+                fields = listOf(DiagnosticsField(DiagnosticsFieldKey.STATE, "transport_failure")),
+            )
             throw error
+        }
+    }
+
+    private fun diagnosticsResponseFields(body: String): List<DiagnosticsField> = buildList {
+        add(DiagnosticsField(DiagnosticsFieldKey.RESPONSE_BYTES, body.toByteArray().size.toString()))
+        runCatching {
+            json.parseToJsonElement(body).jsonObject["errors"]
+                ?.let { errors ->
+                    if (errors is kotlinx.serialization.json.JsonArray) {
+                        add(DiagnosticsField(DiagnosticsFieldKey.ERROR_COUNT, errors.size.toString()))
+                    }
+                }
         }
     }
 
@@ -480,6 +515,7 @@ class GraphQLRepository(
         body: String,
         operationName: String,
         correlationId: String?,
+        onRetry: () -> Unit,
     ): GqlHttpResponse {
         val manager = twitchWebSessionManager
         return manager?.executeIntegrityAwareGql(
@@ -488,6 +524,7 @@ class GraphQLRepository(
             send = { requestHeaders -> sendRawPersistedQuery(networkLibrary, requestHeaders, body) },
             diagnosticsOperation = operationName,
             diagnosticsCorrelationId = correlationId,
+            onRetry = onRetry,
         ) ?: sendRawPersistedQuery(networkLibrary, fallbackHeaders, body)
     }
 

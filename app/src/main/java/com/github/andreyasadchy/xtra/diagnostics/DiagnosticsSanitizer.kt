@@ -10,28 +10,52 @@ internal object DiagnosticsSanitizer {
 
     private val idKeys = setOf(
         DiagnosticsFieldKey.CHANNEL_ID,
+        DiagnosticsFieldKey.STREAM_ID,
         DiagnosticsFieldKey.GAME_ID,
         DiagnosticsFieldKey.CAMPAIGN_ID,
         DiagnosticsFieldKey.DROP_ID,
         DiagnosticsFieldKey.REWARD_ID,
+        DiagnosticsFieldKey.ACCOUNT_ID,
     )
+    private val labelKeys = setOf(
+        DiagnosticsFieldKey.ACCOUNT_LOGIN,
+        DiagnosticsFieldKey.NETWORK_LIBRARY,
+        DiagnosticsFieldKey.HOST,
+        DiagnosticsFieldKey.CACHE_STATE,
+        DiagnosticsFieldKey.SESSION_STATE,
+    )
+    private val loginPattern = Regex("[a-z0-9_]{1,30}")
+    private val accountIdPattern = Regex("[0-9]{1,32}")
     private val booleanKeys = setOf(
         DiagnosticsFieldKey.CLAIMABLE,
         DiagnosticsFieldKey.CLAIMED,
         DiagnosticsFieldKey.CACHED,
+        DiagnosticsFieldKey.RETRY,
+        DiagnosticsFieldKey.PRIVATE,
+        DiagnosticsFieldKey.ACCOUNT_CHANGED,
         DiagnosticsFieldKey.ACTIVE,
         DiagnosticsFieldKey.AUTHENTICATED,
         DiagnosticsFieldKey.LIVE,
     )
     private val numberKeys = setOf(
         DiagnosticsFieldKey.COUNT,
+        DiagnosticsFieldKey.RESULT_COUNT,
+        DiagnosticsFieldKey.ERROR_COUNT,
         DiagnosticsFieldKey.ATTEMPT,
+        DiagnosticsFieldKey.REQUEST_BYTES,
+        DiagnosticsFieldKey.RESPONSE_BYTES,
+        DiagnosticsFieldKey.QUEUE_WAIT_MS,
+        DiagnosticsFieldKey.MESSAGE_BYTES,
+        DiagnosticsFieldKey.SUBSCRIPTION_COUNT,
+        DiagnosticsFieldKey.RECONNECT_COUNT,
+        DiagnosticsFieldKey.KEEPALIVE_SEC,
+        DiagnosticsFieldKey.ANDROID_API,
         DiagnosticsFieldKey.RECONNECT_DELAY_MS,
     )
     private val idPattern = Regex("[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")
     private val numberPattern = Regex("-?[0-9]+(?:\\.[0-9]+)?")
     private val progressPattern = Regex("[0-9]+(?:\\.[0-9]+)?/(?:[0-9]+(?:\\.[0-9]+)?|\\?)")
-    private val statePattern = Regex("[A-Za-z][A-Za-z0-9_.:-]{0,63}")
+    private val statePattern = Regex("[A-Za-z][A-Za-z0-9_.:_-]{0,63}")
 
     fun entry(entry: DiagnosticsEntry): DiagnosticsEntry {
         val operation = safeLabel(entry.operation, MAX_OPERATION_LENGTH)
@@ -54,9 +78,14 @@ internal object DiagnosticsSanitizer {
             event = event,
             code = code,
             correlationId = entry.correlationId?.let { safeLabel(it, MAX_CODE_LENGTH) },
+            parentCorrelationId = entry.parentCorrelationId?.let { safeLabel(it, MAX_CODE_LENGTH) },
             fields = fields,
         )
     }
+
+    fun withoutAccountContext(entry: DiagnosticsEntry): DiagnosticsEntry = entry.copy(
+        fields = entry.fields.filterNot { it.key == DiagnosticsFieldKey.ACCOUNT_ID || it.key == DiagnosticsFieldKey.ACCOUNT_LOGIN },
+    )
 
     fun field(field: DiagnosticsField): DiagnosticsField? {
         val value = field.value
@@ -68,7 +97,10 @@ internal object DiagnosticsSanitizer {
     }
 
     private fun isValidFieldValue(key: DiagnosticsFieldKey, value: String): Boolean = when {
+        key == DiagnosticsFieldKey.ACCOUNT_ID -> accountIdPattern.matches(value)
         key in idKeys -> idPattern.matches(value)
+        key == DiagnosticsFieldKey.ACCOUNT_LOGIN -> loginPattern.matches(value.lowercase())
+        key in labelKeys -> statePattern.matches(value)
         key in booleanKeys -> value == "true" || value == "false"
         key in numberKeys -> numberPattern.matches(value)
         key == DiagnosticsFieldKey.PROGRESS -> progressPattern.matches(value)

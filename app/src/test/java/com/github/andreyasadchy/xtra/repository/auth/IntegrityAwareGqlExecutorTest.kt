@@ -48,6 +48,7 @@ class IntegrityAwareGqlExecutorTest {
         var current: GeckoGqlRequest? = request(stale)
         var refreshCount = 0
         var sendCount = 0
+        var retryCount = 0
         val executor = executor(
             current = { current },
             refresh = {
@@ -73,11 +74,13 @@ class IntegrityAwareGqlExecutorTest {
                 sendCount++
                 if (headers == request(stale).headers) "failed" else "ok"
             },
+            onRetry = { retryCount++ },
         )
 
         assertEquals("ok", result)
         assertEquals(2, sendCount)
         assertEquals(1, refreshCount)
+        assertEquals(1, retryCount)
     }
 
     @Test

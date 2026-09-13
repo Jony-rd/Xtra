@@ -12,6 +12,7 @@ import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsFormatter
 
 class DiagnosticsAdapter(
     private val onCopy: (String) -> Unit,
+    private val includeAccountContext: () -> Boolean = { false },
 ) : ListAdapter<DiagnosticsEntry, DiagnosticsAdapter.ViewHolder>(DIFF_CALLBACK) {
     private val expandedSequences = mutableSetOf<Long>()
 
@@ -41,7 +42,7 @@ class DiagnosticsAdapter(
                 append(" · ")
                 append(entry.event)
             }
-            binding.details.text = DiagnosticsFormatter.formatEntry(entry)
+            binding.details.text = DiagnosticsFormatter.formatEntry(entry, includeAccountContext())
             binding.detailsContainer.visibility = if (expanded) android.view.View.VISIBLE else android.view.View.GONE
             binding.expandButton.setImageResource(
                 if (expanded) R.drawable.ic_happening_now_chevron_up

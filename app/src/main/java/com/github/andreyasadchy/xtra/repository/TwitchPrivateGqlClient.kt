@@ -5,6 +5,8 @@ import android.net.http.HttpEngine
 import android.os.Build
 import androidx.annotation.RequiresExtension
 import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsCategory
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsField
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsFieldKey
 import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsLogger
 import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsTransport
 import com.github.andreyasadchy.xtra.model.twitchinbox.TwitchInboxError
@@ -91,6 +93,13 @@ class TwitchPrivateGqlClient(
                 category = DiagnosticsCategory.GQL,
                 transport = DiagnosticsTransport.GQL,
                 operation = operationName,
+                fields = buildList {
+                    networkLibrary?.let {
+                        add(DiagnosticsField(DiagnosticsFieldKey.NETWORK_LIBRARY, it))
+                    }
+                    add(DiagnosticsField(DiagnosticsFieldKey.REQUEST_BYTES, request.toString().toByteArray().size.toString()))
+                    add(DiagnosticsField(DiagnosticsFieldKey.AUTHENTICATED, "true"))
+                },
             )
         } else null
         val response = try {
@@ -114,13 +123,25 @@ class TwitchPrivateGqlClient(
             throw TwitchInboxException(TwitchInboxError.Network, error)
         }
         privateGqlHttpError(response.statusCode)?.let {
-            logger?.finishRequest(token, successful = false, httpStatus = response.statusCode, code = "http_error")
+            logger?.finishRequest(
+                token,
+                successful = false,
+                httpStatus = response.statusCode,
+                code = "http_error",
+                fields = token?.let { diagnosticsResponseFields(response.body) }.orEmpty(),
+            )
             throw TwitchInboxException(it)
         }
         val body = try {
             json.parseToJsonElement(response.body).jsonObject
         } catch (error: Throwable) {
-            logger?.finishRequest(token, successful = false, httpStatus = response.statusCode, code = "response_parse_error")
+            logger?.finishRequest(
+                token,
+                successful = false,
+                httpStatus = response.statusCode,
+                code = "response_parse_error",
+                fields = token?.let { diagnosticsResponseFields(response.body) }.orEmpty(),
+            )
             throw TwitchInboxException(TwitchInboxError.PrivateApiChanged(operationName), error)
         }
         val errors = body["errors"]?.jsonArray
@@ -131,11 +152,29 @@ class TwitchPrivateGqlClient(
                 successful = false,
                 httpStatus = response.statusCode,
                 code = "graphql_error_${diagnosticsGraphQlCode(message, response.statusCode)}",
+                fields = token?.let { diagnosticsResponseFields(response.body) }.orEmpty(),
             )
             throw TwitchInboxException(mapError(operationName, message, response.statusCode))
         }
-        logger?.finishRequest(token, successful = true, httpStatus = response.statusCode)
+        logger?.finishRequest(
+            token,
+            successful = true,
+            httpStatus = response.statusCode,
+            fields = token?.let { diagnosticsResponseFields(response.body) }.orEmpty(),
+        )
         body
+    }
+
+    private fun diagnosticsResponseFields(body: String): List<DiagnosticsField> = buildList {
+        add(DiagnosticsField(DiagnosticsFieldKey.RESPONSE_BYTES, body.toByteArray().size.toString()))
+        runCatching {
+            json.parseToJsonElement(body).jsonObject["errors"]
+                ?.let { errors ->
+                    if (errors is kotlinx.serialization.json.JsonArray) {
+                        add(DiagnosticsField(DiagnosticsFieldKey.ERROR_COUNT, errors.size.toString()))
+                    }
+                }
+        }
     }
 
     private fun diagnosticsErrorCode(error: Throwable): String = when {

@@ -10,8 +10,10 @@ object DiagnosticsFormatter {
     fun formatTimestamp(timestampMs: Long): String =
         timeFormat.get()!!.format(Date(timestampMs))
 
-    fun formatEntry(entry: DiagnosticsEntry): String {
-        val safeEntry = DiagnosticsSanitizer.entry(entry)
+    fun formatEntry(entry: DiagnosticsEntry, includeAccountContext: Boolean = false): String {
+        val safeEntry = DiagnosticsSanitizer.entry(entry).let {
+            if (includeAccountContext) it else DiagnosticsSanitizer.withoutAccountContext(it)
+        }
         val value = buildString {
             append(formatTimestamp(safeEntry.timestampMs))
             append("  ")
@@ -30,6 +32,7 @@ object DiagnosticsFormatter {
             safeEntry.code?.let { append(" code=").append(it) }
             safeEntry.elapsedMs?.let { append(" elapsedMs=").append(it) }
             safeEntry.correlationId?.let { append(" correlation=").append(it) }
+            safeEntry.parentCorrelationId?.let { append(" parentCorrelation=").append(it) }
             if (safeEntry.fields.isNotEmpty()) {
                 append("\n")
                 safeEntry.fields.forEachIndexed { index, field ->
@@ -43,6 +46,25 @@ object DiagnosticsFormatter {
         return DiagnosticsSanitizer.capExport(value.take(DiagnosticsSanitizer.MAX_ENTRY_LENGTH))
     }
 
-    fun formatAll(entries: List<DiagnosticsEntry>): String =
-        DiagnosticsSanitizer.capExport(entries.joinToString("\n\n", prefix = "Xtra diagnostics\n\n") { formatEntry(it) })
+    fun formatAll(
+        entries: List<DiagnosticsEntry>,
+        environment: DiagnosticsEnvironment? = null,
+        includeAccountContext: Boolean = false,
+    ): String {
+        val header = buildString {
+            append("Xtra diagnostics")
+            environment?.let {
+                append("\napp=").append(DiagnosticsSanitizer.label(it.appVersion, 64))
+                append(" build=").append(DiagnosticsSanitizer.label(it.appBuild, 32))
+                append(" androidApi=").append(it.androidApi)
+                append(" device=").append(DiagnosticsSanitizer.label(it.deviceModel, 96))
+            }
+            append("\n\n")
+        }
+        return DiagnosticsSanitizer.capExport(
+            entries.joinToString("\n\n", prefix = header) {
+                formatEntry(it, includeAccountContext)
+            },
+        )
+    }
 }

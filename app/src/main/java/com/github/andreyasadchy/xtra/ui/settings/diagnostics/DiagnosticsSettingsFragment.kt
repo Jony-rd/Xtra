@@ -41,11 +41,18 @@ class DiagnosticsSettingsFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
         logger = (requireContext().applicationContext as XtraApp).xtraModule.diagnosticsLogger
-        adapter = DiagnosticsAdapter(::copyText)
+        adapter = DiagnosticsAdapter(
+            onCopy = ::copyText,
+            includeAccountContext = { logger.isAccountContextEnabled },
+        )
         binding.entriesRecyclerView.layoutManager = LinearLayoutManager(requireContext())
         binding.entriesRecyclerView.adapter = adapter
         binding.enabledSwitch.isChecked = logger.isEnabled
         binding.enabledSwitch.setOnCheckedChangeListener { _, enabled -> logger.setEnabled(enabled) }
+        binding.accountContextSwitch.isChecked = logger.isAccountContextEnabled
+        binding.accountContextSwitch.setOnCheckedChangeListener { _, enabled ->
+            logger.setAccountContextEnabled(enabled)
+        }
         binding.categoryFilterButton.setOnClickListener { showCategoryFilter() }
         binding.severityFilterButton.setOnClickListener { showSeverityFilter() }
         binding.clearButton.setOnClickListener { logger.clear() }
@@ -67,6 +74,8 @@ class DiagnosticsSettingsFragment : Fragment() {
         val enabled = logger.isEnabled
         binding.categoryFilterButton.isEnabled = enabled
         binding.severityFilterButton.isEnabled = enabled
+        binding.accountContextSwitch.isEnabled = enabled
+        binding.accountContextDescription.alpha = if (enabled) 1f else 0.6f
         binding.clearButton.isEnabled = enabled && entries.isNotEmpty()
         binding.copyButton.isEnabled = enabled && entries.isNotEmpty()
         binding.shareButton.isEnabled = enabled && entries.isNotEmpty()
@@ -111,7 +120,8 @@ class DiagnosticsSettingsFragment : Fragment() {
     }
 
     private fun formatCurrentEntries(): String = DiagnosticsFormatter.formatAll(
-        logger.snapshot(DiagnosticsFilter(categories, severities)),
+        entries = logger.snapshot(DiagnosticsFilter(categories, severities)),
+        environment = logger.environment(),
     )
 
     private fun copyText(text: String) {

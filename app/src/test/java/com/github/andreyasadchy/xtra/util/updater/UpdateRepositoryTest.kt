@@ -6,6 +6,9 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.SharedPreferences
 import androidx.core.content.edit
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsFieldKey
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsLifecycleEvent
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsLogger
 import com.github.andreyasadchy.xtra.util.C
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -682,6 +685,53 @@ class UpdateRepositoryTest {
         awaitCheck(repository)
         assertTrue(repository.state.value is UpdateState.Downloaded)
         assertEquals(releaseId, (repository.state.value as UpdateState.Downloaded).release.id)
+    }
+
+    @Test
+    fun diagnosticsCorrelateDownloadAndInstallLifecycles() = runBlocking {
+        val releaseId = "v2.58.6-build.125"
+        val preferences = MemoryPreferences().apply { persistRelease(releaseId) }
+        val context = TestContext(preferences)
+        val logger = DiagnosticsLogger(context).apply { setEnabled(true) }
+        val downloads = MemoryDownloadStore()
+        val preparer = RecordingInstallPreparer(preferences)
+        val repository = UpdateRepository(
+            context,
+            QueueReleaseSource(emptyList()),
+            downloadStore = downloads,
+            installPreparer = preparer,
+            diagnosticsLogger = logger,
+        )
+        val available = awaitState(repository) { it is UpdateState.Available } as UpdateState.Available
+
+        repository.download(available.release)
+        awaitState(repository) { it is UpdateState.Downloading }
+        val downloadId = preferences.getLong(C.UPDATE_DOWNLOAD_ID, -1L)
+        downloads.records[downloadId] = successfulRecord()
+        repository.handleDownloadComplete(downloadId)
+        awaitState(repository) { it is UpdateState.Downloaded }
+
+        val downloadEntries = logger.snapshot().filter { it.operation == "update_download" }
+        assertTrue("download diagnostics: $downloadEntries", downloadEntries.isNotEmpty())
+        val downloadStart = downloadEntries.first { it.event == DiagnosticsLifecycleEvent.REQUEST_STARTED.value }
+        val downloadComplete = downloadEntries.first { it.event == DiagnosticsLifecycleEvent.REQUEST_COMPLETED.value }
+        assertEquals(downloadStart.correlationId, downloadComplete.correlationId)
+        assertEquals("1", downloadComplete.fields.single { it.key == DiagnosticsFieldKey.ATTEMPT }.value)
+
+        repository.install()
+        awaitCondition { preparer.commitSawSessionId != null }
+        val handoff = logger.snapshot().first { it.operation == "update_install" && it.event == "install_handoff" }
+        assertEquals("handoff", handoff.fields.single { it.key == DiagnosticsFieldKey.STATE }.value)
+
+        repository.handleInstallResult(
+            android.content.pm.PackageInstaller.STATUS_SUCCESS,
+            callbackReleaseId = releaseId,
+            callbackSessionId = 42,
+        )
+        awaitState(repository) { it === UpdateState.Idle }
+        val installComplete = logger.snapshot().first { it.operation == "update_install" && it.event == DiagnosticsLifecycleEvent.REQUEST_COMPLETED.value }
+        assertEquals(handoff.correlationId, installComplete.correlationId)
+        assertEquals("installed", installComplete.code)
     }
 
     @Test
