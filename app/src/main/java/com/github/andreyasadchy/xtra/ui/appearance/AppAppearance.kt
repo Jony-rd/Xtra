@@ -2,6 +2,7 @@ package com.github.andreyasadchy.xtra.ui.appearance
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.net.Uri
 import android.view.View
@@ -9,6 +10,7 @@ import androidx.appcompat.widget.Toolbar
 import androidx.core.content.edit
 import androidx.core.net.toUri
 import com.google.android.material.appbar.AppBarLayout
+import com.google.android.material.navigation.NavigationBarView
 import com.github.andreyasadchy.xtra.util.C
 import com.github.andreyasadchy.xtra.util.prefs
 
@@ -37,6 +39,11 @@ internal data class BackgroundConfiguration(
 internal fun makeBackdropAwareChrome(view: View) {
     view.findViewById<AppBarLayout>(com.github.andreyasadchy.xtra.R.id.appBar)?.setBackgroundColor(Color.TRANSPARENT)
     view.findViewById<Toolbar>(com.github.andreyasadchy.xtra.R.id.toolbar)?.setBackgroundColor(Color.TRANSPARENT)
+    view.findViewById<View>(com.github.andreyasadchy.xtra.R.id.navBarContainer)?.setBackgroundColor(Color.TRANSPARENT)
+    view.findViewById<NavigationBarView>(com.github.andreyasadchy.xtra.R.id.navBar)?.backgroundTintList =
+        ColorStateList.valueOf(Color.TRANSPARENT)
+    view.findViewById<NavigationBarView>(com.github.andreyasadchy.xtra.R.id.tvNavRail)?.backgroundTintList =
+        ColorStateList.valueOf(Color.TRANSPARENT)
 }
 
 /** Reads and writes the shared appearance model used by all first-party activities. */

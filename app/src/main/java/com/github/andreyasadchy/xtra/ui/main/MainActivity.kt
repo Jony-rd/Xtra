@@ -203,6 +203,7 @@ class MainActivity : AppCompatActivity() {
             scrim = binding.appBackgroundScrim,
             repository = AppearanceRepository(this),
         )
+        makeBackdropAwareChrome(binding.root)
         if (isTv) {
             requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
         }
@@ -863,6 +864,15 @@ class MainActivity : AppCompatActivity() {
     private fun setNavBarColor(isPortrait: Boolean) {
         when {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
+                @Suppress("DEPRECATION")
+                window.navigationBarColor = if (isPortrait && binding.navBarContainer.isVisible) {
+                    Color.TRANSPARENT
+                } else {
+                    val isLightTheme = obtainStyledAttributes(intArrayOf(androidx.appcompat.R.attr.isLightTheme)).use {
+                        it.getBoolean(0, false)
+                    }
+                    ContextCompat.getColor(this, if (!isLightTheme) R.color.darkScrim else R.color.lightScrim)
+                }
                 window.isNavigationBarContrastEnforced = !isPortrait || !binding.navBarContainer.isVisible
             }
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.O -> {

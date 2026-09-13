@@ -754,11 +754,15 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                 com.google.android.material.R.attr.colorOnSurfaceVariant,
             ),
         )
+        val hasCustomBackground = shouldRenderChatBackground(appearance)
+        currentBinding.chatContentColumn.setBackgroundColor(
+            if (hasCustomBackground) Color.TRANSPARENT else surface,
+        )
         val requestGeneration = ++chatBackgroundRequestGeneration
         chatBackgroundRequest?.dispose()
         chatBackgroundRequest = null
         currentBinding.chatBackgroundImage.setImageDrawable(null)
-        if (!shouldRenderChatBackground(appearance)) {
+        if (!hasCustomBackground) {
             currentBinding.chatBackgroundImage.isGone = true
             currentBinding.chatBackgroundScrim.isGone = true
             return
@@ -782,6 +786,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                         currentBinding.chatBackgroundImage.setImageDrawable(null)
                         currentBinding.chatBackgroundImage.isGone = true
                         currentBinding.chatBackgroundScrim.isGone = true
+                        currentBinding.chatContentColumn.setBackgroundColor(surface)
                         chatBackgroundRequest = null
                     }
                 })
@@ -1041,6 +1046,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                         chatUrl = chatUrl,
                         fragment = this@ChatFragment,
                         backgroundColor = chatSurface,
+                        hasCustomBackground = shouldRenderChatBackground(chatAppearance),
                         messageTextColor = chatAppearance.messageTextColor,
                         metadataTextColor = chatAppearance.metadataTextColor,
                         dialogBackgroundColor = MaterialColors.getColor(
