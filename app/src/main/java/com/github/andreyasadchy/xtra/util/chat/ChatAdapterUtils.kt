@@ -1952,28 +1952,32 @@ internal fun chatMessageBackgroundResource(
     else -> 0
 }
 
+internal const val CUSTOM_CHAT_BACKGROUND_ROW_ALPHA = 0x80
+
 internal fun setChatMessageBackground(
     view: View,
     backgroundResource: Int,
     backgroundColor: Int? = null,
+    backgroundAlpha: Int = 0xFF,
 ) {
     if (backgroundColor != null) {
         view.setBackgroundColor(backgroundColor)
-        return
-    }
-    val colorAttribute = when (backgroundResource) {
-        R.color.chatMessageFirst -> R.attr.chatMessageFirstColor
-        R.color.chatMessageReward -> R.attr.chatMessageRewardColor
-        R.color.chatMessageNotice -> R.attr.chatMessageNoticeColor
-        R.color.chatMessageMention -> R.attr.chatMessageMentionColor
-        R.color.chatMessageSelected -> R.attr.chatMessageSelectedColor
-        else -> null
-    }
-    if (colorAttribute != null) {
-        view.setBackgroundColor(MaterialColors.getColor(view, colorAttribute))
     } else {
-        view.setBackgroundResource(backgroundResource)
+        val colorAttribute = when (backgroundResource) {
+            R.color.chatMessageFirst -> R.attr.chatMessageFirstColor
+            R.color.chatMessageReward -> R.attr.chatMessageRewardColor
+            R.color.chatMessageNotice -> R.attr.chatMessageNoticeColor
+            R.color.chatMessageMention -> R.attr.chatMessageMentionColor
+            R.color.chatMessageSelected -> R.attr.chatMessageSelectedColor
+            else -> null
+        }
+        if (colorAttribute != null) {
+            view.setBackgroundColor(MaterialColors.getColor(view, colorAttribute))
+        } else {
+            view.setBackgroundResource(backgroundResource)
+        }
     }
+    view.background?.alpha = backgroundAlpha.coerceIn(0, 0xFF)
 }
 
 private fun appendSpecialText(

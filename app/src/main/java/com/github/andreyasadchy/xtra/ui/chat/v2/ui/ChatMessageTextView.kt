@@ -40,6 +40,7 @@ import android.widget.TextView
 import android.util.TypedValue
 import android.util.AttributeSet
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.ColorUtils
 import androidx.appcompat.widget.AppCompatTextView
 import com.github.andreyasadchy.xtra.R
 import com.github.andreyasadchy.xtra.XtraApp
@@ -73,6 +74,7 @@ import kotlin.math.roundToInt
 
 private const val REPLY_TEXT_SCALE = 0.82f
 private const val REPLY_ICON_SIZE_DP = 15
+private const val CUSTOM_BACKGROUND_ROW_ALPHA = 0x80
 
 open class ChatMessageTextView private constructor(
     context: Context,
@@ -355,12 +357,18 @@ open class ChatMessageTextView private constructor(
                 R.attr.chatMessageSpecialAccentColor
             }
             val accentColor = com.google.android.material.color.MaterialColors.getColor(this, accentAttribute)
+            val usesCustomBackground = row.background == Color.TRANSPARENT
             val baseColor = row.background.takeIf { it != 0 } ?:
                 com.google.android.material.color.MaterialColors.getColor(this, com.google.android.material.R.attr.colorSurface)
             val tintAlpha = if (event.kind == ChatEventKind.HIGHLIGHT) 0x2A else 0x18
+            val eventSurfaceColor = blendColors(baseColor, accentColor, tintAlpha)
             setBackground(
                 ChatEventBackgroundDrawable(
-                    surfaceColor = blendColors(baseColor, accentColor, tintAlpha),
+                    surfaceColor = if (usesCustomBackground) {
+                        ColorUtils.setAlphaComponent(eventSurfaceColor, CUSTOM_BACKGROUND_ROW_ALPHA)
+                    } else {
+                        eventSurfaceColor
+                    },
                     accentColor = accentColor,
                     railWidthPx = (ChatEventVisualTokens.accentRailWidthDp * density).roundToInt(),
                 ),
@@ -379,13 +387,22 @@ open class ChatMessageTextView private constructor(
                 ChatRowBackground.EVENT,
                 -> setBackgroundColor(row.background)
                 ChatRowBackground.FIRST_CHATTER_TINT -> setBackgroundColor(
-                    com.google.android.material.color.MaterialColors.getColor(this, R.attr.chatMessageFirstColor),
+                    chatRowBackgroundColor(
+                        com.google.android.material.color.MaterialColors.getColor(this, R.attr.chatMessageFirstColor),
+                        row,
+                    ),
                 )
                 ChatRowBackground.REWARD -> setBackgroundColor(
-                    com.google.android.material.color.MaterialColors.getColor(this, R.attr.chatMessageRewardColor),
+                    chatRowBackgroundColor(
+                        com.google.android.material.color.MaterialColors.getColor(this, R.attr.chatMessageRewardColor),
+                        row,
+                    ),
                 )
                 ChatRowBackground.NOTICE -> setBackgroundColor(
-                    com.google.android.material.color.MaterialColors.getColor(this, R.attr.chatMessageNoticeColor),
+                    chatRowBackgroundColor(
+                        com.google.android.material.color.MaterialColors.getColor(this, R.attr.chatMessageNoticeColor),
+                        row,
+                    ),
                 )
             }
             setPaddingRelative(initialPaddingStart, initialPaddingTop, initialPaddingEnd, initialPaddingBottom)
@@ -1472,8 +1489,15 @@ private class ChatEventBackgroundDrawable(
     override fun setColorFilter(colorFilter: android.graphics.ColorFilter?) = Unit
 
     @Deprecated("Drawable opacity is not used by the chat row")
-    override fun getOpacity(): Int = PixelFormat.OPAQUE
+    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
 }
+
+private fun chatRowBackgroundColor(color: Int, row: ChatRowUiModel): Int =
+    if (row.background == Color.TRANSPARENT) {
+        ColorUtils.setAlphaComponent(color, min(Color.alpha(color), CUSTOM_BACKGROUND_ROW_ALPHA))
+    } else {
+        color
+    }
 
 private fun blendColors(baseColor: Int, overlayColor: Int, overlayAlpha: Int): Int {
     val alpha = overlayAlpha.coerceIn(0, 255)
