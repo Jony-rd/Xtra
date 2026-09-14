@@ -70,6 +70,9 @@ import com.github.andreyasadchy.xtra.ui.chat.v2.session.RecentChatHistoryPage
 import com.github.andreyasadchy.xtra.ui.chat.v2.session.RecentChatHistorySource
 import com.github.andreyasadchy.xtra.ui.chat.v2.session.paginateRecentChatPages
 import com.github.andreyasadchy.xtra.ui.chat.v2.session.toV2
+import com.github.andreyasadchy.xtra.ui.main.ChatBubbleManager
+import com.github.andreyasadchy.xtra.ui.main.DropsLiveUpdateManager
+import com.github.andreyasadchy.xtra.ui.main.PredictionLiveUpdateManager
 import com.github.andreyasadchy.xtra.model.gql.video.nextCursor
 import com.github.andreyasadchy.xtra.ui.chat.v2.preview.ChatClipPreview
 import com.github.andreyasadchy.xtra.ui.chat.v2.preview.ChatClipPreviewRepository
@@ -964,6 +967,27 @@ class XtraModule(application: Application) {
                 rewards
             },
         )
+    }
+
+    val predictionLiveUpdateManager by lazy {
+        PredictionLiveUpdateManager(
+            application.applicationContext,
+            (application as XtraApp).applicationScope,
+            json,
+            chatSessionManager,
+        )
+    }
+
+    val dropsLiveUpdateManager by lazy {
+        DropsLiveUpdateManager(
+            application.applicationContext,
+            (application as XtraApp).applicationScope,
+            json,
+        )
+    }
+
+    val chatBubbleManager by lazy {
+        ChatBubbleManager(application.applicationContext, (application as XtraApp).applicationScope)
     }
 
     private fun automaticChatReward(

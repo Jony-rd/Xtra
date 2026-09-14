@@ -3,6 +3,7 @@ package com.github.andreyasadchy.xtra.ui.player
 import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.Intent
+import android.content.SharedPreferences
 import android.media.audiofx.DynamicsProcessing
 import android.os.Build
 import android.os.Bundle
@@ -38,12 +39,14 @@ import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.MediaLoadData
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import androidx.media3.session.CommandButton
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import com.github.andreyasadchy.xtra.XtraApp
 import com.github.andreyasadchy.xtra.XtraModule
 import com.github.andreyasadchy.xtra.BuildConfig
+import com.github.andreyasadchy.xtra.R
 import com.github.andreyasadchy.xtra.model.PlaybackState
 import com.github.andreyasadchy.xtra.model.VideoPosition
 import com.github.andreyasadchy.xtra.model.VideoQuality
@@ -100,16 +103,36 @@ class PlaybackService : MediaSessionService() {
     private var viewingCategoryName: String? = null
     private var viewingCategoryImage: String? = null
     private var viewingTitle: String? = null
+    private var viewingStreamPreview: String? = null
     private var viewingContentType: String? = null
     private var viewingContentId: String? = null
     private var streamStartupTrace: StreamStartupTrace? = null
     private var liveRewindActive = false
     private var liveRewindVodId: String? = null
     private var liveRewindTransitioning = false
+    private var liveStreamUri: String? = null
+    private var liveStreamExtras: Bundle? = null
+    private val mediaPreferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == C.SYSTEM_MEDIA_CONTROLS_ENABLED ||
+            key == C.SYSTEM_MEDIA_ARTWORK_SOURCE ||
+            key == C.SYSTEM_MEDIA_SHOW_TITLE ||
+            key == C.SYSTEM_MEDIA_SHOW_CATEGORY ||
+            key == C.SYSTEM_MEDIA_SHOW_SEEK_BUTTONS ||
+            key == C.SYSTEM_MEDIA_SHOW_GO_LIVE
+        ) {
+            Handler(Looper.getMainLooper()).post {
+                playbackPlayer?.let {
+                    refreshCurrentMediaItemMetadata(it)
+                    refreshMediaButtonPreferences(it)
+                }
+            }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
         xtraModule = (application as XtraApp).xtraModule
+        prefs().registerOnSharedPreferenceChangeListener(mediaPreferenceListener)
         val player = xtraModule.streamMedia3Runtime.buildPlaybackPlayer(this) {
             setAudioAttributes(AudioAttributes.DEFAULT, prefs().getBoolean(C.PLAYER_AUDIO_FOCUS, false))
             setHandleAudioBecomingNoisy(true)
@@ -179,6 +202,8 @@ class PlaybackService : MediaSessionService() {
                         }
                     }
                     xtraModule.streamMedia3Runtime.setPrimaryPlaybackMediaItem(mediaItem)
+                    refreshCurrentMediaItemMetadata(player)
+                    refreshMediaButtonPreferences(player)
                     syncTwitchHlsDiagnostics(player)
                 }
 
@@ -309,14 +334,18 @@ class PlaybackService : MediaSessionService() {
             object : ForwardingSimpleBasePlayer(player) {
                 override fun getState(): State {
                     val state = super.getState()
+                    val enhancedSeekEnabled = prefs().getBoolean(C.SYSTEM_MEDIA_CONTROLS_ENABLED, true) &&
+                        prefs().getBoolean(C.SYSTEM_MEDIA_SHOW_SEEK_BUTTONS, true) &&
+                        player.isCurrentMediaItemSeekable
+                    val availableCommands = state.availableCommands.buildUpon().apply {
+                        if (enhancedSeekEnabled) {
+                            add(COMMAND_SEEK_TO_NEXT)
+                            add(COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+                        }
+                    }.build()
                     return state
                         .buildUpon()
-                        .setAvailableCommands(
-                            state.availableCommands.buildUpon()
-                                .add(COMMAND_SEEK_TO_NEXT)
-                                .add(COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
-                                .build()
-                        )
+                        .setAvailableCommands(availableCommands)
                         .build()
                 }
 
@@ -356,6 +385,7 @@ class PlaybackService : MediaSessionService() {
                             add(SessionCommand(START_LIVE_REWIND, Bundle.EMPTY))
                             add(SessionCommand(GET_LIVE_REWIND_STATE, Bundle.EMPTY))
                             add(SessionCommand(UPDATE_VIEWING_METADATA, Bundle.EMPTY))
+                            if (liveRewindActive) add(SessionCommand(GO_LIVE, Bundle.EMPTY))
                             add(SessionCommand(START_VIDEO, Bundle.EMPTY))
                             add(SessionCommand(START_CLIP, Bundle.EMPTY))
                             add(SessionCommand(START_OFFLINE_VIDEO, Bundle.EMPTY))
@@ -397,6 +427,25 @@ class PlaybackService : MediaSessionService() {
                                 handleViewingMetadataCommand(customCommand.customExtras, session.player)
                                 Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                             }
+                            GO_LIVE -> {
+                                if (!liveRewindActive) {
+                                    return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
+                                }
+                                val extras = liveStreamExtras?.let(::Bundle)
+                                    ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
+                                liveRewindTransitioning = true
+                                val result = startLiveStream(player, extras)
+                                result.addListener({
+                                    val succeeded = runCatching { result.get().resultCode == SessionResult.RESULT_SUCCESS }.getOrDefault(false)
+                                    if (succeeded) {
+                                        liveRewindActive = false
+                                        liveRewindVodId = null
+                                    }
+                                    liveRewindTransitioning = false
+                                    refreshMediaButtonPreferences(player)
+                                }, MoreExecutors.directExecutor())
+                                result
+                            }
                             START_STREAM -> {
                                 liveRewindTransitioning = true
                                 val result = try {
@@ -437,6 +486,7 @@ class PlaybackService : MediaSessionService() {
                                     Futures.immediateFuture(SessionResult(SessionError.ERROR_UNKNOWN))
                                 } finally {
                                     liveRewindTransitioning = false
+                                    refreshMediaButtonPreferences(player)
                                 }
                             }
                             GET_LIVE_REWIND_STATE -> {
@@ -946,6 +996,8 @@ class PlaybackService : MediaSessionService() {
         val title = extras.getString(TITLE)
         val channelName = extras.getString(CHANNEL_NAME)
         val channelLogo = extras.getString(CHANNEL_LOGO)
+        liveStreamUri = uri
+        liveStreamExtras = Bundle(extras)
         setViewingMetadata(
             ViewingPlaybackMetadata.CONTENT_TYPE_LIVE,
             extras.getString(STREAM_ID),
@@ -962,6 +1014,13 @@ class PlaybackService : MediaSessionService() {
         val login = channelLogin ?: "unknown"
         val previewAlreadyPlaying = channelLogin?.let { xtraModule.streamPreviewCoordinator.isPreviewing(it) } == true
         val mediaItem = runtime.createLiveMediaItem(login, uri, title, channelName, channelLogo)
+            .buildUpon()
+            .apply {
+                if (prefs().getBoolean(C.SYSTEM_MEDIA_CONTROLS_ENABLED, true)) {
+                    setMediaMetadata(systemMediaMetadata())
+                }
+            }
+            .build()
         val preloaded = channelLogin?.let { runtime.getPreloadedMediaSource(it, uri) }
         val urlWarm = extras.getBoolean(URL_WARM, false) || preloaded != null
         proxyMediaPlaylist = false
@@ -1002,6 +1061,8 @@ class PlaybackService : MediaSessionService() {
         player.prepare()
         streamStartupTrace?.prepareCalledAtMs = SystemClock.elapsedRealtime()
         player.playWhenReady = extras.getBoolean(PLAY_WHEN_READY, true)
+        refreshCurrentMediaItemMetadata(player)
+        refreshMediaButtonPreferences(player)
         saveResumptionState(
             PlaybackState(
                 type = BasePlaybackService.STREAM,
@@ -1015,6 +1076,80 @@ class PlaybackService : MediaSessionService() {
             ),
         )
         return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+    }
+
+    private fun systemMediaMetadata(): MediaMetadata {
+        val showTitle = prefs().getBoolean(C.SYSTEM_MEDIA_SHOW_TITLE, true)
+        val showCategory = prefs().getBoolean(C.SYSTEM_MEDIA_SHOW_CATEGORY, true)
+        val isLive = viewingContentType == ViewingPlaybackMetadata.CONTENT_TYPE_LIVE
+        val artwork = when (prefs().getString(C.SYSTEM_MEDIA_ARTWORK_SOURCE, C.SYSTEM_MEDIA_ARTWORK_STREAMER_AVATAR)) {
+            C.SYSTEM_MEDIA_ARTWORK_STREAM_PREVIEW -> TwitchApiHelper.getStreamThumbnail(viewingStreamPreview, 720, 405)
+            C.SYSTEM_MEDIA_ARTWORK_CATEGORY -> TwitchApiHelper.getGameBoxArt(viewingCategoryImage)
+            C.SYSTEM_MEDIA_ARTWORK_NONE -> null
+            else -> TwitchApiHelper.getProfileImage(viewingChannelImage)
+        }
+        val channel = viewingChannelName ?: viewingChannelLogin
+        val title = if (isLive) channel else viewingTitle ?: channel
+        val artist = if (isLive) viewingCategoryName?.takeIf { showCategory } else channel
+        val subtitle = if (isLive) viewingTitle?.takeIf { showTitle } else viewingCategoryName?.takeIf { showCategory }
+        return MediaMetadata.Builder()
+            .setTitle(title)
+            .setArtist(artist)
+            .setSubtitle(subtitle)
+            .setArtworkUri(artwork?.toUri())
+            .build()
+    }
+
+    private fun refreshCurrentMediaItemMetadata(player: Player) {
+        if (!prefs().getBoolean(C.SYSTEM_MEDIA_CONTROLS_ENABLED, true)) return
+        val item = player.currentMediaItem ?: return
+        val metadata = systemMediaMetadata()
+        val currentMetadata = item.mediaMetadata
+        if (currentMetadata.title == metadata.title &&
+            currentMetadata.artist == metadata.artist &&
+            currentMetadata.subtitle == metadata.subtitle &&
+            currentMetadata.artworkUri == metadata.artworkUri
+        ) return
+        val index = player.currentMediaItemIndex
+        if (index >= 0) {
+            player.replaceMediaItem(index, item.buildUpon().setMediaMetadata(metadata).build())
+        }
+    }
+
+    private fun refreshMediaButtonPreferences(player: Player) {
+        val session = mediaSession ?: return
+        if (!prefs().getBoolean(C.SYSTEM_MEDIA_CONTROLS_ENABLED, true)) {
+            session.setMediaButtonPreferences(emptyList())
+            return
+        }
+        val buttons = buildList {
+            if (prefs().getBoolean(C.SYSTEM_MEDIA_SHOW_SEEK_BUTTONS, true) &&
+                player.isCurrentMediaItemSeekable
+            ) {
+                add(
+                    CommandButton.Builder(CommandButton.ICON_SKIP_BACK)
+                        .setPlayerCommand(Player.COMMAND_SEEK_TO_PREVIOUS)
+                        .setDisplayName(getString(R.string.settings_system_media_seek_back))
+                        .build(),
+                )
+                add(
+                    CommandButton.Builder(CommandButton.ICON_SKIP_FORWARD)
+                        .setPlayerCommand(Player.COMMAND_SEEK_TO_NEXT)
+                        .setDisplayName(getString(R.string.settings_system_media_seek_forward))
+                        .build(),
+                )
+            }
+            if (liveRewindActive && prefs().getBoolean(C.SYSTEM_MEDIA_SHOW_GO_LIVE, true)) {
+                add(
+                    CommandButton.Builder()
+                        .setSessionCommand(SessionCommand(GO_LIVE, Bundle.EMPTY))
+                        .setIconResId(R.drawable.notification_icon)
+                        .setDisplayName(getString(R.string.seek_to_live))
+                        .build(),
+                )
+            }
+        }
+        session.setMediaButtonPreferences(buttons)
     }
 
     private class StreamStartupTrace(
@@ -1197,6 +1332,8 @@ class PlaybackService : MediaSessionService() {
             viewingTitle = extras.getString(TITLE)
         }
         updateViewingStats(player)
+        refreshCurrentMediaItemMetadata(player)
+        refreshMediaButtonPreferences(player)
     }
 
     internal fun setViewingMetadata(
@@ -1213,6 +1350,7 @@ class PlaybackService : MediaSessionService() {
         viewingCategoryName = extras.getString(GAME_NAME)
         viewingCategoryImage = extras.getString(GAME_IMAGE)
         viewingTitle = extras.getString(TITLE)
+        viewingStreamPreview = extras.getString(THUMBNAIL)
         viewingContentType = contentType
         viewingContentId = contentId
     }
@@ -1286,6 +1424,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        prefs().unregisterOnSharedPreferenceChangeListener(mediaPreferenceListener)
         if (::xtraModule.isInitialized) {
             xtraModule.viewingStatsRecorder.release(viewingStatsSourceId)
         }
@@ -1309,6 +1448,7 @@ class PlaybackService : MediaSessionService() {
         const val START_LIVE_REWIND = "startLiveRewind"
         const val GET_LIVE_REWIND_STATE = "getLiveRewindState"
         const val UPDATE_VIEWING_METADATA = "updateViewingMetadata"
+        const val GO_LIVE = "goLive"
         const val START_VIDEO = "startVideo"
         const val START_CLIP = "startClip"
         const val START_OFFLINE_VIDEO = "startOfflineVideo"
@@ -1339,6 +1479,7 @@ class PlaybackService : MediaSessionService() {
         const val CHANNEL_LOGIN = "channelLogin"
         const val CHANNEL_NAME = "channelName"
         const val CHANNEL_LOGO = "channelLogo"
+        const val THUMBNAIL = "thumbnail"
         const val GAME_ID = "gameId"
         const val GAME_NAME = "gameName"
         const val GAME_IMAGE = "gameImage"

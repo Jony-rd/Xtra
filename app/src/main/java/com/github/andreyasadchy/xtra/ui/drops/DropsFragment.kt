@@ -140,6 +140,8 @@ class DropsFragment : Fragment() {
             onCampaignClick = viewModel::loadCampaignDetails,
             onFindStreams = ::findStreamsForCampaign,
             onFindStreamsForDrop = ::findStreamsForDrop,
+            onTrack = (requireActivity().application as XtraApp).xtraModule.dropsLiveUpdateManager::toggle,
+            isTracking = (requireActivity().application as XtraApp).xtraModule.dropsLiveUpdateManager::isTracking,
             onImageClick = ::showDropImage,
         )
         binding.recyclerView.layoutManager = LinearLayoutManager(requireContext())
@@ -192,7 +194,22 @@ class DropsFragment : Fragment() {
                         ).show()
                     }
                 }
+                launch {
+                    viewModel.uiState.collect { state ->
+                        (requireActivity().application as XtraApp).xtraModule.dropsLiveUpdateManager.update(state.inventory.drops)
+                    }
+                }
             }
+        }
+    }
+
+    fun focusNotification(campaignId: String?, dropId: String?) {
+        requestedCampaignId = campaignId?.takeIf(String::isNotBlank) ?: dropId?.takeIf(String::isNotBlank)
+        campaignNavigationHandled = false
+        if (requestedCampaignId != null) {
+            selectedTab = TAB_ALL_CAMPAIGNS
+            binding.tabs.getTabAt(TAB_ALL_CAMPAIGNS)?.select()
+            render(viewModel.uiState.value)
         }
     }
 

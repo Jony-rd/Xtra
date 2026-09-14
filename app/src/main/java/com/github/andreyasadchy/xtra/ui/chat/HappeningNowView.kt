@@ -92,6 +92,8 @@ internal class HappeningNowView @JvmOverloads constructor(
         onOpenHistoricalPrediction: (Prediction) -> Unit,
         onOpenGiftProfile: (HappeningNowGift) -> Unit,
         onDismiss: (String) -> Unit,
+        isPredictionTracked: (String) -> Boolean = { false },
+        onTogglePredictionTracking: (Prediction) -> Unit = {},
     ) {
         cards.removeAllViews()
         activePredictionTimer = null
@@ -122,6 +124,8 @@ internal class HappeningNowView @JvmOverloads constructor(
                         onOpenChannelPoints = onOpenChannelPoints,
                         onOpenHistoricalPrediction = onOpenHistoricalPrediction,
                         onDismiss = onDismiss,
+                        isTracked = isPredictionTracked(id),
+                        onToggleTracking = onTogglePredictionTracking,
                     )
                     visibleKeys += key
                 }
@@ -141,6 +145,8 @@ internal class HappeningNowView @JvmOverloads constructor(
                         onOpenChannelPoints = onOpenChannelPoints,
                         onOpenHistoricalPrediction = onOpenHistoricalPrediction,
                         onDismiss = onDismiss,
+                        isTracked = false,
+                        onToggleTracking = {},
                     )
                     visibleKeys += key
                 }
@@ -279,6 +285,8 @@ internal class HappeningNowView @JvmOverloads constructor(
         onOpenChannelPoints: () -> Unit,
         onOpenHistoricalPrediction: (Prediction) -> Unit,
         onDismiss: (String) -> Unit,
+        isTracked: Boolean,
+        onToggleTracking: (Prediction) -> Unit,
     ) {
         val view = inflater.inflate(
             R.layout.view_happening_now_activity_card,
@@ -293,6 +301,7 @@ internal class HappeningNowView @JvmOverloads constructor(
         val action = view.findViewById<MaterialButton>(R.id.happeningAction)
         val more = view.findViewById<ImageButton>(R.id.happeningMore)
         val progress = view.findViewById<LinearLayout>(R.id.happeningProgress)
+        val trackAction = view.findViewById<MaterialButton>(R.id.predictionTrackAction)
         val outcomes = prediction.outcomes.orEmpty()
 
         if (historicalResult) {
@@ -324,6 +333,9 @@ internal class HappeningNowView @JvmOverloads constructor(
             action.setOnClickListener { onOpenHistoricalPrediction(prediction) }
             progress.isVisible = false
         } else {
+            trackAction.isVisible = true
+            trackAction.setText(if (isTracked) R.string.prediction_untrack else R.string.prediction_track)
+            trackAction.setOnClickListener { onToggleTracking(prediction) }
             activePredictionTimer = timer
             activePredictionStableKey = stableKey
             kicker.setText(

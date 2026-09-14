@@ -344,7 +344,11 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
     private var chatV2RendererVisible = true
     private var selectedV2Message: V2ChatMessage? = null
     private var selectedPinnedMessage: ChatMessage? = null
+    private var v2KnownMessageIds: Set<String>? = null
     private val v2Translations = mutableMapOf<String, String>()
+
+    private val sharedSessionOnly: Boolean
+        get() = arguments?.getBoolean(KEY_SHARED_SESSION_ONLY, false) == true
 
     internal val isUsingChatV2: Boolean
         get() = useChatV2
@@ -566,6 +570,14 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
             is ChatViewModel.ChatMutation.Append -> {
                 mutation.messages.forEach { message ->
                     chatMessageListener?.invoke(message)
+                    if (message.type == ChatMessage.USER_MESSAGE || message.type == ChatMessage.REPLY_MESSAGE) {
+                        (requireContext().applicationContext as XtraApp).xtraModule.chatBubbleManager.recordMessage(
+                            requireArguments().getString(KEY_CHANNEL_ID),
+                            message.userName ?: message.userLogin,
+                            message.message,
+                            message.id,
+                        )
+                    }
                     messageDialog?.newMessage(message)
                     replyDialog?.newMessage(message)
                 }
@@ -805,6 +817,47 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
         dropCalloutMinimized = savedInstanceState?.getBoolean(KEY_DROP_CALLOUT_MINIMIZED) ?: false
         setupEmotePickerSizing()
         setupDropCallout()
+        val chatBubbleManager = (requireContext().applicationContext as XtraApp).xtraModule.chatBubbleManager
+        val chatSessionManager = (requireContext().applicationContext as XtraApp).xtraModule.chatSessionManager
+        if (!sharedSessionOnly) {
+            viewLifecycleOwner.lifecycleScope.launch {
+                combine(viewModel.prediction, viewModel.predictionBetState) { prediction, betState ->
+                    prediction to betState
+                }.collectLatest { (prediction, betState) ->
+                    chatSessionManager.publishPrediction(
+                        requireArguments().getString(KEY_CHANNEL_ID),
+                        prediction,
+                        betState,
+                    )
+                }
+            }
+        }
+        binding.chatBubbleButton.isVisible = chatBubbleManager.isSupported() &&
+            requireContext().prefs().getBoolean(C.CHAT_BUBBLE_ENABLED, false)
+        binding.chatBubbleButton.setOnClickListener {
+            val args = requireArguments()
+            if (!chatBubbleManager.areBubblesAllowed()) {
+                Snackbar.make(binding.root, R.string.chat_bubble_system_disabled, Snackbar.LENGTH_LONG)
+                    .setAction(R.string.chat_bubble_open_settings) {
+                        runCatching {
+                            startActivity(android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_BUBBLE_SETTINGS).apply {
+                                putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, requireContext().packageName)
+                            })
+                        }
+                    }
+                    .show()
+                return@setOnClickListener
+            }
+            val opened = chatBubbleManager.toggle(
+                args.getString(KEY_CHANNEL_ID),
+                args.getString(KEY_CHANNEL_LOGIN),
+                args.getString(KEY_CHANNEL_NAME),
+                args.getString(KEY_STREAM_ID),
+            )
+            binding.chatBubbleButton.contentDescription = getString(
+                if (opened) R.string.chat_bubble_close else R.string.chat_bubble_open,
+            )
+        }
         binding.chatTopOverlays.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             updatePinnedMessageOverlayWidth()
         }
@@ -848,6 +901,21 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                 }
                 launch {
                     viewModel.predictionBetResults.collectLatest { result ->
+                        if (result.success && requireContext().prefs().getBoolean(C.PREDICTION_AUTO_TRACK_AFTER_VOTE, false)) {
+                            val args = requireArguments()
+                            val prediction = viewModel.prediction.value
+                            val login = args.getString(KEY_CHANNEL_LOGIN)
+                            if (prediction != null && login != null) {
+                                (requireContext().applicationContext as XtraApp).xtraModule.predictionLiveUpdateManager.track(
+                                    prediction,
+                                    args.getString(KEY_CHANNEL_ID).orEmpty(),
+                                    login,
+                                    args.getString(KEY_CHANNEL_NAME) ?: login,
+                                    viewModel.predictionBetState.value,
+                                    args.getString(KEY_STREAM_ID),
+                                )
+                            }
+                        }
                         val suffix = result.message?.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()
                         val message = if (result.success) {
                             getString(R.string.prediction_bet_success)
@@ -951,6 +1019,30 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                             },
                             onOpenGiftProfile = ::showHappeningNowGiftProfile,
                             onDismiss = viewModel::dismissHappeningNowCard,
+                            isPredictionTracked = { id ->
+                                (requireContext().applicationContext as XtraApp).xtraModule.predictionLiveUpdateManager.isTracking(id)
+                            },
+                            onTogglePredictionTracking = { prediction ->
+                                val args = requireArguments()
+                                val login = args.getString(KEY_CHANNEL_LOGIN)
+                                if (login != null) {
+                                    val manager = (requireContext().applicationContext as XtraApp).xtraModule.predictionLiveUpdateManager
+                                    val wasTracked = manager.isTracking(prediction.id.orEmpty())
+                                    manager.toggle(
+                                        prediction = prediction,
+                                        channelId = args.getString(KEY_CHANNEL_ID).orEmpty(),
+                                        channelLogin = login,
+                                        channelName = args.getString(KEY_CHANNEL_NAME) ?: login,
+                                        betState = viewModel.predictionBetState.value,
+                                        streamId = args.getString(KEY_STREAM_ID),
+                                    )
+                                    Snackbar.make(
+                                        binding.root,
+                                        if (wasTracked) R.string.prediction_tracking_stopped else R.string.prediction_tracking_started,
+                                        Snackbar.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            },
                         )
                     }
                 }
@@ -2282,11 +2374,13 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                 ChatViewModel.ActiveChatMode.Live -> if (args.getBoolean(KEY_IS_LIVE)) {
                     if (useChatV2 && channelId != null && channelLogin != null) {
                         startChatV2Session(channelId, channelLogin)
-                        viewModel.startLive(
-                            channelId = channelId,
-                            channelLogin = channelLogin,
-                            streamId = currentLiveStreamId(),
-                        )
+                        if (!sharedSessionOnly) {
+                            viewModel.startLive(
+                                channelId = channelId,
+                                channelLogin = channelLogin,
+                                streamId = currentLiveStreamId(),
+                            )
+                        }
                     }
                 }
                 is ChatViewModel.ActiveChatMode.VideoReplay -> {
@@ -2335,7 +2429,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
         val channelLogin = args.getString(KEY_CHANNEL_LOGIN)
         when (val mode = viewModel.activeChatMode) {
             ChatViewModel.ActiveChatMode.Live -> if (args.getBoolean(KEY_IS_LIVE)) {
-                viewModel.resumeLive(channelId, channelLogin)
+                if (!sharedSessionOnly) viewModel.resumeLive(channelId, channelLogin)
             }
             is ChatViewModel.ActiveChatMode.VideoReplay -> {
                 viewModel.resumeTemporaryReplay(
@@ -2450,11 +2544,13 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
             if (useChatV2) {
                 requireArguments().getString(KEY_CHANNEL_ID)?.let { channelId ->
                     startChatV2Session(channelId, channelLogin)
-                    viewModel.startLive(
-                        channelId = channelId,
-                        channelLogin = channelLogin,
-                        streamId = currentLiveStreamId(),
-                    )
+                    if (!sharedSessionOnly) {
+                        viewModel.startLive(
+                            channelId = channelId,
+                            channelLogin = channelLogin,
+                            streamId = currentLiveStreamId(),
+                        )
+                    }
                 }
             }
         }
@@ -3493,6 +3589,24 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
         messages: List<V2ChatMessage>,
         rows: List<ChatRowUiModel>,
     ) {
+        val previousIds = v2KnownMessageIds
+        val currentIds = messages.mapNotNull { it.id.value }.toSet()
+        if (previousIds != null) {
+            val bubbleManager = (requireContext().applicationContext as XtraApp).xtraModule.chatBubbleManager
+            messages.asSequence()
+                .filter { it.id.value !in previousIds }
+                .map(::v2MessageToLegacy)
+                .filter { it.type == ChatMessage.USER_MESSAGE || it.type == ChatMessage.REPLY_MESSAGE }
+                .forEach { message ->
+                    bubbleManager.recordMessage(
+                        requireArguments().getString(KEY_CHANNEL_ID),
+                        message.userName ?: message.userLogin,
+                        message.message,
+                        message.id,
+                    )
+                }
+        }
+        v2KnownMessageIds = currentIds
         if (selectedV2Message != null) {
             messageDialog?.updateV2Messages(messages.map(::v2MessageToLegacy), rows)
         }
@@ -3899,7 +4013,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
             val channelLogin = args.getString(KEY_CHANNEL_LOGIN)
             when (val mode = viewModel.activeChatMode) {
                 ChatViewModel.ActiveChatMode.Live -> if (args.getBoolean(KEY_IS_LIVE)) {
-                    viewModel.resumeLive(channelId, channelLogin)
+                    if (!sharedSessionOnly) viewModel.resumeLive(channelId, channelLogin)
                 }
                 is ChatViewModel.ActiveChatMode.VideoReplay -> {
                     viewModel.resumeTemporaryReplay(
@@ -3917,6 +4031,11 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
 
     override fun onStop() {
         chatIdentityPopup?.dismiss()
+        if (activity !is com.github.andreyasadchy.xtra.ui.main.ChatBubbleActivity &&
+            !requireContext().prefs().getBoolean(C.CHAT_BUBBLE_KEEP_OPEN, true)
+        ) {
+            (requireContext().applicationContext as XtraApp).xtraModule.chatBubbleManager.close()
+        }
         super.onStop()
         if (!useChatV2 && (!requireArguments().getBoolean(KEY_IS_LIVE) || !requireContext().prefs().getBoolean(C.PLAYER_KEEP_CHAT_OPEN, false))) {
             viewModel.stopLiveChat()
@@ -3947,6 +4066,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
         pinnedMessageBinding = null
         captureActiveOverlayState()
         chatV2ViewportState = chatV2Renderer?.state ?: chatV2ViewportState
+        v2KnownMessageIds = null
         chatV2Renderer?.detach()
         chatV2Renderer = null
         chatBackgroundRequestGeneration++
@@ -4135,6 +4255,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
 
     companion object {
         private const val KEY_IS_LIVE = "isLive"
+        private const val KEY_SHARED_SESSION_ONLY = "sharedSessionOnly"
         internal const val KEY_CHANNEL_ID = "channel_id"
         internal const val KEY_CHANNEL_LOGIN = "channel_login"
         private const val KEY_CHANNEL_NAME = "channel_name"
@@ -4158,6 +4279,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
             channelLogin: String?,
             channelName: String?,
             streamId: String?,
+            sharedSessionOnly: Boolean = false,
         ): ChatFragment {
             return ChatFragment().apply {
                 arguments = Bundle().apply {
@@ -4166,6 +4288,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                     putString(KEY_CHANNEL_LOGIN, channelLogin)
                     putString(KEY_CHANNEL_NAME, channelName)
                     putString(KEY_STREAM_ID, streamId)
+                    putBoolean(KEY_SHARED_SESSION_ONLY, sharedSessionOnly)
                 }
             }
         }

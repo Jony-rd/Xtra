@@ -54,4 +54,19 @@
         app:iconSpaceReserved="false"
         app:singleLineTitle="false" />
 
+    <PreferenceCategory android:title="@string/settings_rich_live_notifications" app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat android:defaultValue="true" android:key="live_notification_rich_content" android:title="@string/settings_rich_live_notifications" android:summary="@string/settings_rich_live_notifications_summary" app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat android:defaultValue="true" android:dependency="live_notification_rich_content" android:key="live_notification_show_preview" android:title="@string/settings_live_notification_preview" app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat android:defaultValue="true" android:dependency="live_notification_rich_content" android:key="live_notification_show_avatar" android:title="@string/settings_live_notification_avatar" app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat android:defaultValue="true" android:dependency="live_notification_rich_content" android:key="live_notification_show_title" android:title="@string/settings_live_notification_title" app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat android:defaultValue="true" android:dependency="live_notification_rich_content" android:key="live_notification_show_category" android:title="@string/settings_live_notification_category" app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat android:defaultValue="false" android:dependency="live_notification_rich_content" android:key="live_notification_show_viewers" android:title="@string/settings_live_notification_viewers" app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat android:defaultValue="true" android:dependency="live_notification_rich_content" android:key="live_notification_preview_metered" android:title="@string/settings_live_notification_preview_metered" app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat android:defaultValue="true" android:key="live_notification_watch_action" android:title="@string/settings_live_notification_watch_action" app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat android:defaultValue="true" android:key="live_notification_chat_action" android:title="@string/settings_live_notification_chat_action" app:iconSpaceReserved="false" />
+
+    <PreferenceCategory android:title="@string/settings_live_activities" app:iconSpaceReserved="false" />
+    <Preference android:key="prediction_live_updates_page" android:title="@string/prediction_live_updates" android:summary="@string/prediction_live_updates_summary" app:iconSpaceReserved="false" />
+    <Preference android:key="drops_live_updates_page" android:title="@string/drops_live_updates" android:summary="@string/drops_live_updates_summary" app:iconSpaceReserved="false" />
+
 </androidx.preference.PreferenceScreen>

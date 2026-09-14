@@ -78,6 +78,10 @@ class XtraApp : Application(), SingletonImageLoader.Factory {
         }
         MainLooperStallWatchdog.start()
         xtraModule = XtraModule(this)
+        // Restore persisted Live Update notifications as soon as the process starts. The
+        // managers only consume existing state here; they do not create a new network source.
+        xtraModule.predictionLiveUpdateManager
+        xtraModule.dropsLiveUpdateManager
         reconcilePendingAccountScopedState()
         xtraModule.authSessionMaintainer.start(applicationScope)
         applicationScope.launch {

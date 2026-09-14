@@ -66,6 +66,7 @@ import com.github.andreyasadchy.xtra.BuildConfig
 import com.github.andreyasadchy.xtra.databinding.ActivityMainBinding
 import com.github.andreyasadchy.xtra.model.PlaybackState
 import com.github.andreyasadchy.xtra.model.ui.Clip
+import com.github.andreyasadchy.xtra.model.ui.DropStreamFilter
 import com.github.andreyasadchy.xtra.model.ui.OfflineVideo
 import com.github.andreyasadchy.xtra.model.ui.Stream
 import com.github.andreyasadchy.xtra.model.ui.Video
@@ -137,6 +138,8 @@ class MainActivity : AppCompatActivity() {
         const val KEY_VIDEO = "video"
 
         const val INTENT_LIVE_NOTIFICATION = "com.github.andreyasadchy.xtra.LIVE_NOTIFICATION"
+        const val INTENT_LIVE_NOTIFICATION_CHAT = "com.github.andreyasadchy.xtra.LIVE_NOTIFICATION_CHAT"
+        const val INTENT_LIVE_NOTIFICATION_LISTEN = "com.github.andreyasadchy.xtra.LIVE_NOTIFICATION_LISTEN"
         const val INTENT_OPEN_DOWNLOADS_TAB = "com.github.andreyasadchy.xtra.OPEN_DOWNLOADS_TAB"
         const val INTENT_OPEN_DOWNLOADED_VIDEO = "com.github.andreyasadchy.xtra.OPEN_DOWNLOADED_VIDEO"
         const val INTENT_OPEN_PLAYER = "com.github.andreyasadchy.xtra.OPEN_PLAYER"
@@ -144,6 +147,10 @@ class MainActivity : AppCompatActivity() {
         const val INTENT_PLAY_PAUSE_PLAYER = "com.github.andreyasadchy.xtra.PLAY_PAUSE_PLAYER"
         const val INTENT_OPEN_OWN_PROFILE = "com.github.andreyasadchy.xtra.OPEN_OWN_PROFILE"
         const val INTENT_OPEN_DROPS = "com.github.andreyasadchy.xtra.OPEN_DROPS"
+        const val INTENT_FIND_DROPS_STREAMS = "com.github.andreyasadchy.xtra.FIND_DROPS_STREAMS"
+        const val EXTRA_DROPS_CAMPAIGN_ID = "drops_campaign_id"
+        const val EXTRA_DROPS_ID = "drops_id"
+        const val EXTRA_DROPS_GAME_NAME = "drops_game_name"
         const val EXTRA_OPEN_UPDATE_DETAILS = "com.github.andreyasadchy.xtra.OPEN_UPDATE_DETAILS"
 
         private const val DEEP_LINK_NAV_DEBOUNCE_MS = 500L
@@ -1077,6 +1084,8 @@ class MainActivity : AppCompatActivity() {
         }
         when (intent?.action) {
             INTENT_OPEN_DROPS -> {
+                val campaignId = intent.getStringExtra(EXTRA_DROPS_CAMPAIGN_ID)
+                val dropId = intent.getStringExtra(EXTRA_DROPS_ID)
                 intent.action = null
                 if (navController.currentDestination?.id != R.id.dropsFragment) {
                     // Drops is a bottom tab. Route notification intents through the same tab
@@ -1084,6 +1093,34 @@ class MainActivity : AppCompatActivity() {
                     // above the preserved tab.
                     pendingBottomNavigationItemId = R.id.dropsFragment
                     drainBottomNavigation()
+                }
+                binding.root.post {
+                    val drops = (supportFragmentManager.findFragmentById(R.id.navHostFragment) as? NavHostFragment)
+                        ?.childFragmentManager?.primaryNavigationFragment
+                    (drops as? com.github.andreyasadchy.xtra.ui.drops.DropsFragment)?.focusNotification(campaignId, dropId)
+                }
+            }
+            INTENT_FIND_DROPS_STREAMS -> {
+                val campaignId = intent.getStringExtra(EXTRA_DROPS_CAMPAIGN_ID)?.takeIf(String::isNotBlank)
+                val dropId = intent.getStringExtra(EXTRA_DROPS_ID)?.takeIf(String::isNotBlank)
+                val gameName = intent.getStringExtra(EXTRA_DROPS_GAME_NAME)?.takeIf(String::isNotBlank)
+                intent.action = null
+                if (campaignId != null && dropId != null && gameName != null) {
+                    navController.navigate(
+                        R.id.action_global_searchPagerFragment,
+                        SearchPagerFragment.dropsSearchArguments(
+                            listOf(
+                                DropStreamFilter(
+                                    campaignId = campaignId,
+                                    campaignName = gameName,
+                                    gameId = null,
+                                    gameName = gameName,
+                                    dropIds = setOf(dropId),
+                                    dropNames = emptyList(),
+                                ),
+                            ),
+                        ),
+                    )
                 }
             }
             Intent.ACTION_VIEW -> {
@@ -1173,6 +1210,26 @@ class MainActivity : AppCompatActivity() {
                     startStream(it)
                 }
             }
+            INTENT_LIVE_NOTIFICATION_LISTEN -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(KEY_VIDEO, Stream::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(KEY_VIDEO)
+                }?.let {
+                    startStream(it, audioOnly = true)
+                }
+            }
+            INTENT_LIVE_NOTIFICATION_CHAT -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(KEY_VIDEO, Stream::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(KEY_VIDEO)
+                }?.let {
+                    startStream(it, openChat = true)
+                }
+            }
             INTENT_OPEN_DOWNLOADS_TAB -> {
                 rootNavigationView().selectedItemId = R.id.savedPagerFragment
             }
@@ -1209,7 +1266,7 @@ class MainActivity : AppCompatActivity() {
 
 //Navigation listeners
 
-    fun startStream(stream: Stream) {
+    fun startStream(stream: Stream, openChat: Boolean = false, audioOnly: Boolean = false) {
         val tapElapsedMs = SystemClock.elapsedRealtime()
         (application as XtraApp).xtraModule.streamPreloadCoordinator.onStreamSelected(stream)
         onPlayerEnteredPlayback(isLive = true, channelLogin = stream.channelLogin)
@@ -1218,6 +1275,8 @@ class MainActivity : AppCompatActivity() {
             (playerFragment as? Media3PlayerFragment)?.close() ?: (playerFragment as? ExoPlayerFragment)?.close()
             val fragment = Media3Fragment.newInstance(stream, tapElapsedMs)
             startPlayer(fragment)
+            if (openChat) binding.root.postDelayed({ (playerFragment as? Media3PlayerFragment)?.showChat() }, 500L)
+            if (audioOnly) requestAudioOnlyPlayback()
             return
         }
         (playerFragment as? Media3PlayerFragment)?.close() ?: (playerFragment as? ExoPlayerFragment)?.close(deleteStates = false)
@@ -1238,6 +1297,28 @@ class MainActivity : AppCompatActivity() {
         ))
         val fragment = legacyPlayerFragment()
         startPlayer(fragment)
+        if (openChat) binding.root.postDelayed({ (playerFragment as? PlayerFragment)?.showChat() }, 500L)
+        if (audioOnly) requestAudioOnlyPlayback()
+    }
+
+    private fun requestAudioOnlyPlayback() {
+        var attempts = 0
+        fun request() {
+            when (val fragment = playerFragment) {
+                is Media3Fragment -> {
+                    fragment.requestAudioOnly()
+                    moveTaskToBack(false)
+                }
+                is PlayerFragment -> {
+                    fragment.startAudioOnly()
+                    moveTaskToBack(false)
+                    if (fragment === playerFragment && attempts++ < 20) {
+                        binding.root.postDelayed(::request, 250L)
+                    }
+                }
+            }
+        }
+        binding.root.post(::request)
     }
 
     fun startVideo(video: Video, offset: Long?, ignoreSavedPosition: Boolean = false, videoUrl: String? = null) {
