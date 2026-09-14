@@ -1,0 +1,11 @@
+<androidx.preference.PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <SwitchPreferenceCompat android:defaultValue="true" android:key="drops_tracking_enabled" android:title="@string/drops_live_updates_enabled" android:summary="@string/drops_live_updates_summary" app:iconSpaceReserved="false" />
+    <Preference android:key="live_update_status" android:selectable="true" android:summary="@string/live_update_status_android" android:title="@string/live_update_status" app:iconSpaceReserved="false" />
+    <Preference android:key="live_update_tracking_notification_settings" android:title="@string/live_update_tracking_notification_settings" app:iconSpaceReserved="false" />
+    <Preference android:key="live_update_result_notification_settings" android:title="@string/live_update_result_notification_settings" app:iconSpaceReserved="false" />
+    <PreferenceCategory android:title="@string/drops_live_updates" app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat android:defaultValue="false" android:dependency="drops_tracking_enabled" android:key="drops_auto_track_active" android:title="@string/drops_auto_track_active" app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat android:defaultValue="true" android:dependency="drops_tracking_enabled" android:key="drops_request_promoted" android:title="@string/drops_request_promoted" app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat android:defaultValue="true" android:dependency="drops_tracking_enabled" android:key="drops_notify_completed" android:title="@string/drops_notify_completed" app:iconSpaceReserved="false" />
+    <ListPreference android:defaultValue="percent" android:dependency="drops_tracking_enabled" android:entries="@array/dropsStatusChipEntries" android:entryValues="@array/dropsStatusChipValues" android:key="drops_status_chip_text" android:summary="%s" android:title="@string/drops_status_chip_text" app:iconSpaceReserved="false" />
+</androidx.preference.PreferenceScreen>

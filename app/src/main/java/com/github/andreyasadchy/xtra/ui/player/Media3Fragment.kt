@@ -93,6 +93,7 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost {
     private var qualityRequestInFlight = false
     private var qualityRequestGeneration = 0
     private val pendingQualityCallbacks = mutableListOf<() -> Unit>()
+    private var pendingAudioOnlyRequest = false
     private val pendingSourceSwitchQuality = SourceSwitchQualityState()
     private var nativeCues: List<Cue> = emptyList()
     private var shownLiveCaptionError: String? = null
@@ -498,6 +499,7 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost {
             if (controller.currentMediaItem != null) {
                 requestQualities()
             }
+            tryStartPendingAudioOnly()
             controller.sendCustomCommand(
                 SessionCommand(
                     PlaybackService.SET_BACKGROUND_PLAYBACK,
@@ -788,6 +790,7 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost {
                     putString(PlaybackService.TITLE, requireArguments().getString(KEY_TITLE))
                     putString(PlaybackService.CHANNEL_NAME, requireArguments().getString(KEY_CHANNEL_NAME))
                     putString(PlaybackService.CHANNEL_LOGO, requireArguments().getString(KEY_CHANNEL_IMAGE))
+                    putString(PlaybackService.THUMBNAIL, requireArguments().getString(KEY_THUMBNAIL))
                     putBoolean(PlaybackService.URL_WARM, viewModel.streamUrlWarm.value)
                     requireArguments().getLong(KEY_TAP_ELAPSED_MS, -1L).takeIf { it > 0L }?.let {
                         putLong(PlaybackService.TAP_ELAPSED_MS, it)
@@ -1476,6 +1479,21 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost {
             }
         }
         releaseController()
+    }
+
+    fun requestAudioOnly() {
+        pendingAudioOnlyRequest = true
+        tryStartPendingAudioOnly()
+    }
+
+    private fun tryStartPendingAudioOnly() {
+        if (!pendingAudioOnlyRequest || player?.isConnected != true) return
+        if (getQualities().isNullOrEmpty()) {
+            ensureQualities(::tryStartPendingAudioOnly)
+            return
+        }
+        pendingAudioOnlyRequest = false
+        startAudioOnly()
     }
 
     override fun downloadVideo() {

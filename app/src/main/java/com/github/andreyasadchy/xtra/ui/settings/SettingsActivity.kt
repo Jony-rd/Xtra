@@ -87,9 +87,15 @@ import com.github.andreyasadchy.xtra.databinding.ActivitySettingsBinding
 import com.github.andreyasadchy.xtra.databinding.FragmentUpdateSettingsBinding
 import com.github.andreyasadchy.xtra.databinding.FragmentSettingsHomeBinding
 import com.github.andreyasadchy.xtra.databinding.ItemSettingsRowBinding
+import com.github.andreyasadchy.xtra.model.NotificationEvent
+import com.github.andreyasadchy.xtra.model.chat.Prediction
+import com.github.andreyasadchy.xtra.model.chat.PredictionBetState
 import com.github.andreyasadchy.xtra.model.ui.SettingsDragListItem
 import com.github.andreyasadchy.xtra.model.ui.SettingsSearchItem
+import com.github.andreyasadchy.xtra.model.ui.Stream
+import com.github.andreyasadchy.xtra.model.ui.TwitchDrop
 import com.github.andreyasadchy.xtra.repository.auth.AuthHealth
+import com.github.andreyasadchy.xtra.repository.streamfeed.StreamFeedSpecs
 import com.github.andreyasadchy.xtra.ui.account.AccountActivity
 import com.github.andreyasadchy.xtra.ui.appearance.ActivityBackgroundController
 import com.github.andreyasadchy.xtra.ui.appearance.AppearanceRepository
@@ -99,6 +105,7 @@ import com.github.andreyasadchy.xtra.ui.appearance.makeBackdropAwareChrome
 import com.github.andreyasadchy.xtra.ui.following.FollowingTabs
 import com.github.andreyasadchy.xtra.ui.following.overview.FollowingOverviewSections
 import com.github.andreyasadchy.xtra.ui.login.TwitchWebLoginActivity
+import com.github.andreyasadchy.xtra.ui.main.LiveNotificationNotifier
 import com.github.andreyasadchy.xtra.ui.main.LiveNotificationScheduler
 import com.github.andreyasadchy.xtra.ui.main.LiveNotificationService
 import com.github.andreyasadchy.xtra.ui.player.PhoneChatOverlayConfig
@@ -152,11 +159,15 @@ import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.common.model.RemoteModelManager
 import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.TranslateRemoteModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.chromium.net.CronetProvider
 import java.util.Collections
 import java.util.Locale
+import java.util.UUID
 
 internal fun serializeSpeedOptions(items: List<SettingsDragListItem>): String =
     items.joinToString(",") { "${it.key}:${if (it.enabled) "1" else "0"}" }
@@ -1062,11 +1073,43 @@ class SettingsActivity : AppCompatActivity() {
         private fun openNotificationSettings() {
             try {
                 startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
-                    putExtra("android.provider.extra.APP_PACKAGE", requireContext().packageName)
+                    putExtra(Settings.EXTRA_APP_PACKAGE, requireContext().packageName)
                 })
             } catch (_: ActivityNotFoundException) {
                 // The summary still explains the blocked state when no system screen is available.
             }
+        }
+
+        private fun openChannelNotificationSettings(channelResId: Int) {
+            val intent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+                putExtra(Settings.EXTRA_APP_PACKAGE, requireContext().packageName)
+                putExtra(Settings.EXTRA_CHANNEL_ID, getString(channelResId))
+            }
+            runCatching { startActivity(intent) }.onFailure { openNotificationSettings() }
+        }
+
+        private fun openPromotionSettings(fallback: () -> Unit) {
+            if (Build.VERSION.SDK_INT < 36) {
+                fallback()
+                return
+            }
+            runCatching {
+                startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS).apply {
+                    putExtra(Settings.EXTRA_APP_PACKAGE, requireContext().packageName)
+                })
+            }.onFailure { fallback() }
+        }
+
+        private fun openBubbleSettings(fallback: () -> Unit) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                fallback()
+                return
+            }
+            runCatching {
+                startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_BUBBLE_SETTINGS).apply {
+                    putExtra(Settings.EXTRA_APP_PACKAGE, requireContext().packageName)
+                })
+            }.onFailure { fallback() }
         }
 
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
@@ -1081,6 +1124,10 @@ class SettingsActivity : AppCompatActivity() {
             setPreferencesFromResource(
                 when (settingsScreen) {
                     SCREEN_LIVE_NOTIFICATIONS -> R.xml.live_notification_preferences
+                    SCREEN_SYSTEM_MEDIA -> R.xml.system_media_notification_preferences
+                    SCREEN_PREDICTION_LIVE_UPDATES -> R.xml.prediction_live_update_preferences
+                    SCREEN_DROPS_LIVE_UPDATES -> R.xml.drops_live_update_preferences
+                    SCREEN_CHAT_BUBBLE -> R.xml.chat_bubble_preferences
                     SCREEN_ACCOUNT -> R.xml.account_preferences
                     SCREEN_LANGUAGE -> R.xml.language_preferences
                     SCREEN_BACKUP -> R.xml.backup_preferences
@@ -1440,6 +1487,109 @@ class SettingsActivity : AppCompatActivity() {
             if (settingsScreen == SCREEN_CHAT_FEATURES) configureChatHighlightPreferences()
             if (settingsScreen == SCREEN_CHAT_VISIBILITY) configureChatVisibilityPreferences()
             if (settingsScreen == SCREEN_DOWNLOAD_LIVE) configureLiveDownloadPreferences()
+            if (settingsScreen == SCREEN_PREDICTION_LIVE_UPDATES || settingsScreen == SCREEN_DROPS_LIVE_UPDATES) {
+                configureLiveUpdateSettings()
+            }
+            if (settingsScreen == SCREEN_CHAT_BUBBLE) configureChatBubbleSettings()
+            findPreference<Preference>("prediction_live_updates_page")?.setOnPreferenceClickListener {
+                findNavController().navigate(R.id.action_global_predictionLiveUpdateSettingsFragment)
+                true
+            }
+            findPreference<Preference>("drops_live_updates_page")?.setOnPreferenceClickListener {
+                findNavController().navigate(R.id.action_global_dropsLiveUpdateSettingsFragment)
+                true
+            }
+        }
+
+        private fun configureLiveUpdateSettings() {
+            val supported = Build.VERSION.SDK_INT >= 36
+            val notificationManager = requireContext().getSystemService(NotificationManager::class.java)
+            val promotionAllowed = supported && notificationManager?.canPostPromotedNotifications() == true
+            findPreference<SwitchPreferenceCompat>(
+                if (settingsScreen == SCREEN_PREDICTION_LIVE_UPDATES) C.PREDICTION_TRACKING_ENABLED else C.DROPS_TRACKING_ENABLED,
+            )?.apply {
+                isEnabled = true
+                setOnPreferenceChangeListener { _, value ->
+                    if (value as Boolean && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                        ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        openNotificationSettings()
+                        return@setOnPreferenceChangeListener false
+                    }
+                    if (!value) {
+                        if (settingsScreen == SCREEN_PREDICTION_LIVE_UPDATES) {
+                            (requireContext().applicationContext as XtraApp).xtraModule.predictionLiveUpdateManager.untrack()
+                        } else {
+                            (requireContext().applicationContext as XtraApp).xtraModule.dropsLiveUpdateManager.untrack()
+                        }
+                    }
+                    true
+                }
+            }
+            findPreference<Preference>("live_update_status")?.apply {
+                summary = getString(
+                    when {
+                        !supported -> R.string.live_update_status_android
+                        !promotionAllowed -> R.string.live_update_status_disabled
+                        else -> R.string.live_update_status_available
+                    },
+                )
+                setOnPreferenceClickListener {
+                    openPromotionSettings(::openNotificationSettings)
+                    true
+                }
+            }
+            findPreference<Preference>(C.LIVE_UPDATE_TRACKING_NOTIFICATION_SETTINGS)?.setOnPreferenceClickListener {
+                openChannelNotificationSettings(
+                    if (settingsScreen == SCREEN_PREDICTION_LIVE_UPDATES) R.string.notification_prediction_tracking_channel_id
+                    else R.string.notification_drops_tracking_channel_id,
+                )
+                true
+            }
+            findPreference<Preference>(C.LIVE_UPDATE_RESULT_NOTIFICATION_SETTINGS)?.setOnPreferenceClickListener {
+                openChannelNotificationSettings(
+                    if (settingsScreen == SCREEN_PREDICTION_LIVE_UPDATES) R.string.notification_prediction_results_channel_id
+                    else R.string.notification_drops_results_channel_id,
+                )
+                true
+            }
+        }
+
+        private fun configureChatBubbleSettings() {
+            val manager = (requireContext().applicationContext as XtraApp).xtraModule.chatBubbleManager
+            val supported = manager.isSupported()
+            findPreference<SwitchPreferenceCompat>(C.CHAT_BUBBLE_ENABLED)?.apply {
+                isEnabled = supported
+                setOnPreferenceChangeListener { _, value ->
+                    if (value as Boolean && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                        ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        openNotificationSettings()
+                        return@setOnPreferenceChangeListener false
+                    }
+                    if (!value) {
+                        (requireContext().applicationContext as XtraApp).xtraModule.chatBubbleManager.close()
+                    }
+                    true
+                }
+            }
+            findPreference<Preference>("chat_bubble_status")?.apply {
+                summary = getString(
+                    when {
+                        !supported -> R.string.chat_bubble_status_android
+                        !manager.areBubblesAllowed() -> R.string.chat_bubble_status_disabled
+                        else -> R.string.chat_bubble_status_available
+                    },
+                )
+                setOnPreferenceClickListener {
+                    openBubbleSettings(::openNotificationSettings)
+                    true
+                }
+            }
+            findPreference<Preference>(C.CHAT_BUBBLE_NOTIFICATION_SETTINGS)?.setOnPreferenceClickListener {
+                openBubbleSettings(::openNotificationSettings)
+                true
+            }
         }
 
         private fun configureChatVisibilityPreferences() {
@@ -1839,6 +1989,10 @@ class SettingsActivity : AppCompatActivity() {
             const val SCREEN_DOWNLOAD_LIVE = "download_live"
             const val SCREEN_PROXY = "proxy"
             const val SCREEN_DEVELOPER = "developer"
+            const val SCREEN_SYSTEM_MEDIA = "system_media"
+            const val SCREEN_PREDICTION_LIVE_UPDATES = "prediction_live_updates"
+            const val SCREEN_DROPS_LIVE_UPDATES = "drops_live_updates"
+            const val SCREEN_CHAT_BUBBLE = "chat_bubble"
         }
     }
 
@@ -2501,6 +2655,8 @@ class SettingsActivity : AppCompatActivity() {
             findPreference<Preference>("chat_username_page")?.setOnPreferenceClickListener { findNavController().navigate(R.id.chatUsernameFragment); true }
             findPreference<Preference>("chat_emotes_page")?.setOnPreferenceClickListener { findNavController().navigate(R.id.chatEmotesFragment); true }
             findPreference<Preference>("chat_features_page")?.setOnPreferenceClickListener { findNavController().navigate(R.id.chatFeaturesFragment); true }
+            findPreference<Preference>("chat_bubble_page")?.setOnPreferenceClickListener { findNavController().navigate(R.id.action_global_chatBubbleSettingsFragment); true }
+            findPreference<Preference>("chat_bubble_page")?.isVisible = !requireContext().isTelevision()
             findPreference<Preference>("chat_history_page")?.setOnPreferenceClickListener { findNavController().navigate(R.id.chatHistoryFragment); true }
             findPreference<Preference>("chat_translation_page")?.setOnPreferenceClickListener { findNavController().navigate(R.id.chatTranslationFragment); true }
             findPreference<Preference>("chat_visibility_page")?.setOnPreferenceClickListener { findNavController().navigate(R.id.chatVisibilityFragment); true }
@@ -2703,6 +2859,10 @@ class SettingsActivity : AppCompatActivity() {
 
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.playback_preferences, rootKey)
+            findPreference<Preference>("system_media_controls_page")?.setOnPreferenceClickListener {
+                findNavController().navigate(R.id.action_global_systemMediaNotificationSettingsFragment)
+                true
+            }
             findPreference<PreferenceCategory>("live_caption_settings")?.isVisible = true
                 findPreference<Preference>(C.PLAYER_LIVE_CAPTION_MODEL)?.setOnPreferenceClickListener {
                     showMoonshineModelDialog()
@@ -3140,6 +3300,8 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     class DebugSettingsFragment : MaterialPreferenceFragment() {
+        private var notificationFixtureJob: Job? = null
+
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.debug_preferences, rootKey)
             preferenceScreen.addPreference(Preference(requireContext()).apply {
@@ -3175,6 +3337,7 @@ class SettingsActivity : AppCompatActivity() {
                         true
                     }
                 })
+                addNotificationFixturePreferences()
             }
             findPreference<ListPreference>(C.NETWORK_LIBRARY)?.apply {
                 val supported = buildList {
@@ -3219,6 +3382,237 @@ class SettingsActivity : AppCompatActivity() {
                 true
             }
         }
+
+        private fun addNotificationFixturePreferences() {
+            preferenceScreen.addPreference(PreferenceCategory(requireContext()).apply {
+                key = "debug_notification_fixtures"
+                title = getString(R.string.settings_debug_notification_fixtures)
+                summary = getString(R.string.settings_debug_notification_fixtures_summary)
+            })
+            addNotificationFixturePreference(
+                key = "debug_trigger_live_notification",
+                titleRes = R.string.settings_debug_trigger_live_notification,
+                summaryRes = R.string.settings_debug_trigger_live_notification_summary,
+            ) { module, stream -> triggerLiveNotification(module, stream) }
+            addNotificationFixturePreference(
+                key = "debug_trigger_prediction",
+                titleRes = R.string.settings_debug_trigger_prediction,
+                summaryRes = R.string.settings_debug_trigger_prediction_summary,
+            ) { module, stream -> triggerPrediction(module, stream) }
+            addNotificationFixturePreference(
+                key = "debug_trigger_drops",
+                titleRes = R.string.settings_debug_trigger_drops,
+                summaryRes = R.string.settings_debug_trigger_drops_summary,
+            ) { module, stream -> triggerDrops(module, stream) }
+            addNotificationFixturePreference(
+                key = "debug_trigger_chat_bubble",
+                titleRes = R.string.settings_debug_trigger_chat_bubble,
+                summaryRes = R.string.settings_debug_trigger_chat_bubble_summary,
+            ) { module, stream -> triggerChatBubble(module, stream) }
+        }
+
+        private fun addNotificationFixturePreference(
+            key: String,
+            titleRes: Int,
+            summaryRes: Int,
+            action: suspend (com.github.andreyasadchy.xtra.XtraModule, Stream) -> FixtureActionResult,
+        ) {
+            val preference = Preference(requireContext()).apply {
+                this.key = key
+                title = getString(titleRes)
+                summary = getString(summaryRes)
+            }
+            preference.setOnPreferenceClickListener {
+                if (notificationFixtureJob?.isActive == true) return@setOnPreferenceClickListener true
+                notificationFixtureJob = viewLifecycleOwner.lifecycleScope.launch {
+                    preference.isEnabled = false
+                    val message = runCatching {
+                        withContext(Dispatchers.IO) {
+                            runNotificationFixture(action)
+                        }
+                    }.getOrElse { error ->
+                        getString(
+                            R.string.settings_debug_notification_failed_detail,
+                            error.message ?: error.javaClass.simpleName,
+                        )
+                    }
+                    preference.isEnabled = true
+                    Snackbar.make(requireView(), message, Snackbar.LENGTH_LONG).show()
+                }
+                true
+            }
+            preferenceScreen.addPreference(preference)
+        }
+
+        private suspend fun runNotificationFixture(
+            action: suspend (com.github.andreyasadchy.xtra.XtraModule, Stream) -> FixtureActionResult,
+        ): String {
+            val context = requireContext().applicationContext
+            if (context.tokenPrefs().getString(C.USER_ID, null).isNullOrBlank()) {
+                return getString(R.string.settings_debug_notification_sign_in)
+            }
+            val module = (context as XtraApp).xtraModule
+            val stream = randomFollowedLiveStream(context, module)
+                ?: return getString(R.string.settings_debug_notification_no_live)
+            val result = action(module, stream)
+            val displayName = stream.channelName?.takeIf(String::isNotBlank)
+                ?: stream.channelLogin.orEmpty()
+            return result.message ?: getString(
+                if (result.triggered) R.string.settings_debug_notification_triggered
+                else R.string.settings_debug_notification_failed,
+                result.label,
+                displayName,
+            )
+        }
+
+        private suspend fun randomFollowedLiveStream(
+            context: android.content.Context,
+            module: com.github.andreyasadchy.xtra.XtraModule,
+        ): Stream? {
+            val userId = context.tokenPrefs().getString(C.USER_ID, null)
+            val page = StreamFeedSpecs.followed(
+                context = context,
+                userId = userId,
+                localChannelFollowsRepository = module.localChannelFollowsRepository,
+                graphQLRepository = module.graphQLRepository,
+                helixRepository = module.helixRepository,
+            ).loader.load(null)
+            return page.items.filter {
+                !it.channelId.isNullOrBlank() && !it.channelLogin.isNullOrBlank()
+            }.randomOrNull()
+        }
+
+        private suspend fun triggerLiveNotification(
+            module: com.github.andreyasadchy.xtra.XtraModule,
+            stream: Stream,
+        ): FixtureActionResult {
+            val notifier = LiveNotificationNotifier(requireContext().applicationContext)
+            val label = getString(R.string.settings_debug_live_notification_label)
+            if (!notifier.canPostNotifications()) {
+                return FixtureActionResult(
+                    label = label,
+                    triggered = false,
+                    message = getString(R.string.settings_debug_notifications_blocked),
+                )
+            }
+            val event = NotificationEvent.fromStream(stream, System.currentTimeMillis())
+                ?: return FixtureActionResult(
+                    label = label,
+                    triggered = false,
+                    message = getString(R.string.settings_debug_notification_invalid_stream),
+                )
+            module.database.notificationEvents().insert(
+                event.copy(eventId = "debug-live-${UUID.randomUUID()}"),
+            )
+            val delivered = notifier.deliverPending(module.notificationsRepository) > 0
+            return FixtureActionResult(label, delivered)
+        }
+
+        private fun triggerPrediction(
+            module: com.github.andreyasadchy.xtra.XtraModule,
+            stream: Stream,
+        ): FixtureActionResult {
+            val context = requireContext().applicationContext
+            val label = getString(R.string.settings_debug_prediction_label)
+            if (!context.prefs().getBoolean(C.PREDICTION_TRACKING_ENABLED, true)) {
+                return FixtureActionResult(label, false, getString(R.string.settings_debug_notification_disabled, label))
+            }
+            val now = System.currentTimeMillis()
+            val predictionId = "debug-prediction-${UUID.randomUUID()}"
+            module.predictionLiveUpdateManager.track(
+                prediction = Prediction(
+                    id = predictionId,
+                    createdAt = now,
+                    startedAt = now,
+                    locksAt = now + 10 * 60_000L,
+                    predictionWindowSeconds = 600,
+                    status = "ACTIVE",
+                    title = "Test prediction for ${stream.channelName ?: stream.channelLogin}",
+                    outcomes = listOf(
+                        Prediction.PredictionOutcome("debug-yes", "Yes", 6_500, 65),
+                        Prediction.PredictionOutcome("debug-no", "No", 3_500, 35),
+                    ),
+                    winningOutcomeId = null,
+                    broadcastId = stream.id,
+                ),
+                channelId = stream.channelId.orEmpty(),
+                channelLogin = stream.channelLogin.orEmpty(),
+                channelName = stream.channelName ?: stream.channelLogin.orEmpty(),
+                betState = PredictionBetState(
+                    predictionId = predictionId,
+                    outcomeId = "debug-yes",
+                    amount = 500,
+                ),
+                streamId = stream.id,
+            )
+            return FixtureActionResult(label, true)
+        }
+
+        private fun triggerDrops(
+            module: com.github.andreyasadchy.xtra.XtraModule,
+            stream: Stream,
+        ): FixtureActionResult {
+            val context = requireContext().applicationContext
+            val label = getString(R.string.settings_debug_drops_label)
+            if (!context.prefs().getBoolean(C.DROPS_TRACKING_ENABLED, true)) {
+                return FixtureActionResult(label, false, getString(R.string.settings_debug_notification_disabled, label))
+            }
+            val dropId = "debug-drop-${UUID.randomUUID()}"
+            module.dropsLiveUpdateManager.track(
+                TwitchDrop(
+                    id = dropId,
+                    campaignId = "debug-campaign-${stream.gameId ?: stream.channelId}",
+                    campaignName = "Test campaign",
+                    gameName = stream.gameName ?: "Live stream",
+                    name = "Test drop",
+                    rewardName = "Test drop for ${stream.channelName ?: stream.channelLogin}",
+                    imageUrl = stream.channelImageURL ?: stream.thumbnailURL,
+                    dropInstanceId = "debug-instance-$dropId",
+                    currentMinutesWatched = 18,
+                    requiredMinutesWatched = 60,
+                    isClaimed = false,
+                ),
+            )
+            return FixtureActionResult(label, true)
+        }
+
+        private fun triggerChatBubble(
+            module: com.github.andreyasadchy.xtra.XtraModule,
+            stream: Stream,
+        ): FixtureActionResult {
+            val context = requireContext().applicationContext
+            val label = getString(R.string.settings_debug_chat_bubble_label)
+            val manager = module.chatBubbleManager
+            if (!manager.areBubblesAllowed()) {
+                return FixtureActionResult(
+                    label = label,
+                    triggered = false,
+                    message = getString(R.string.settings_debug_chat_bubbles_blocked),
+                )
+            }
+            val preferences = context.prefs()
+            val wasEnabled = preferences.getBoolean(C.CHAT_BUBBLE_ENABLED, false)
+            if (!wasEnabled) preferences.edit { putBoolean(C.CHAT_BUBBLE_ENABLED, true) }
+            val opened = manager.open(
+                channelId = stream.channelId,
+                channelLogin = stream.channelLogin,
+                channelName = stream.channelName,
+                streamId = stream.id,
+            )
+            if (opened) {
+                manager.recordMessage(stream.channelId, "Test viewer", "This is a test chat message.", "debug-chat-1")
+                manager.recordMessage(stream.channelId, "Another viewer", "The bubble notification is working.", "debug-chat-2")
+                manager.recordMessage(stream.channelId, "Test viewer", "You can dismiss this fixture when done.", "debug-chat-3")
+            }
+            if (!wasEnabled) preferences.edit { putBoolean(C.CHAT_BUBBLE_ENABLED, false) }
+            return FixtureActionResult(label, opened)
+        }
+
+        private data class FixtureActionResult(
+            val label: String,
+            val triggered: Boolean,
+            val message: String? = null,
+        )
 
         private fun diagnosticInformation(): String = buildString {
             appendLine("Xtra ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
@@ -3301,6 +3695,10 @@ class SettingsActivity : AppCompatActivity() {
                     requireContext().prefs().getBoolean(C.SETTINGS_DEVELOPER_ENABLED, false)
                 listOf(
                     Triple(R.xml.live_notification_preferences, SettingsNavGraphDirections.actionGlobalLiveNotificationSettingsFragment(), getString(R.string.settings_general_notifications)),
+                    Triple(R.xml.system_media_notification_preferences, SettingsNavDirections(R.id.systemMediaNotificationSettingsFragment), getString(R.string.settings_system_media_controls)),
+                    Triple(R.xml.prediction_live_update_preferences, SettingsNavDirections(R.id.predictionLiveUpdateSettingsFragment), getString(R.string.prediction_live_updates)),
+                    Triple(R.xml.drops_live_update_preferences, SettingsNavDirections(R.id.dropsLiveUpdateSettingsFragment), getString(R.string.drops_live_updates)),
+                    Triple(R.xml.chat_bubble_preferences, SettingsNavDirections(R.id.chatBubbleSettingsFragment), getString(R.string.chat_bubble)),
                     Triple(R.xml.account_preferences, SettingsNavDirections(R.id.accountSettingsFragment), getString(R.string.settings_home_account_network)),
                     Triple(R.xml.update_search_preferences, SettingsNavGraphDirections.actionGlobalUpdateSettingsFragment(), getString(R.string.settings_general_updates)),
                     Triple(R.xml.language_preferences, SettingsNavDirections(R.id.languageSettingsFragment), "App › Language"),

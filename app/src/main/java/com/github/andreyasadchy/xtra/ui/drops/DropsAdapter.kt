@@ -33,6 +33,8 @@ class DropsAdapter(
     private val onCampaignClick: (String) -> Unit,
     private val onFindStreams: (TwitchDropCampaign) -> Unit,
     private val onFindStreamsForDrop: (TwitchDrop) -> Unit,
+    private val onTrack: (TwitchDrop) -> Unit,
+    private val isTracking: (String) -> Boolean,
     private val onImageClick: (String, String?, TwitchDropImageSource) -> Unit,
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
     private var rows: List<DropsRow> = emptyList()
@@ -103,6 +105,8 @@ class DropsAdapter(
                 claimingDropId,
                 onClaim,
                 onFindStreamsForDrop,
+                onTrack,
+                isTracking,
                 onImageClick,
             )
             is DropsRow.Campaign -> (holder as DropViewHolder).bind(
@@ -124,6 +128,8 @@ class DropsAdapter(
             claimingDropId: String?,
             onClaim: (TwitchDrop) -> Unit,
             onFindStreams: (TwitchDrop) -> Unit,
+            onTrack: (TwitchDrop) -> Unit,
+            isTracking: (String) -> Boolean,
             onImageClick: (String, String?, TwitchDropImageSource) -> Unit,
         ) {
             binding.title.text = drop.benefits.mapNotNull { it.name }
@@ -164,6 +170,9 @@ class DropsAdapter(
             binding.expandIcon.isVisible = false
             binding.findStreamsButton.isVisible = dropCanFindLiveStreams(drop)
             binding.findStreamsButton.setOnClickListener { onFindStreams(drop) }
+            binding.trackButton.isVisible = !drop.isClaimed && drop.requiredMinutesWatched > 0
+            binding.trackButton.setText(if (isTracking(drop.id)) R.string.drops_untrack else R.string.drops_track)
+            binding.trackButton.setOnClickListener { onTrack(drop) }
             binding.image.contentDescription = binding.root.context.getString(
                 R.string.drops_view_image,
                 drop.rewardName ?: drop.name ?: binding.root.context.getString(R.string.drops),
@@ -208,6 +217,7 @@ class DropsAdapter(
             binding.progress.isVisible = false
             binding.progressLabel.isVisible = false
             binding.claimButton.isVisible = false
+            binding.trackButton.isVisible = false
             binding.claimButton.isEnabled = true
             binding.claimButton.setOnClickListener(null)
             binding.card.setOnClickListener { onClick(campaign.id) }

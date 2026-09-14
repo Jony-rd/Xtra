@@ -1,0 +1,10 @@
+<androidx.preference.PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <SwitchPreferenceCompat android:defaultValue="false" android:key="chat_bubble_enabled" android:title="@string/chat_bubble_enabled" android:summary="@string/chat_bubble_summary" app:iconSpaceReserved="false" />
+    <Preference android:key="chat_bubble_status" android:selectable="true" android:summary="@string/chat_bubble_status_android" android:title="@string/chat_bubble_status" app:iconSpaceReserved="false" />
+    <Preference android:key="chat_bubble_notification_settings" android:title="@string/live_update_notification_settings" app:iconSpaceReserved="false" />
+    <PreferenceCategory android:title="@string/chat_bubble" app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat android:defaultValue="true" android:dependency="chat_bubble_enabled" android:key="chat_bubble_auto_expand" android:title="@string/chat_bubble_auto_expand" app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat android:defaultValue="true" android:dependency="chat_bubble_enabled" android:key="chat_bubble_show_unread" android:title="@string/chat_bubble_show_unread" app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat android:defaultValue="false" android:dependency="chat_bubble_enabled" android:key="chat_bubble_show_preview" android:title="@string/chat_bubble_show_preview" app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat android:defaultValue="true" android:dependency="chat_bubble_enabled" android:key="chat_bubble_keep_open" android:title="@string/chat_bubble_keep_open" app:iconSpaceReserved="false" />
+</androidx.preference.PreferenceScreen>

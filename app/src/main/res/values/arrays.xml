@@ -791,4 +791,42 @@
         <item>2</item>
         <item>3</item>
     </string-array>
+
+    <string-array name="systemMediaArtworkEntries" translatable="false">
+        <item>@string/settings_system_media_artwork_streamer</item>
+        <item>@string/settings_system_media_artwork_preview</item>
+        <item>@string/settings_system_media_artwork_category</item>
+        <item>@string/settings_system_media_artwork_none</item>
+    </string-array>
+
+    <string-array name="systemMediaArtworkValues" translatable="false">
+        <item>streamer_avatar</item>
+        <item>stream_preview</item>
+        <item>category</item>
+        <item>none</item>
+    </string-array>
+
+    <string-array name="predictionStatusChipEntries" translatable="false">
+        <item>@string/prediction_chip_time_remaining</item>
+        <item>@string/prediction_chip_my_pick</item>
+        <item>@string/prediction_chip_prediction</item>
+    </string-array>
+
+    <string-array name="predictionStatusChipValues" translatable="false">
+        <item>time_remaining</item>
+        <item>my_pick</item>
+        <item>prediction</item>
+    </string-array>
+
+    <string-array name="dropsStatusChipEntries" translatable="false">
+        <item>@string/drops_chip_time_remaining</item>
+        <item>@string/drops_chip_percent</item>
+        <item>@string/drops_chip_drop</item>
+    </string-array>
+
+    <string-array name="dropsStatusChipValues" translatable="false">
+        <item>time_remaining</item>
+        <item>percent</item>
+        <item>drop</item>
+    </string-array>
 </resources>

@@ -1,6 +1,8 @@
 package com.github.andreyasadchy.xtra.ui.chat.v2.session
 
 import com.github.andreyasadchy.xtra.ui.chat.v2.catalog.ChatCatalogRepository
+import com.github.andreyasadchy.xtra.model.chat.Prediction
+import com.github.andreyasadchy.xtra.model.chat.PredictionBetState
 import com.github.andreyasadchy.xtra.ui.chat.v2.domain.ChatEvent
 import com.github.andreyasadchy.xtra.ui.chat.v2.domain.ChatMessage
 import com.github.andreyasadchy.xtra.ui.chat.v2.domain.ChatRewardCatalog
@@ -19,6 +21,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.NonCancellable
@@ -40,6 +43,14 @@ data class ActiveChatSession(
     val catalog: ChatCatalogRepository,
     val rewardCatalog: Flow<ChatRewardCatalog> = flowOf(ChatRewardCatalog()),
 )
+
+/** Prediction state published by the existing chat data source for other process-scoped consumers. */
+data class SharedPredictionState(
+    val prediction: Prediction,
+    val betState: PredictionBetState,
+)
+
+typealias SharedPredictionStates = Map<String, SharedPredictionState>
 
 /** Limits invisible provider refreshes when a viewer rapidly reopens the same channel. */
 class ChatCatalogRefreshGate(
@@ -221,6 +232,8 @@ class ChatSessionManager(
     private val transitionMutex = Mutex()
     private val _active = MutableStateFlow<ActiveChatSession?>(null)
     val active: StateFlow<ActiveChatSession?> = _active.asStateFlow()
+    private val _predictionStates = MutableStateFlow<SharedPredictionStates>(emptyMap())
+    val predictionStates: StateFlow<SharedPredictionStates> = _predictionStates.asStateFlow()
     private var generation = 0L
     private var closed = false
     private val factory = ChatSessionFactory(
@@ -236,6 +249,18 @@ class ChatSessionManager(
 
     /** Multiview entry point. It does not touch [_active]. */
     fun createLive(spec: LiveChatSessionSpec): ChatSessionHandle = factory.createLive(spec)
+
+    /** Publishes the authoritative prediction snapshot already received by ChatViewModel. */
+    fun publishPrediction(
+        channelId: String?,
+        prediction: Prediction?,
+        betState: PredictionBetState = PredictionBetState(),
+    ) {
+        val id = channelId?.takeIf(String::isNotBlank) ?: return
+        _predictionStates.update { current ->
+            if (prediction == null) current - id else current + (id to SharedPredictionState(prediction, betState))
+        }
+    }
 
     suspend fun start(spec: LiveChatSessionSpec): ActiveChatSession = transitionMutex.withLock {
         check(!closed) { "ChatSessionManager is closed" }

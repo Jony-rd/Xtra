@@ -5,6 +5,12 @@
     <string name="notification_downloads_channel_id" translatable="false">xtra_downloads_channel</string>
     <string name="notification_live_channel_id" translatable="false">xtra_live_channel</string>
     <string name="notification_playback_channel_id" translatable="false">xtra_playback_channel</string>
+    <string name="notification_prediction_tracking_channel_id" translatable="false">xtra_prediction_tracking</string>
+    <string name="notification_prediction_results_channel_id" translatable="false">xtra_prediction_results</string>
+    <string name="notification_drops_tracking_channel_id" translatable="false">xtra_drops_tracking</string>
+    <string name="notification_drops_results_channel_id" translatable="false">xtra_drops_results</string>
+    <string name="notification_chat_bubbles_channel_id" translatable="false">xtra_chat_bubbles</string>
+    <string name="notification_detail_separator" translatable="false"> · </string>
     <string name="lang_de" translatable="false">Deutsch</string>
     <string name="lang_en" translatable="false">English</string>
     <string name="lang_es" translatable="false">Español</string>
@@ -658,6 +664,29 @@ Metadata text</string>
     <string name="settings_debug_gecko_identity_unavailable" translatable="false">No complete Gecko GQL identity is available</string>
     <string name="settings_debug_gql" translatable="false">GQL</string>
     <string name="settings_debug_only" translatable="false">debug only</string>
+    <string name="settings_debug_notification_fixtures" translatable="false">Notification fixtures</string>
+    <string name="settings_debug_notification_fixtures_summary" translatable="false">Synthetic tests use a random followed stream that is live</string>
+    <string name="settings_debug_trigger_live_notification" translatable="false">Trigger live-stream notification</string>
+    <string name="settings_debug_trigger_live_notification_summary" translatable="false">Posts the rich live notification with its avatar and preview</string>
+    <string name="settings_debug_trigger_prediction" translatable="false">Trigger prediction Live Update</string>
+    <string name="settings_debug_trigger_prediction_summary" translatable="false">Posts a synthetic active prediction with a sample pick</string>
+    <string name="settings_debug_trigger_drops" translatable="false">Trigger Drops Live Update</string>
+    <string name="settings_debug_trigger_drops_summary" translatable="false">Posts a synthetic active Drops progress notification</string>
+    <string name="settings_debug_trigger_chat_bubble" translatable="false">Trigger chat bubble</string>
+    <string name="settings_debug_trigger_chat_bubble_summary" translatable="false">Opens a bubble with three sample chat messages</string>
+    <string name="settings_debug_live_notification_label" translatable="false">live notification</string>
+    <string name="settings_debug_prediction_label" translatable="false">prediction Live Update</string>
+    <string name="settings_debug_drops_label" translatable="false">Drops Live Update</string>
+    <string name="settings_debug_chat_bubble_label" translatable="false">chat bubble</string>
+    <string name="settings_debug_notification_sign_in" translatable="false">Sign in first to load followed live streams</string>
+    <string name="settings_debug_notification_no_live" translatable="false">No followed stream is live right now</string>
+    <string name="settings_debug_notification_triggered" translatable="false">Triggered %1$s for %2$s</string>
+    <string name="settings_debug_notification_failed" translatable="false">Could not trigger %1$s for %2$s</string>
+    <string name="settings_debug_notification_failed_detail" translatable="false">Test notification failed: %1$s</string>
+    <string name="settings_debug_notification_invalid_stream" translatable="false">The selected stream has no usable channel identity</string>
+    <string name="settings_debug_notifications_blocked" translatable="false">Android notifications are blocked for Xtra</string>
+    <string name="settings_debug_notification_disabled" translatable="false">%1$s is disabled in its settings</string>
+    <string name="settings_debug_chat_bubbles_blocked" translatable="false">Allow bubbles for Xtra in Android notification settings first</string>
     <string name="settings_networking">Networking</string>
     <string name="settings_network_engine">Network engine</string>
     <string name="settings_stream_preloading">Smart stream preloading</string>
@@ -1501,6 +1530,9 @@ Metadata text</string>
     <string name="live_notification">%s is live</string>
     <string name="live_notification_streaming">Streaming %s</string>
     <string name="live_notification_live_now">Live now</string>
+    <string name="live_notification_viewers">%s viewers</string>
+    <string name="live_notification_watch">Watch</string>
+    <string name="live_notification_chat">Listen</string>
     <string name="live_notifications">Live notifications</string>
     <string name="live_notifications_summary">Get alerts when followed channels go live. Xtra honors Twitch notification preferences when an authenticated web session is available; otherwise, it monitors all followed channels. Choose how quickly Xtra checks for streams and how much background activity you allow.</string>
     <string name="live_notifications_permission_required">Allow notifications in Android settings to receive live alerts.</string>
@@ -1554,6 +1586,111 @@ Metadata text</string>
     <string name="live_notifications_battery_optimization_summary">Persistent mode may be paused during deep sleep. Open Android battery settings for the most reliable background alerts.</string>
     <string name="live_notifications_battery_optimization_unrestricted">Xtra is already allowed to run without battery optimization. Tap to open the app battery settings.</string>
     <string name="live_notifications_battery_optimization_optimized">Android may pause network access during deep sleep. Tap to ask Android to allow unrestricted battery use for Xtra.</string>
+    <string name="settings_live_activities">Live activities</string>
+    <string name="settings_rich_live_notifications">Rich live notifications</string>
+    <string name="settings_rich_live_notifications_summary">Show a stream preview or avatar in live alerts when an image is available.</string>
+    <string name="settings_live_notification_preview">Show stream preview</string>
+    <string name="settings_live_notification_avatar">Show streamer avatar</string>
+    <string name="settings_live_notification_title">Show stream title</string>
+    <string name="settings_live_notification_category">Show category</string>
+    <string name="settings_live_notification_viewers">Show viewer count</string>
+    <string name="settings_live_notification_preview_metered">Load previews on metered networks</string>
+    <string name="settings_live_notification_watch_action">Show Watch action</string>
+    <string name="settings_live_notification_chat_action">Show Listen action</string>
+    <string name="settings_system_media_controls">System media controls</string>
+    <string name="settings_system_media_controls_summary">Use richer artwork and metadata in Android media controls.</string>
+    <string name="settings_system_media_controls_enabled">Use enhanced system controls</string>
+    <string name="settings_system_media_status">Status</string>
+    <string name="settings_system_media_status_available">Media controls available on supported Android system surfaces.</string>
+    <string name="settings_system_media_show_title">Show stream title</string>
+    <string name="settings_system_media_show_category">Show category</string>
+    <string name="settings_system_media_seek_buttons">Show seek buttons when available</string>
+    <string name="settings_system_media_seek_back">Seek back</string>
+    <string name="settings_system_media_seek_forward">Seek forward</string>
+    <string name="settings_system_media_go_live">Show Go live for rewind</string>
+    <string name="settings_system_media_artwork">Artwork</string>
+    <string name="settings_system_media_artwork_streamer">Streamer avatar</string>
+    <string name="settings_system_media_artwork_preview">Stream preview</string>
+    <string name="settings_system_media_artwork_category">Category artwork</string>
+    <string name="settings_system_media_artwork_none">No artwork</string>
+    <string name="prediction_live_updates">Prediction live updates</string>
+    <string name="prediction_live_updates_summary">Track one prediction with a compact Android Live Update.</string>
+    <string name="prediction_live_updates_enabled">Enable prediction Live Updates</string>
+    <string name="prediction_tracking_started">Now tracking this prediction.</string>
+    <string name="prediction_tracking_stopped">Prediction tracking stopped.</string>
+    <string name="prediction_auto_track_after_vote">Track after I vote</string>
+    <string name="prediction_request_promoted">Request promoted ongoing status</string>
+    <string name="prediction_notify_resolved">Notify me when it resolves</string>
+    <string name="prediction_status_chip_text">Status chip text</string>
+    <string name="prediction_chip_time_remaining">Time remaining</string>
+    <string name="prediction_chip_my_pick">My pick</string>
+    <string name="prediction_chip_prediction">Prediction</string>
+    <string name="prediction_live_update_time">Locks in %s</string>
+    <string name="prediction_live_update_chip">Prediction</string>
+    <string name="prediction_live_update_outcome">%1$s: %2$d%%</string>
+    <string name="prediction_live_update_my_pick">My pick: %s</string>
+    <string name="prediction_live_update_title">Prediction · %s</string>
+    <string name="prediction_live_update_result_title">Prediction result · %s</string>
+    <string name="prediction_live_update_canceled">The prediction was canceled or refunded.</string>
+    <string name="prediction_live_update_won">You picked %s.</string>
+    <string name="prediction_live_update_lost">Winning outcome: %s.</string>
+    <string name="prediction_live_update_resolved">Winning outcome: %s.</string>
+    <string name="prediction_live_update_channel">Prediction updates</string>
+    <string name="prediction_live_update_result_channel">Prediction results</string>
+    <string name="prediction_track">Track prediction</string>
+    <string name="prediction_untrack">Stop tracking</string>
+    <string name="drops_live_updates">Drops live updates</string>
+    <string name="drops_live_updates_summary">Track one Drops reward with progress from Xtra’s existing Drops data.</string>
+    <string name="drops_live_updates_enabled">Enable Drops Live Updates</string>
+    <string name="drops_auto_track_active">Track an active reward automatically</string>
+    <string name="drops_request_promoted">Request promoted ongoing status</string>
+    <string name="drops_notify_completed">Notify me when it completes</string>
+    <string name="drops_status_chip_text">Status chip text</string>
+    <string name="drops_chip_time_remaining">Time remaining</string>
+    <string name="drops_chip_percent">Percent complete</string>
+    <string name="drops_chip_drop">Drop name</string>
+    <string name="drops_live_update_title">Drop · %s</string>
+    <string name="drops_live_update_progress">%1$d%% · %2$d min remaining (%3$d/%4$d min)</string>
+    <string name="drops_live_update_paused">Progress paused at %1$d/%2$d minutes (%3$d%%).</string>
+    <string name="drops_live_update_expired">This Drop has expired.</string>
+    <string name="drops_live_update_expired_title">Drop expired</string>
+    <string name="drops_live_update_expired_result">%s expired before completion.</string>
+    <string name="drops_live_update_remaining_chip">%dmin</string>
+    <string name="drops_live_update_percent_chip">%d%%</string>
+    <string name="drops_live_update_chip">Drop</string>
+    <string name="drops_live_update_completed">Drop completed</string>
+    <string name="drops_live_update_completed_text">%s is ready to claim.</string>
+    <string name="drops_live_update_channel">Drops updates</string>
+    <string name="drops_live_update_result_channel">Drops results</string>
+    <string name="drops_track">Track reward</string>
+    <string name="drops_untrack">Stop tracking</string>
+    <string name="live_update_unpin">Unpin</string>
+    <string name="chat_bubble">Chat notification bubble</string>
+    <string name="chat_bubble_summary">Keep one Twitch chat in an Android notification bubble.</string>
+    <string name="chat_bubble_enabled">Enable chat bubbles</string>
+    <string name="chat_bubble_auto_expand">Open expanded</string>
+    <string name="chat_bubble_show_unread">Show unread count</string>
+    <string name="chat_bubble_show_preview">Show latest message preview</string>
+    <string name="chat_bubble_keep_open">Keep bubble open after leaving the player</string>
+    <string name="chat_bubble_open">Open chat bubble</string>
+    <string name="chat_bubble_close">Close chat bubble</string>
+    <string name="chat_bubble_open_text">Twitch chat is available in the bubble.</string>
+    <string name="chat_bubble_message_preview">%1$s: %2$s</string>
+    <string name="chat_bubble_shortcut_label">Chat with %s</string>
+    <string name="chat_bubble_channel">Chat bubbles</string>
+    <string name="chat_bubble_system_disabled">Chat bubbles are disabled by Android.</string>
+    <string name="chat_bubble_open_settings">Bubble settings</string>
+    <string name="live_update_status">Status</string>
+    <string name="live_update_status_android">Status-bar Live Updates require Android 16 or newer.</string>
+    <string name="live_update_status_available">Live Updates available</string>
+    <string name="live_update_status_disabled">Live Updates disabled by system</string>
+    <string name="live_update_tracking_notification_settings">Tracking notification settings</string>
+    <string name="live_update_result_notification_settings">Result notification settings</string>
+    <string name="live_update_notification_settings">Open notification settings</string>
+    <string name="chat_bubble_status">Status</string>
+    <string name="chat_bubble_status_android">Chat notification bubbles require Android 10 or newer.</string>
+    <string name="chat_bubble_status_available">Chat bubbles available</string>
+    <string name="chat_bubble_status_disabled">Chat bubbles disabled by system</string>
     <string name="sleep_timer_lock_screen">Lock screen after sleep timer is done</string>
     <string name="sleep_timer_time_picker">Use Material time picker for sleep timer</string>
     <string name="stop_sleep_timer_message">Stop sleep timer?</string>

@@ -1,0 +1,11 @@
+<androidx.preference.PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <SwitchPreferenceCompat android:defaultValue="true" android:key="prediction_tracking_enabled" android:title="@string/prediction_live_updates_enabled" android:summary="@string/prediction_live_updates_summary" app:iconSpaceReserved="false" />
+    <Preference android:key="live_update_status" android:selectable="true" android:summary="@string/live_update_status_android" android:title="@string/live_update_status" app:iconSpaceReserved="false" />
+    <Preference android:key="live_update_tracking_notification_settings" android:title="@string/live_update_tracking_notification_settings" app:iconSpaceReserved="false" />
+    <Preference android:key="live_update_result_notification_settings" android:title="@string/live_update_result_notification_settings" app:iconSpaceReserved="false" />
+    <PreferenceCategory android:title="@string/prediction_live_updates" app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat android:defaultValue="false" android:dependency="prediction_tracking_enabled" android:key="prediction_auto_track_after_vote" android:title="@string/prediction_auto_track_after_vote" app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat android:defaultValue="true" android:dependency="prediction_tracking_enabled" android:key="prediction_request_promoted" android:title="@string/prediction_request_promoted" app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat android:defaultValue="true" android:dependency="prediction_tracking_enabled" android:key="prediction_notify_resolved" android:title="@string/prediction_notify_resolved" app:iconSpaceReserved="false" />
+    <ListPreference android:defaultValue="time_remaining" android:dependency="prediction_tracking_enabled" android:entries="@array/predictionStatusChipEntries" android:entryValues="@array/predictionStatusChipValues" android:key="prediction_status_chip_text" android:summary="%s" android:title="@string/prediction_status_chip_text" app:iconSpaceReserved="false" />
+</androidx.preference.PreferenceScreen>

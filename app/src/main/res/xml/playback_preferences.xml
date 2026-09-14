@@ -36,4 +36,6 @@
     <PreferenceCategory android:title="@string/settings_watch_history" app:iconSpaceReserved="false" />
     <SwitchPreferenceCompat android:defaultValue="true" android:key="player_use_videopositions" android:summary="@string/settings_remember_position_summary" android:title="@string/settings_remember_position" app:iconSpaceReserved="false" />
     <Preference android:key="delete_video_positions" android:title="@string/settings_clear_positions" app:iconSpaceReserved="false" />
+    <PreferenceCategory android:title="@string/settings_system_media_controls" app:iconSpaceReserved="false" />
+    <Preference android:key="system_media_controls_page" android:title="@string/settings_system_media_controls" android:summary="@string/settings_system_media_controls_summary" app:iconSpaceReserved="false" />
 </androidx.preference.PreferenceScreen>

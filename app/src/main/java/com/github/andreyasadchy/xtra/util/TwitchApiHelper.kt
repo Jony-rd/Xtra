@@ -27,7 +27,7 @@ import kotlin.uuid.Uuid
 
 object TwitchApiHelper {
 
-    private val imageSizeRegex = Regex("-\\d+x\\d+.")
+    private val imageSizeRegex = Regex("-\\d+x\\d+\\.")
     var checkedValidation = false
     var checkedUpdates = false
     val defaultQualityList = listOf("chunked", "1080p60", "1080p30", "720p60", "720p30", "480p30", "360p30", "160p30", "audio_only")
@@ -60,6 +60,14 @@ object TwitchApiHelper {
             url.isNullOrBlank() -> "https://static-cdn.jtvnw.net/ttv-static/404_preview-440x248.jpg"
             url.contains("{width}x{height}") -> url.replace("{width}", "1280").replace("{height}", "720")
             else -> url.replace(imageSizeRegex, "-1280x720.")
+        }
+    }
+
+    fun getStreamThumbnail(url: String?, width: Int, height: Int): String? {
+        return when {
+            url.isNullOrBlank() -> null
+            url.contains("{width}x{height}") -> url.replace("{width}", width.toString()).replace("{height}", height.toString())
+            else -> url.replace(imageSizeRegex, "-${width}x${height}.")
         }
     }
 
