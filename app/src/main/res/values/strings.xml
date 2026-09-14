@@ -746,6 +746,9 @@ Metadata text</string>
     <string name="player_more_options">More player options</string>
     <string name="player_restart">Restart playback</string>
     <string name="player_seek_live">Seek to live</string>
+    <string name="player_live_tap_seek_back">−%1$d sec</string>
+    <string name="player_live_tap_seek_forward">+%1$d sec</string>
+    <string name="player_live_tap_seek_live">Live</string>
     <string name="player_clip">Create local clip</string>
     <string name="player_clip_prepare_failed">Couldn’t prepare a local clip.</string>
     <string name="clip_editor_title">Create clip</string>
