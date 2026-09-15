@@ -716,6 +716,16 @@
         <item>400</item>
     </string-array>
 
+    <string-array name="liveRewindTimePositionEntries" translatable="false">
+        <item>@string/settings_live_rewind_time_left</item>
+        <item>@string/settings_live_rewind_time_right</item>
+    </string-array>
+
+    <string-array name="liveRewindTimePositionValues" translatable="false">
+        <item>left</item>
+        <item>right</item>
+    </string-array>
+
     <string-array name="settingsProfilePictureEntries">
         <item>@string/settings_profile_picture_round</item>
         <item>@string/settings_profile_picture_rounded_square</item>

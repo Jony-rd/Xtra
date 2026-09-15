@@ -75,6 +75,7 @@ class PlayerHudLayout @JvmOverloads constructor(
     fun setHudOrientation(value: HudOrientation) {
         orientation = value
         profile = store.load().profile(value)
+        refreshTimelineSettings()
         requestLayout()
     }
 
@@ -87,6 +88,7 @@ class PlayerHudLayout @JvmOverloads constructor(
 
     fun reloadProfile() {
         profile = store.load().profile(orientation)
+        refreshTimelineSettings()
         requestLayout()
     }
 
@@ -123,7 +125,10 @@ class PlayerHudLayout @JvmOverloads constructor(
     }
 
     fun setLiveRewindEnabled(enabled: Boolean) {
-        findViewById<HudTimelineContent>(R.id.timelineContent)?.setLiveRewindEnabled(enabled)
+        findViewById<HudTimelineContent>(R.id.timelineContent)?.apply {
+            setLiveRewindTimePosition(store.loadTimelineTimePosition())
+            setLiveRewindEnabled(enabled)
+        }
     }
 
     fun resolvedElements(): List<ResolvedHudElement> = resolved.values.toList()
@@ -465,7 +470,7 @@ class PlayerHudLayout @JvmOverloads constructor(
         val frame = frames[id] ?: return@filterTo false
         when (id) {
             HudElementId.STREAM_INFO -> listOf(R.id.channelAvatar, R.id.channel, R.id.title, R.id.category, R.id.viewersLayout).any(::isShown)
-            HudElementId.TIMELINE -> listOf(R.id.progressBar, R.id.liveButton, R.id.position, R.id.duration).any(::isShown)
+            HudElementId.TIMELINE -> listOf(R.id.progressBar, R.id.position, R.id.duration, R.id.liveTimeGroup).any(::isShown)
             HudElementId.CAPTIONS -> listOf(R.id.liveCaptions, R.id.subtitles).any(::isShown)
             else -> hasBoundAction(frame)
         }
@@ -571,11 +576,18 @@ class PlayerHudLayout @JvmOverloads constructor(
         frames.values.forEach { frame ->
             setDescendantsVisible(frame, true)
         }
+        findViewById<View>(R.id.liveTimeGroup)?.visibility = GONE
     }
 
     private fun restoreRuntimeContent() {
         findViewById<View>(R.id.channelAvatar)?.background = null
+        findViewById<View>(R.id.liveTimeGroup)?.visibility = GONE
         refreshAvailability()
+    }
+
+    private fun refreshTimelineSettings() {
+        findViewById<HudTimelineContent>(R.id.timelineContent)
+            ?.setLiveRewindTimePosition(store.loadTimelineTimePosition())
     }
 
     private fun setDescendantsVisible(view: View, visible: Boolean) {

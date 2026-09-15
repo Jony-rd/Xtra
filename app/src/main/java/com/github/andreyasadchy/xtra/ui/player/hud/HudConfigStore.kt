@@ -26,6 +26,11 @@ class HudConfigStore(private val context: Context) {
 
     fun resetBoth() = save(PlayerHudDefaults.config())
 
+    fun loadTimelineTimePosition(): HudTimelineTimePosition =
+        parseHudTimelineTimePosition(
+            context.rawPrefs().getString(C.PLAYER_LIVE_REWIND_TIME_SIDE, null),
+        )
+
     companion object {
         const val KEY = C.PLAYER_HUD_LAYOUT_V2
     }
