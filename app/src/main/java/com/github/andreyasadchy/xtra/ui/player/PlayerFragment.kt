@@ -193,6 +193,10 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
     private var liveRewindReturningLive = false
     private var liveRewindPendingVodId: String? = null
     private var liveRewindPendingTargetMs: Long? = null
+    private val liveTapSeekAccumulator = LiveTapSeekAccumulator()
+    private val liveTapSeekCommitAction = Runnable { commitLiveTapSeek() }
+    private val liveTapSeekFeedbackHideAction = Runnable { hideLiveTapSeekFeedback() }
+    private val liveTapSeekDoubleTapState = LiveTapSeekDoubleTapState()
     private var lastTvFocusedControl: View? = null
     private var pendingTvFocusRequest: Runnable? = null
 
@@ -682,7 +686,14 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
             val touchSlopRange = -touchSlop.toFloat()..touchSlop.toFloat()
             val longPressTimeout = ViewConfiguration.getLongPressTimeout()
             val moveFreely = requireContext().prefs().getBoolean(C.PLAYER_MOVE_FREELY, false)
-            val doubleTap = requireContext().prefs().getBoolean(C.PLAYER_DOUBLE_TAP, true) && requireContext().prefs().isChatEnabled()
+            val chatDoubleTapEnabled = requireContext().prefs().getBoolean(C.PLAYER_DOUBLE_TAP, true) &&
+                requireContext().prefs().isChatEnabled()
+            fun liveTapSeekGestureEnabled() = !requireContext().isTelevision() &&
+                isLiveRewindAvailable() &&
+                !liveRewindStreamOffline &&
+                !liveRewindSwitching &&
+                !liveRewindReturningLive
+            fun doubleTapGestureEnabled() = chatDoubleTapEnabled || liveTapSeekGestureEnabled()
             var controlTouchActive = false
             var lockedTouchActive = false
             var lockedTouchX = 0f
@@ -691,7 +702,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 requireContext(),
                 object : GestureDetector.SimpleOnGestureListener() {
                     override fun onSingleTapUp(e: MotionEvent): Boolean {
-                        return if (!doubleTap || isPortrait) {
+                        return if (!doubleTapGestureEnabled()) {
                             toggleController()
                             true
                         } else {
@@ -700,7 +711,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                     }
 
                     override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                        return if (doubleTap && !isPortrait) {
+                        return if (doubleTapGestureEnabled()) {
                             toggleController()
                             true
                         } else {
@@ -709,16 +720,49 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                     }
 
                     override fun onDoubleTap(e: MotionEvent): Boolean {
-                        return if (doubleTap && !isPortrait && isMaximized) {
-                            if (chatLayout.isVisible) {
-                                hideChat()
-                            } else {
-                                showChat()
-                            }
-                            true
-                        } else {
-                            false
+                        if (!doubleTapGestureEnabled() || !isMaximized) {
+                            liveTapSeekDoubleTapState.clearCandidate()
+                            return false
                         }
+                        liveTapSeekDoubleTapState.recordFirstTap(liveTapSeekZoneForEvent(e), e.downTime)
+                        return true
+                    }
+
+                    override fun onDoubleTapEvent(e: MotionEvent): Boolean {
+                        if (!doubleTapGestureEnabled() || !isMaximized) {
+                            liveTapSeekDoubleTapState.clearCandidate()
+                            return false
+                        }
+                        when (e.actionMasked) {
+                            MotionEvent.ACTION_DOWN -> {
+                                liveTapSeekDoubleTapState.recordSecondTapDown(
+                                    liveTapSeekZoneForEvent(e),
+                                    e.downTime,
+                                )
+                            }
+                            MotionEvent.ACTION_UP -> {
+                                if (!isTap || controlTouchActive || playerControls.progressBar.isPressed ||
+                                    statusBarSwipe || slidingLayout.translationY !in touchSlopRange || activePointerId == -1
+                                ) {
+                                    liveTapSeekDoubleTapState.rejectSecondTap()
+                                } else {
+                                    when (liveTapSeekDoubleTapState.acceptSecondTap()) {
+                                        LiveTapSeekZone.LEFT -> handleLiveTapSeekDoubleTap(LiveTapSeekDirection.BACKWARD)
+                                        LiveTapSeekZone.RIGHT -> handleLiveTapSeekDoubleTap(LiveTapSeekDirection.FORWARD)
+                                        LiveTapSeekZone.CENTER -> if (chatDoubleTapEnabled && !isPortrait) {
+                                            if (chatLayout.isVisible) {
+                                                hideChat()
+                                            } else {
+                                                showChat()
+                                            }
+                                        }
+                                        null -> Unit
+                                    }
+                                }
+                            }
+                            MotionEvent.ACTION_CANCEL -> liveTapSeekDoubleTapState.clearCandidate()
+                        }
+                        return true
                     }
                 }
             )
@@ -732,6 +776,8 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                         controlTouchActive = playerControls.root.dispatchTouchEvent(event)
                         if (!controlTouchActive) {
                             controllerTapDetector.onTouchEvent(event)
+                        } else {
+                            liveTapSeekDoubleTapState.clearCandidate()
                         }
                     } else {
                         controllerTapDetector.onTouchEvent(event)
@@ -890,6 +936,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
             dragView.setOnTouchListener { _, event ->
                 if (!isAnimating) {
                     if (isInteractionLocked && !playerControls.root.isVisible) {
+                        liveTapSeekDoubleTapState.clearCandidate()
                         when (event.actionMasked) {
                             MotionEvent.ACTION_DOWN -> {
                                 lockedTouchActive = true
@@ -927,6 +974,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                             downAction(event)
                         }
                         MotionEvent.ACTION_POINTER_DOWN -> {
+                            liveTapSeekDoubleTapState.clearCandidate()
                             if (activePointerId == -1) {
                                 val pointerIndex = event.actionIndex
                                 val pointerId = event.getPointerId(pointerIndex)
@@ -944,6 +992,9 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                         MotionEvent.ACTION_MOVE -> {
                             if (isMaximized) {
                                 playerControls.root.dispatchTouchEvent(event)
+                                if (controlTouchActive || playerControls.progressBar.isPressed || statusBarSwipe) {
+                                    liveTapSeekDoubleTapState.clearCandidate()
+                                }
                                 if (!controlTouchActive && !playerControls.progressBar.isPressed && !statusBarSwipe && activePointerId != -1) {
                                     val pointerIndex = event.findPointerIndex(activePointerId)
                                     if (pointerIndex != -1) {
@@ -964,6 +1015,8 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                                             if (backgroundVisible) {
                                                 disableBackground()
                                             }
+                                            isTap = false
+                                            liveTapSeekDoubleTapState.clearCandidate()
                                         }
                                     }
                                 }
@@ -999,6 +1052,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                             }
                         }
                         MotionEvent.ACTION_POINTER_UP -> {
+                            liveTapSeekDoubleTapState.clearCandidate()
                             val pointerIndex = event.actionIndex
                             val pointerId = event.getPointerId(pointerIndex)
                             if (pointerId == activePointerId) {
@@ -1022,7 +1076,11 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                                 activePointerId = newId
                             }
                         }
-                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> upAction(event)
+                        MotionEvent.ACTION_UP -> upAction(event)
+                        MotionEvent.ACTION_CANCEL -> {
+                            liveTapSeekDoubleTapState.clearCandidate()
+                            upAction(event)
+                        }
                     }
                 }
                 true
@@ -1089,6 +1147,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 progressBar.addListener(
                     object : TimeBar.OnScrubListener {
                         override fun onScrubStart(timeBar: TimeBar, position: Long) {
+                            cancelLiveTapSeek()
                             controllerVisibility.onScrubStart()
                             binding.playerControls.root.removeCallbacks(controllerHideAction)
                             if (isLiveRewindAvailable()) {
@@ -1356,6 +1415,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
     private fun updateLiveRewindUi() {
         updateLiveClipSourceAvailability()
         if (!isLiveRewindAvailable()) {
+            cancelLiveTapSeek()
             setLiveRewindTimelineLayout(false)
             schedulePortraitControlScale()
             binding.playerControls.progressBar.visibility = View.GONE
@@ -1449,6 +1509,119 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
             binding.playerControls.duration.text,
         )
         binding.playerControls.progressBar.setPosition(positionMs.coerceIn(0L, edgeMs))
+    }
+
+    private fun liveTapSeekZoneForEvent(event: MotionEvent): LiveTapSeekZone? {
+        if (!isMaximized || requireContext().isTelevision() || (!isPortrait && event.y <= 100f) ||
+            binding.playerLayout.width <= 0 || event.x < 0f || event.x >= binding.playerLayout.width
+        ) {
+            return null
+        }
+        return liveTapSeekZone(event.x, binding.playerLayout.width)
+    }
+
+    private fun handleLiveTapSeekDoubleTap(direction: LiveTapSeekDirection): Boolean {
+        if (!isMaximized || requireContext().isTelevision() || !isLiveRewindAvailable() ||
+            liveRewindStreamOffline || liveRewindSwitching || liveRewindReturningLive
+        ) {
+            return false
+        }
+        val edgeMs = currentLiveEdgeMs()
+        if (edgeMs <= 0L) return false
+        val currentPositionMs = when (livePlaybackMode) {
+            LivePlaybackMode.Live -> edgeMs
+            is LivePlaybackMode.Rewound -> getCurrentPosition() ?: return false
+        }
+        val target = liveTapSeekAccumulator.addTap(currentPositionMs, edgeMs, direction)
+        liveRewindScrubPositionMs = target.positionMs
+        showController(force = true)
+        showLiveRewindPreview(target.positionMs)
+        showLiveTapSeekFeedback(direction, target)
+        binding.playerControls.root.removeCallbacks(liveTapSeekCommitAction)
+        binding.playerControls.root.postDelayed(liveTapSeekCommitAction, LIVE_TAP_SEEK_DEBOUNCE_MS)
+        return true
+    }
+
+    private fun commitLiveTapSeek() {
+        val requestedTarget = liveTapSeekAccumulator.takePendingTarget() ?: return
+        liveRewindScrubPositionMs = null
+        hideLiveRewindPreview()
+        if (!isLiveRewindAvailable() || liveRewindStreamOffline || liveRewindSwitching || liveRewindReturningLive) {
+            updateLiveRewindProgress()
+            return
+        }
+        val edgeMs = currentLiveEdgeMs()
+        val vod = liveRewindVod ?: return
+        if (requestedTarget.atLiveEdge) {
+            goLive()
+        } else {
+            playRecordingVodAt(vod, requestedTarget.positionMs.coerceIn(0L, edgeMs))
+        }
+        scheduleControllerHideAfterScrub()
+    }
+
+    private fun cancelLiveTapSeek() {
+        binding.playerControls.root.removeCallbacks(liveTapSeekCommitAction)
+        binding.liveTapSeekFeedbackOverlay.removeCallbacks(liveTapSeekFeedbackHideAction)
+        liveTapSeekAccumulator.clear()
+        liveTapSeekDoubleTapState.reset()
+        liveRewindScrubPositionMs = null
+        hideLiveTapSeekFeedback()
+    }
+
+    private fun showLiveTapSeekFeedback(
+        direction: LiveTapSeekDirection,
+        target: LiveTapSeekTarget,
+    ) {
+        val feedbackDirection = liveTapSeekFeedbackDirection(target, direction)
+        val feedback = if (feedbackDirection == LiveTapSeekDirection.BACKWARD) {
+            binding.liveTapSeekBackwardFeedback
+        } else {
+            binding.liveTapSeekForwardFeedback
+        }
+        val otherFeedback = if (feedbackDirection == LiveTapSeekDirection.BACKWARD) {
+            binding.liveTapSeekForwardFeedback
+        } else {
+            binding.liveTapSeekBackwardFeedback
+        }
+        otherFeedback.animate().cancel()
+        otherFeedback.visibility = View.GONE
+        feedback.animate().cancel()
+        feedback.visibility = View.VISIBLE
+        feedback.alpha = 0f
+        feedback.scaleX = 0.82f
+        feedback.scaleY = 0.82f
+        val seconds = (abs(target.effectiveDeltaMs) / 1000L).toInt()
+        val label = if (target.atLiveEdge) {
+            getString(R.string.player_live_tap_seek_live)
+        } else if (feedbackDirection == LiveTapSeekDirection.BACKWARD) {
+            getString(R.string.player_live_tap_seek_back, seconds)
+        } else {
+            getString(R.string.player_live_tap_seek_forward, seconds)
+        }
+        if (feedbackDirection == LiveTapSeekDirection.BACKWARD) {
+            binding.liveTapSeekBackwardLabel.text = label
+        } else {
+            binding.liveTapSeekForwardLabel.text = label
+        }
+        feedback.animate()
+            .alpha(1f)
+            .scaleX(1f)
+            .scaleY(1f)
+            .setDuration(150L)
+            .start()
+        binding.liveTapSeekFeedbackOverlay.removeCallbacks(liveTapSeekFeedbackHideAction)
+        binding.liveTapSeekFeedbackOverlay.postDelayed(
+            liveTapSeekFeedbackHideAction,
+            LIVE_TAP_SEEK_FEEDBACK_HIDE_DELAY_MS,
+        )
+    }
+
+    private fun hideLiveTapSeekFeedback() {
+        binding.liveTapSeekBackwardFeedback.animate().cancel()
+        binding.liveTapSeekForwardFeedback.animate().cancel()
+        binding.liveTapSeekBackwardFeedback.visibility = View.GONE
+        binding.liveTapSeekForwardFeedback.visibility = View.GONE
     }
 
     private fun onLiveRewindScrubFinished(positionMs: Long) {
@@ -1564,6 +1737,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
 
     private fun onLiveStreamWentOffline() {
         if (view == null) return
+        cancelLiveTapSeek()
         val state = liveRewindSourceState().streamEnded(
             liveRewindVod?.predictedDurationMs() ?: return,
         )
@@ -1581,6 +1755,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 newCreatedAt = newCreatedAt,
             )
         ) return
+        cancelLiveTapSeek()
         ++liveRewindSessionGeneration
         liveRewindDiscoveryJob?.cancel()
         if (livePlaybackMode is LivePlaybackMode.Rewound) {
@@ -3812,6 +3987,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
     override fun onDestroyView() {
         phoneChatOverlayGesture?.detach()
         phoneChatOverlayGesture = null
+        _binding?.let { cancelLiveTapSeek() }
         _binding?.let { binding ->
             keyboardLayoutListener?.let(binding.slidingLayout.viewTreeObserver::removeOnGlobalLayoutListener)
         }

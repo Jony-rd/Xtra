@@ -69,6 +69,87 @@
                 android:id="@+id/playerControls"
                 layout="@layout/player_layout" />
 
+            <FrameLayout
+                android:id="@+id/liveTapSeekFeedbackOverlay"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clickable="false"
+                android:focusable="false"
+                android:importantForAccessibility="no"
+                android:visibility="visible">
+
+                <LinearLayout
+                    android:id="@+id/liveTapSeekBackwardFeedback"
+                    android:layout_width="128dp"
+                    android:layout_height="128dp"
+                    android:layout_gravity="center_vertical|start"
+                    android:layout_marginStart="48dp"
+                    android:background="@drawable/live_tap_seek_feedback_background"
+                    android:clickable="false"
+                    android:clipChildren="false"
+                    android:focusable="false"
+                    android:gravity="center"
+                    android:importantForAccessibility="no"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <ImageView
+                        android:id="@+id/liveTapSeekBackwardIcon"
+                        android:layout_width="64dp"
+                        android:layout_height="64dp"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/baseline_replay_10_black_48"
+                        android:tint="@android:color/white" />
+
+                    <TextView
+                        android:id="@+id/liveTapSeekBackwardLabel"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:importantForAccessibility="no"
+                        android:textColor="@android:color/white"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        tools:text="10 sec" />
+
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/liveTapSeekForwardFeedback"
+                    android:layout_width="128dp"
+                    android:layout_height="128dp"
+                    android:layout_gravity="center_vertical|end"
+                    android:layout_marginEnd="48dp"
+                    android:background="@drawable/live_tap_seek_feedback_background"
+                    android:clickable="false"
+                    android:clipChildren="false"
+                    android:focusable="false"
+                    android:gravity="center"
+                    android:importantForAccessibility="no"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <ImageView
+                        android:id="@+id/liveTapSeekForwardIcon"
+                        android:layout_width="64dp"
+                        android:layout_height="64dp"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/baseline_forward_10_black_48"
+                        android:tint="@android:color/white" />
+
+                    <TextView
+                        android:id="@+id/liveTapSeekForwardLabel"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:importantForAccessibility="no"
+                        android:textColor="@android:color/white"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        tools:text="10 sec" />
+
+                </LinearLayout>
+
+            </FrameLayout>
+
             <ImageButton
                 android:id="@+id/dismissPlayer"
                 android:layout_width="48dp"

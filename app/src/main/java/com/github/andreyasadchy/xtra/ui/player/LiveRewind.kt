@@ -10,6 +10,152 @@ import kotlin.time.Instant
 
 const val LIVE_EDGE_THRESHOLD_MS = 15_000L
 const val LIVE_REWIND_MAX_CREATED_AT_DELTA_MS = 3 * 60 * 1000L
+const val LIVE_TAP_SEEK_STEP_MS = 10_000L
+const val LIVE_TAP_SEEK_DEBOUNCE_MS = 450L
+const val LIVE_TAP_SEEK_FEEDBACK_HIDE_DELAY_MS = 800L
+
+enum class LiveTapSeekZone {
+    LEFT,
+    CENTER,
+    RIGHT,
+}
+
+fun liveTapSeekZone(x: Float, width: Int): LiveTapSeekZone? {
+    if (width <= 0 || x < 0f || x >= width) return null
+    val fraction = x / width
+    return when {
+        fraction < 0.4f -> LiveTapSeekZone.LEFT
+        fraction > 0.6f -> LiveTapSeekZone.RIGHT
+        else -> LiveTapSeekZone.CENTER
+    }
+}
+
+class LiveTapSeekDoubleTapState {
+    private var firstZone: LiveTapSeekZone? = null
+    private var pendingZone: LiveTapSeekZone? = null
+    private var pendingSecondDownTime = Long.MIN_VALUE
+    private var lastAcceptedPairSecondDownTime = Long.MIN_VALUE
+
+    fun recordFirstTap(zone: LiveTapSeekZone?, downTime: Long) {
+        firstZone = if (downTime == lastAcceptedPairSecondDownTime) null else zone
+        pendingZone = null
+        pendingSecondDownTime = Long.MIN_VALUE
+    }
+
+    fun recordSecondTapDown(zone: LiveTapSeekZone?, downTime: Long) {
+        pendingZone = firstZone?.takeIf { it == zone }
+        pendingSecondDownTime = if (pendingZone == null) Long.MIN_VALUE else downTime
+        firstZone = null
+    }
+
+    fun acceptSecondTap(): LiveTapSeekZone? {
+        val acceptedZone = pendingZone
+        if (acceptedZone != null) {
+            lastAcceptedPairSecondDownTime = pendingSecondDownTime
+        }
+        clearPendingTap()
+        return acceptedZone
+    }
+
+    fun rejectSecondTap() {
+        clearPendingTap()
+    }
+
+    fun clearCandidate() {
+        firstZone = null
+        clearPendingTap()
+    }
+
+    fun reset() {
+        clearCandidate()
+        lastAcceptedPairSecondDownTime = Long.MIN_VALUE
+    }
+
+    private fun clearPendingTap() {
+        pendingZone = null
+        pendingSecondDownTime = Long.MIN_VALUE
+    }
+}
+
+enum class LiveTapSeekDirection(val offsetMs: Long) {
+    BACKWARD(-LIVE_TAP_SEEK_STEP_MS),
+    FORWARD(LIVE_TAP_SEEK_STEP_MS),
+}
+
+data class LiveTapSeekTarget(
+    val positionMs: Long,
+    val atLiveEdge: Boolean,
+    val effectiveDeltaMs: Long,
+)
+
+fun liveTapSeekTargetMs(
+    currentPositionMs: Long,
+    edgeMs: Long,
+    pendingTargetMs: Long?,
+    direction: LiveTapSeekDirection,
+): LiveTapSeekTarget {
+    val safeEdgeMs = edgeMs.coerceAtLeast(0L)
+    val baseMs = (pendingTargetMs ?: currentPositionMs).coerceIn(0L, safeEdgeMs)
+    val targetMs = (baseMs + direction.offsetMs).coerceIn(0L, safeEdgeMs)
+    return LiveTapSeekTarget(
+        positionMs = targetMs,
+        atLiveEdge = direction == LiveTapSeekDirection.FORWARD && targetMs == safeEdgeMs,
+        effectiveDeltaMs = targetMs - currentPositionMs.coerceIn(0L, safeEdgeMs),
+    )
+}
+
+class LiveTapSeekAccumulator {
+    private var pendingTarget: LiveTapSeekTarget? = null
+    private var burstOriginMs: Long? = null
+
+    fun addTap(
+        currentPositionMs: Long,
+        edgeMs: Long,
+        direction: LiveTapSeekDirection,
+    ): LiveTapSeekTarget {
+        val safeEdgeMs = edgeMs.coerceAtLeast(0L)
+        val target = liveTapSeekTargetMs(
+            currentPositionMs = currentPositionMs,
+            edgeMs = safeEdgeMs,
+            pendingTargetMs = pendingTarget?.let { target ->
+                if (target.atLiveEdge) safeEdgeMs else target.positionMs
+            },
+            direction = direction,
+        ).let { target ->
+            val originMs = burstOriginMs ?: currentPositionMs.coerceIn(0L, safeEdgeMs).also {
+                burstOriginMs = it
+            }
+            target.copy(effectiveDeltaMs = target.positionMs - originMs)
+        }
+        pendingTarget = target
+        return target
+    }
+
+    fun takePendingTarget(): LiveTapSeekTarget? = pendingTarget.also {
+        pendingTarget = null
+        burstOriginMs = null
+    }
+
+    fun clear() {
+        pendingTarget = null
+        burstOriginMs = null
+    }
+
+    fun hasPendingTarget(): Boolean = pendingTarget != null
+}
+
+fun liveTapSeekFeedbackDirection(
+    target: LiveTapSeekTarget,
+    latestDirection: LiveTapSeekDirection,
+): LiveTapSeekDirection = if (target.atLiveEdge) {
+    LiveTapSeekDirection.FORWARD
+} else if (target.effectiveDeltaMs < 0L) {
+    LiveTapSeekDirection.BACKWARD
+} else if (target.effectiveDeltaMs > 0L) {
+    LiveTapSeekDirection.FORWARD
+} else {
+    latestDirection
+}
 
 data class LiveRewindVod(
     val id: String,

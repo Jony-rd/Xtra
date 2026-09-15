@@ -9,6 +9,50 @@ import org.junit.Test
 class LiveRewindTest {
 
     @Test
+    fun liveTapSeekUsesWideSideZonesAndNarrowCenterZone() {
+        assertEquals(LiveTapSeekZone.LEFT, liveTapSeekZone(0f, 1000))
+        assertEquals(LiveTapSeekZone.LEFT, liveTapSeekZone(399f, 1000))
+        assertEquals(LiveTapSeekZone.CENTER, liveTapSeekZone(400f, 1000))
+        assertEquals(LiveTapSeekZone.CENTER, liveTapSeekZone(600f, 1000))
+        assertEquals(LiveTapSeekZone.RIGHT, liveTapSeekZone(601f, 1000))
+        assertEquals(LiveTapSeekZone.RIGHT, liveTapSeekZone(999f, 1000))
+        assertNull(liveTapSeekZone(-1f, 1000))
+        assertNull(liveTapSeekZone(1000f, 1000))
+    }
+
+    @Test
+    fun doubleTapStateRequiresSameZoneAndDoesNotOverlapPairs() {
+        val state = LiveTapSeekDoubleTapState()
+
+        state.recordFirstTap(LiveTapSeekZone.LEFT, 100L)
+        state.recordSecondTapDown(LiveTapSeekZone.LEFT, 200L)
+        assertEquals(LiveTapSeekZone.LEFT, state.acceptSecondTap())
+
+        state.recordFirstTap(LiveTapSeekZone.LEFT, 200L)
+        state.recordSecondTapDown(LiveTapSeekZone.LEFT, 300L)
+        assertNull(state.acceptSecondTap())
+
+        state.recordFirstTap(LiveTapSeekZone.LEFT, 300L)
+        state.recordSecondTapDown(LiveTapSeekZone.LEFT, 400L)
+        assertEquals(LiveTapSeekZone.LEFT, state.acceptSecondTap())
+
+        state.recordFirstTap(LiveTapSeekZone.LEFT, 500L)
+        state.recordSecondTapDown(LiveTapSeekZone.RIGHT, 600L)
+        assertNull(state.acceptSecondTap())
+    }
+
+    @Test
+    fun doubleTapStateRejectsPairWhenTheSecondContactBecomesADifferentGesture() {
+        val state = LiveTapSeekDoubleTapState()
+
+        state.recordFirstTap(LiveTapSeekZone.RIGHT, 100L)
+        state.recordSecondTapDown(LiveTapSeekZone.RIGHT, 200L)
+        state.rejectSecondTap()
+
+        assertNull(state.acceptSecondTap())
+    }
+
+    @Test
     fun selectsClosestPlausibleCurrentVod() {
         val start = 1_000_000L
         val selected = selectCurrentRecordingVod(
@@ -305,6 +349,54 @@ class LiveRewindTest {
         assertEquals(600_000L, liveRewindTimelinePositionMs(LivePlaybackMode.Live, 600_000L, 120_000L, null))
         assertEquals(120_000L, liveRewindTimelinePositionMs(LivePlaybackMode.Rewound("vod"), 600_000L, 120_000L, null))
         assertEquals(300_000L, liveRewindTimelinePositionMs(LivePlaybackMode.Rewound("vod"), 600_000L, 120_000L, 300_000L))
+    }
+
+    @Test
+    fun liveTapSeekStacksFromThePendingTarget() {
+        val accumulator = LiveTapSeekAccumulator()
+
+        assertEquals(LiveTapSeekTarget(590_000L, false, -10_000L), accumulator.addTap(600_000L, 600_000L, LiveTapSeekDirection.BACKWARD))
+        assertEquals(LiveTapSeekTarget(580_000L, false, -20_000L), accumulator.addTap(600_500L, 600_500L, LiveTapSeekDirection.BACKWARD))
+        assertEquals(LiveTapSeekTarget(580_000L, false, -20_000L), accumulator.takePendingTarget())
+        assertFalse(accumulator.hasPendingTarget())
+    }
+
+    @Test
+    fun liveTapSeekClampsAtBothEndsAndCanChangeDirection() {
+        val accumulator = LiveTapSeekAccumulator()
+
+        assertEquals(LiveTapSeekTarget(0L, false, -5_000L), accumulator.addTap(5_000L, 20_000L, LiveTapSeekDirection.BACKWARD))
+        assertEquals(LiveTapSeekTarget(10_000L, false, 5_000L), accumulator.addTap(5_000L, 20_000L, LiveTapSeekDirection.FORWARD))
+        assertEquals(LiveTapSeekTarget(20_000L, true, 15_000L), accumulator.addTap(15_000L, 20_000L, LiveTapSeekDirection.FORWARD))
+        assertEquals(LiveTapSeekTarget(20_000L, true, 15_000L), accumulator.takePendingTarget())
+    }
+
+    @Test
+    fun liveTapSeekRefreshesTheBaseWhenThePendingTargetWasAtLiveEdge() {
+        val accumulator = LiveTapSeekAccumulator()
+
+        assertEquals(
+            LiveTapSeekTarget(20_000L, true, 10_000L),
+            accumulator.addTap(10_000L, 20_000L, LiveTapSeekDirection.FORWARD),
+        )
+        assertEquals(
+            LiveTapSeekTarget(20_000L, false, 10_000L),
+            accumulator.addTap(10_000L, 30_000L, LiveTapSeekDirection.BACKWARD),
+        )
+    }
+
+    @Test
+    fun liveTapSeekFeedbackFollowsTheNetBurstDirection() {
+        val target = LiveTapSeekTarget(80_000L, false, -20_000L)
+
+        assertEquals(
+            LiveTapSeekDirection.BACKWARD,
+            liveTapSeekFeedbackDirection(target, LiveTapSeekDirection.FORWARD),
+        )
+        assertEquals(
+            LiveTapSeekDirection.FORWARD,
+            liveTapSeekFeedbackDirection(target.copy(atLiveEdge = true), LiveTapSeekDirection.BACKWARD),
+        )
     }
 
     @Test
