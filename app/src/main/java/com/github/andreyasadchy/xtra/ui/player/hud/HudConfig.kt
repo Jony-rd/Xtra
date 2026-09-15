@@ -48,6 +48,18 @@ enum class HudOrientation {
     LANDSCAPE,
 }
 
+enum class HudTimelineTimePosition {
+    LEFT,
+    RIGHT,
+}
+
+fun parseHudTimelineTimePosition(value: String?): HudTimelineTimePosition =
+    if (value.equals("left", ignoreCase = true)) {
+        HudTimelineTimePosition.LEFT
+    } else {
+        HudTimelineTimePosition.RIGHT
+    }
+
 data class HudPlacement(
     val enabled: Boolean,
     val x: Float,

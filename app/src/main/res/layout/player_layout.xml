@@ -161,6 +161,17 @@
                 android:textColor="@android:color/white"
                 android:visibility="gone"
                 tools:text="12:16" />
+            <TextView
+                android:id="@+id/liveTimeGroup"
+                android:layout_width="160dp"
+                android:layout_height="48dp"
+                android:fontFeatureSettings="tnum"
+                android:gravity="center"
+                android:includeFontPadding="false"
+                android:textColor="@android:color/white"
+                android:textSize="12sp"
+                android:visibility="gone"
+                tools:text="LIVE / 4:20:27" />
             <LinearLayout
                 android:id="@+id/bottomLayout"
                 android:layout_width="match_parent"
@@ -179,21 +190,6 @@
                     app:scrubber_color="#FFB388FF"
                     app:scrubber_enabled_size="14dp"
                     app:unplayed_color="#66FFFFFF" />
-                <Button
-                    android:id="@+id/liveButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="48dp"
-                    android:background="@android:color/transparent"
-                    android:contentDescription="@string/player_live"
-                    android:minWidth="0dp"
-                    android:minHeight="0dp"
-                    android:paddingStart="6dp"
-                    android:paddingEnd="6dp"
-                    android:text="@string/player_live"
-                    android:textColor="@android:color/white"
-                    android:textSize="12sp"
-                    android:textStyle="bold"
-                    android:visibility="gone" />
             </LinearLayout>
             <TextView
                 android:id="@+id/duration"
