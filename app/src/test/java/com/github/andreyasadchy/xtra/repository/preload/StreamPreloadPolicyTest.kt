@@ -37,6 +37,28 @@ class StreamPreloadPolicyTest {
     }
 
     @Test
+    fun speculativeStreamPreloadRequiresInFeedPreviews() {
+        assertTrue(
+            allowsSpeculativeStreamPreload(
+                previewMode = StreamPreviewMode.WIFI_ONLY,
+                preloadMode = StreamPreloadMode.WIFI_ONLY,
+            ),
+        )
+        assertTrue(
+            !allowsSpeculativeStreamPreload(
+                previewMode = StreamPreviewMode.OFF,
+                preloadMode = StreamPreloadMode.WIFI_ONLY,
+            ),
+        )
+        assertTrue(
+            !allowsSpeculativeStreamPreload(
+                previewMode = StreamPreviewMode.WIFI_ONLY,
+                preloadMode = StreamPreloadMode.OFF,
+            ),
+        )
+    }
+
+    @Test
     fun customStreamProxyDisablesTwitchUrlPreload() {
         assertTrue(!StreamPreloadPolicy.allowsTwitchUrlPreload(true, "https://proxy/\$channel"))
         assertTrue(StreamPreloadPolicy.allowsTwitchUrlPreload(true, ""))
