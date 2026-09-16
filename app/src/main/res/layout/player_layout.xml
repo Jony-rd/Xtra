@@ -22,6 +22,7 @@
             android:id="@+id/topLeftLayout"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:baselineAligned="false"
             android:gravity="top"
             android:orientation="horizontal">
             <ImageView
@@ -35,8 +36,9 @@
                 tools:visibility="visible" />
             <LinearLayout
                 android:id="@+id/infoLayout"
-                android:layout_width="wrap_content"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_weight="1"
                 android:orientation="vertical">
                 <TextView
                     android:id="@+id/channel"
@@ -53,7 +55,7 @@
                     tools:visibility="visible" />
                 <LinearLayout
                     android:id="@+id/titleAndViewersLayout"
-                    android:layout_width="wrap_content"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="2dp"
                     android:gravity="start"
@@ -74,46 +76,40 @@
                         app:autoSizeStepGranularity="1sp"
                         tools:text="A sample stream title"
                         tools:visibility="visible" />
-                    <androidx.constraintlayout.widget.ConstraintLayout
+                    <LinearLayout
                         android:id="@+id/streamDetailsLayout"
-                        android:layout_width="wrap_content"
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp">
+                        android:layout_marginTop="2dp"
+                        android:baselineAligned="false"
+                        android:gravity="center_vertical|start"
+                        android:orientation="horizontal">
                         <TextView
                             android:id="@+id/playingLabel"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_marginEnd="2dp"
+                            android:layout_marginEnd="4dp"
                             android:importantForAccessibility="no"
+                            android:maxLines="1"
                             android:text="@string/player_playing"
                             android:textColor="#CCFFFFFF"
                             android:textSize="12sp"
                             android:visibility="gone"
-                            app:layout_constraintBottom_toBottomOf="parent"
-                            app:layout_constraintEnd_toStartOf="@id/category"
-                            app:layout_constraintHorizontal_chainStyle="packed"
-                            app:layout_constraintHorizontal_bias="0"
-                            app:layout_constraintStart_toStartOf="parent"
-                            app:layout_constraintTop_toTopOf="parent"
                             tools:visibility="visible" />
                         <TextView
                             android:id="@+id/category"
-                            android:layout_width="wrap_content"
+                            android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_marginStart="2dp"
                             android:layout_marginEnd="4dp"
+                            android:layout_weight="1"
                             android:ellipsize="end"
                             android:gravity="center_vertical|start"
+                            android:minWidth="0dp"
                             android:maxLines="1"
                             android:textColor="#CCFFFFFF"
                             android:textSize="12sp"
                             android:visibility="gone"
-                            app:layout_constrainedWidth="true"
-                            app:layout_constraintBottom_toBottomOf="parent"
-                            app:layout_constraintEnd_toStartOf="@id/viewersLayout"
-                            app:layout_constraintHorizontal_bias="0"
-                            app:layout_constraintStart_toEndOf="@id/playingLabel"
-                            app:layout_constraintTop_toTopOf="parent"
                             tools:text="Just Chatting"
                             tools:visibility="visible" />
                         <LinearLayout
@@ -124,22 +120,16 @@
                             android:gravity="center_vertical|start"
                             android:orientation="horizontal"
                             android:visibility="gone"
-                            app:layout_constraintBottom_toBottomOf="parent"
-                            app:layout_constraintEnd_toEndOf="parent"
-                            app:layout_constraintHorizontal_bias="0"
-                            app:layout_constraintStart_toEndOf="@id/category"
-                            app:layout_constraintTop_toTopOf="parent"
                             tools:visibility="visible">
                             <TextView
                                 android:id="@+id/viewersText"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:ellipsize="end"
                                 android:maxLines="1"
                                 android:textColor="@android:color/white"
                                 tools:text="for 12,345 viewers" />
                         </LinearLayout>
-                    </androidx.constraintlayout.widget.ConstraintLayout>
+                    </LinearLayout>
                 </LinearLayout>
             </LinearLayout>
         </LinearLayout>

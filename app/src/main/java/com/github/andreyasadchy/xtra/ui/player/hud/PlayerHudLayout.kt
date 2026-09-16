@@ -11,6 +11,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewConfiguration
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -947,9 +948,38 @@ class PlayerHudLayout @JvmOverloads constructor(
             television = context.isTelevision(),
             televisionEdgePadding = resources.getDimension(R.dimen.tv_safe_horizontal),
         ).metadataWidthBudget(safe, orientation, profile, availability)
-            .coerceAtLeast(80f * density)
-        val avatarWidth = findViewById<View>(R.id.channelAvatar)?.layoutParams?.width?.toFloat() ?: 40f * density
-        val textWidth = (compositionWidth - avatarWidth - 10f * density).coerceAtLeast(40f * density).roundToInt()
+            .coerceAtMost(safe.width)
+            .coerceAtLeast(1f)
+        val avatar = findViewById<View>(R.id.channelAvatar)
+        val avatarParams = avatar?.layoutParams as? ViewGroup.MarginLayoutParams
+        val avatarWidth = if (avatar?.visibility == View.GONE) {
+            0f
+        } else {
+            (avatarParams?.width ?: (40f * density).roundToInt()).toFloat() +
+                (avatarParams?.rightMargin ?: (10f * density).roundToInt())
+        }
+        val textWidth = (compositionWidth - avatarWidth).coerceAtLeast(40f * density).roundToInt()
+
+        // Give the metadata composition one deterministic width. The details
+        // row below is a weighted LinearLayout, so its category is the only
+        // field allowed to give up space; the viewer target can never be
+        // measured on top of the "Playing" label.
+        findViewById<LinearLayout>(R.id.topLeftLayout)?.updateLayoutParams<ViewGroup.LayoutParams> {
+            width = compositionWidth.roundToInt().coerceAtLeast(1)
+        }
+        findViewById<LinearLayout>(R.id.infoLayout)?.updateLayoutParams<LinearLayout.LayoutParams> {
+            width = 0
+            weight = 1f
+        }
+        findViewById<LinearLayout>(R.id.titleAndViewersLayout)?.updateLayoutParams<LinearLayout.LayoutParams> {
+            width = ViewGroup.LayoutParams.MATCH_PARENT
+            weight = 0f
+        }
+        findViewById<LinearLayout>(R.id.streamDetailsLayout)?.updateLayoutParams<LinearLayout.LayoutParams> {
+            width = ViewGroup.LayoutParams.MATCH_PARENT
+            weight = 0f
+        }
+
         listOf(R.id.channel, R.id.title, R.id.category).forEach { id ->
             findViewById<TextView>(id)?.let { textView ->
                 if (textView.maxWidth != textWidth) textView.maxWidth = textWidth

@@ -63,8 +63,8 @@ class HudLayoutEngine(
         profile: HudProfile,
         availability: Set<HudElementId>,
     ): Float {
-        val maxWidth = 420f * density
-        if (profile.mode != HudProfileMode.DEFAULT) return maxWidth
+        val maxWidth = (if (orientation == HudOrientation.PORTRAIT) 280f else 420f) * density
+        if (profile.mode != HudProfileMode.DEFAULT) return maxWidth.coerceAtMost(safeRect.width)
 
         val compact = safeRect.height < 260f * density
         val edge = if (television) televisionEdgePadding else HudDefaultLayout.NORMAL_EDGE_PADDING * density
@@ -89,7 +89,7 @@ class HudLayoutEngine(
         }.toFloat() + (topEnd.size.coerceAtLeast(1) - 1) * gap
         return maxWidth.coerceAtMost(
             (safeRect.width - 2f * edge - topEndWidth - gap).coerceAtLeast(0f),
-        )
+        ).coerceAtMost(safeRect.width)
     }
 
     fun resolve(
@@ -102,6 +102,22 @@ class HudLayoutEngine(
     ): List<ResolvedHudElement> {
         val safe = safeRect
         val compact = safe.height < 260f * density
+        val globalScale = profile.globalScale.takeIf(Float::isFinite)?.coerceIn(0.85f, 1.30f) ?: 1f
+        val compactTransportVisualHeight = if (compact) {
+            listOf(
+                HudElementId.SEEK_BACK,
+                HudElementId.PLAY_PAUSE,
+                HudElementId.SEEK_FORWARD,
+            ).filter { it in availability }
+                .maxOfOrNull { id ->
+                    val spec = HudElementRegistry.get(id)
+                    spec.visualSize(true).height * density * globalScale *
+                        spec.clampScale(profile.placements[id]?.scale ?: 1f)
+                }
+                ?: 0f
+        } else {
+            0f
+        }
         val measuredSizes = measuredVisualSizes.withMetadataFit(
             safeRect = safe,
             orientation = orientation,
@@ -134,7 +150,6 @@ class HudLayoutEngine(
             val placement = resolvedPlacements[id] ?: return@mapNotNull null
             if (!placement.enabled || id !in availability) return@mapNotNull null
             val elementScale = spec.clampScale(placement.scale)
-            val globalScale = profile.globalScale.takeIf(Float::isFinite)?.coerceIn(0.85f, 1.30f) ?: 1f
             val measuredSize = if (id == HudElementId.STREAM_INFO || id == HudElementId.TIMELINE) {
                 measuredSizes[id] ?: spec.visualSize(compact).let { HudSize(it.width * density, it.height * density) }
             } else {
@@ -152,7 +167,19 @@ class HudLayoutEngine(
                 if (scaledBaseSize.height > 0f) safe.height / scaledBaseSize.height else 1f,
                 1f,
             ).minOrNull()?.coerceAtMost(1f) ?: 1f
-            val effectiveScale = rawScale * viewportFitScale
+            val compactMetadataFitScale = if (compact && id == HudElementId.STREAM_INFO) {
+                minOf(
+                    1f,
+                    ((safe.centerY - compactTransportVisualHeight / 2f -
+                        HudDefaultLayout.SPACING * density -
+                        (safe.top + HudDefaultLayout.COMPACT_VERTICAL_PADDING * density))
+                        .coerceAtLeast(0f) /
+                        (measuredSize.height * rawScale).coerceAtLeast(1f)),
+                )
+            } else {
+                1f
+            }
+            val effectiveScale = rawScale * minOf(viewportFitScale, compactMetadataFitScale)
             val visualSize = HudSize(
                 baseSize.width * effectiveScale,
                 baseSize.height * effectiveScale,
@@ -190,11 +217,11 @@ class HudLayoutEngine(
         val width = metadata.width.coerceAtMost(
             metadataWidthBudget(safeRect, orientation, profile, availability),
         )
-        val height = if (safeRect.height < 260f * density) {
-            metadata.height.coerceAtMost(46f * density)
-        } else {
-            metadata.height
-        }
+        // A two-line title plus the details row is taller than the compact
+        // avatar. Never force the composition into a smaller frame: doing so
+        // clips the details row (including the viewer count) inside the XML
+        // hierarchy before the frame can position it.
+        val height = metadata.height
         return if (width == metadata.width && height == metadata.height) {
             this
         } else {
