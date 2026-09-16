@@ -300,9 +300,16 @@ class ChatMessageTextViewTest {
         val releases = (0 until 24).associate { index ->
             "spam-$index" to CompletableDeferred<ChatImageHandle?>()
         }
-        val repository = ChatAssetRepository(scope, ChatAssetLoader { key ->
-            releases[key.value]?.await() ?: ChatImageHandle { SolidDrawable(Color.RED) }
-        })
+        val repository = ChatAssetRepository(
+            scope = scope,
+            loader = ChatAssetLoader { key ->
+                releases[key.value]?.await() ?: ChatImageHandle { SolidDrawable(Color.RED) }
+            },
+            // This test controls each deferred independently. Let every candidate reach the
+            // loader so the partial-release assertions do not depend on semaphore acquisition
+            // order in the bounded production repository.
+            maxConcurrentLoads = releases.size,
+        )
         val attached = attachView(repository)
         val view = attached.view
         val oldSpec = ChatAssetSpec(ChatAssetKey("old-emote"), 16, 16, 24)
