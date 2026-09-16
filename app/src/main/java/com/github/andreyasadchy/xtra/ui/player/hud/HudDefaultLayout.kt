@@ -4,6 +4,7 @@ object HudDefaultLayout {
     const val NORMAL_EDGE_PADDING = 12f
     const val TV_EDGE_PADDING = 48f
     const val SPACING = 8f
+    const val COMPACT_VERTICAL_PADDING = 8f
     const val TRANSPORT_GAP = 20f
     const val COMPACT_TRANSPORT_GAP = 12f
 
@@ -89,7 +90,10 @@ object HudDefaultLayout {
         val compact = safeRect.height < 260f * density
         val edge = if (television) televisionEdgePadding else NORMAL_EDGE_PADDING * density
         val edgePadding = edge.coerceAtMost(safeRect.width / 2f)
-        val inner = safeRect.inset(edgePadding, if (compact) 8f * density else edgePadding)
+        val inner = safeRect.inset(
+            edgePadding,
+            if (compact) COMPACT_VERTICAL_PADDING * density else edgePadding,
+        )
         val gap = SPACING * density
         val placements = mutableMapOf<HudElementId, HudPlacement>()
         val globalScale = profile.globalScale.takeIf(Float::isFinite)?.coerceIn(0.85f, 1.30f) ?: 1f

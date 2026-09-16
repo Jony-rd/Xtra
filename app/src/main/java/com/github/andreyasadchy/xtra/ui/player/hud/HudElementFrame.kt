@@ -30,6 +30,8 @@ class HudElementFrame @JvmOverloads constructor(
     private data class PresentationMetrics(
         val textSize: Float?,
         val maxWidth: Int?,
+        val layoutWidth: Int?,
+        val layoutHeight: Int?,
         val padding: IntArray,
         val margin: IntArray?,
         val iconSize: Int?,
@@ -301,6 +303,8 @@ class HudElementFrame @JvmOverloads constructor(
             baselineMetrics[view] = PresentationMetrics(
                 textSize = (view as? TextView)?.textSize,
                 maxWidth = (view as? TextView)?.maxWidth,
+                layoutWidth = view.layoutParams?.width,
+                layoutHeight = view.layoutParams?.height,
                 padding = intArrayOf(view.paddingLeft, view.paddingTop, view.paddingRight, view.paddingBottom),
                 margin = margins,
                 iconSize = (view as? MaterialButton)?.iconSize,
@@ -318,6 +322,11 @@ class HudElementFrame @JvmOverloads constructor(
             (view as? TextView)?.let { text ->
                 metrics.textSize?.let { text.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, it) }
                 metrics.maxWidth?.let { text.maxWidth = it }
+            }
+            view.layoutParams?.let { params ->
+                metrics.layoutWidth?.let { params.width = it }
+                metrics.layoutHeight?.let { params.height = it }
+                view.layoutParams = params
             }
             view.setPadding(
                 metrics.padding[0],
@@ -357,6 +366,8 @@ class HudElementFrame @JvmOverloads constructor(
         return PresentationMetrics(
             textSize = (view as? TextView)?.textSize,
             maxWidth = (view as? TextView)?.maxWidth,
+            layoutWidth = view.layoutParams?.width,
+            layoutHeight = view.layoutParams?.height,
             padding = intArrayOf(view.paddingLeft, view.paddingTop, view.paddingRight, view.paddingBottom),
             margin = margins,
             iconSize = (view as? MaterialButton)?.iconSize,
