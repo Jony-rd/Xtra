@@ -79,11 +79,15 @@ class XtraApp : Application(), SingletonImageLoader.Factory {
         MainLooperStallWatchdog.start()
         xtraModule = XtraModule(this)
         // Chat notification bubbles are temporarily disabled. Clear state left by older builds.
-        xtraModule.chatBubbleManager.retire()
+        applicationScope.launch(Dispatchers.IO) {
+            xtraModule.chatBubbleManager.retire()
+        }
         // Restore persisted Live Update notifications as soon as the process starts. The
         // managers only consume existing state here; they do not create a new network source.
-        xtraModule.predictionLiveUpdateManager
-        xtraModule.dropsLiveUpdateManager
+        applicationScope.launch(Dispatchers.IO) {
+            xtraModule.predictionLiveUpdateManager
+            xtraModule.dropsLiveUpdateManager
+        }
         reconcilePendingAccountScopedState()
         xtraModule.authSessionMaintainer.start(applicationScope)
         applicationScope.launch {
@@ -143,10 +147,9 @@ class XtraApp : Application(), SingletonImageLoader.Factory {
     }
 
     private fun reconcilePendingAccountScopedState() {
-        val sessionStore = AuthSessionStore(prefs(), tokenPrefs())
-        if (sessionStore.pendingAccountCleanups().isEmpty()) return
         applicationScope.launch(Dispatchers.IO) {
             accountCleanupMutex.withLock {
+                val sessionStore = AuthSessionStore(prefs(), tokenPrefs())
                 val pending = sessionStore.pendingAccountCleanups()
                 if (pending.isEmpty()) return@withLock
                 val globalCleanupSucceeded = runCatching {

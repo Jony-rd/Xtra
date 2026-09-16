@@ -40,6 +40,7 @@ import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.chromium.net.CronetEngine
@@ -54,17 +55,24 @@ import kotlin.time.Instant
 
 class MainViewModel(
     private val applicationContext: Context,
-    private val graphQLRepository: GraphQLRepository,
-    private val helixRepository: HelixRepository,
-    private val playerRepository: PlayerRepository,
-    private val playbackPersistence: PlaybackPersistence,
-    private val offlineVideosRepository: OfflineVideosRepository,
-    private val localChannelFollowsRepository: LocalChannelFollowsRepository,
+    graphQLRepositoryProvider: () -> GraphQLRepository,
+    helixRepositoryProvider: () -> HelixRepository,
+    playerRepositoryProvider: () -> PlayerRepository,
+    playbackPersistenceProvider: () -> PlaybackPersistence,
+    offlineVideosRepositoryProvider: () -> OfflineVideosRepository,
+    localChannelFollowsRepositoryProvider: () -> LocalChannelFollowsRepository,
     private val httpEngine: Lazy<HttpEngine?>,
     private val cronetEngine: Lazy<CronetEngine?>,
     private val cronetExecutor: Lazy<ExecutorService>,
     private val okHttpClient: Lazy<OkHttpClient>,
 ) : ViewModel() {
+
+    private val graphQLRepository by lazy(graphQLRepositoryProvider)
+    private val helixRepository by lazy(helixRepositoryProvider)
+    private val playerRepository by lazy(playerRepositoryProvider)
+    private val playbackPersistence by lazy(playbackPersistenceProvider)
+    private val offlineVideosRepository by lazy(offlineVideosRepositoryProvider)
+    private val localChannelFollowsRepository by lazy(localChannelFollowsRepositoryProvider)
 
     val checkNetworkStatus = MutableStateFlow(false)
     val checkCellularStatus = MutableStateFlow(false)
@@ -101,7 +109,9 @@ class MainViewModel(
     }
 
     suspend fun getWaitingDownloads(): List<OfflineVideo> {
-        return offlineVideosRepository.getWaitingDownloads()
+        return withContext(Dispatchers.IO) {
+            offlineVideosRepository.getWaitingDownloads()
+        }
     }
 
     fun findVideoUrl(networkLibrary: String?, streamId: String?, channelLogin: String?, streamCreatedAt: String?) {
@@ -642,31 +652,33 @@ class MainViewModel(
                     val networkCapabilities = connectivityManager.getNetworkCapabilities(connectivityManager.activeNetwork)
                     networkCapabilities != null && networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
                 } else false
-                val videoId = offlineVideosRepository.save(
-                    OfflineVideo(
-                        name = title,
-                        channelId = channelId,
-                        channelLogin = channelLogin,
-                        channelName = channelName,
-                        channelLogo = downloadedLogo,
-                        thumbnail = downloadedThumbnail,
-                        gameId = gameId,
-                        gameSlug = gameSlug,
-                        gameName = gameName,
-                        uploadDate = createdAt?.let { Instant.parseOrNull(it)?.toEpochMilliseconds()?.takeIf { ms -> ms > 0 } },
-                        downloadDate = System.currentTimeMillis(),
-                        downloadPath = downloadPath,
-                        status = if (waitForWifi) {
-                            OfflineVideo.STATUS_WAITING_FOR_WIFI
-                        } else {
-                            OfflineVideo.STATUS_PENDING
-                        },
-                        quality = if (!quality.contains("Audio", true)) quality else "audio",
-                        downloadChat = downloadChat,
-                        downloadChatEmotes = downloadChatEmotes,
-                        live = true
+                val videoId = withContext(Dispatchers.IO) {
+                    offlineVideosRepository.save(
+                        OfflineVideo(
+                            name = title,
+                            channelId = channelId,
+                            channelLogin = channelLogin,
+                            channelName = channelName,
+                            channelLogo = downloadedLogo,
+                            thumbnail = downloadedThumbnail,
+                            gameId = gameId,
+                            gameSlug = gameSlug,
+                            gameName = gameName,
+                            uploadDate = createdAt?.let { Instant.parseOrNull(it)?.toEpochMilliseconds()?.takeIf { ms -> ms > 0 } },
+                            downloadDate = System.currentTimeMillis(),
+                            downloadPath = downloadPath,
+                            status = if (waitForWifi) {
+                                OfflineVideo.STATUS_WAITING_FOR_WIFI
+                            } else {
+                                OfflineVideo.STATUS_PENDING
+                            },
+                            quality = if (!quality.contains("Audio", true)) quality else "audio",
+                            downloadChat = downloadChat,
+                            downloadChatEmotes = downloadChatEmotes,
+                            live = true
+                        )
                     )
-                ).toInt()
+                }.toInt()
                 if (!waitForWifi) {
                     startDownloadService.emit(Pair(videoId, true))
                 }
@@ -817,36 +829,38 @@ class MainViewModel(
                 val networkCapabilities = connectivityManager.getNetworkCapabilities(connectivityManager.activeNetwork)
                 networkCapabilities != null && networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
             } else false
-            val videoId = offlineVideosRepository.save(
-                OfflineVideo(
-                    sourceUrl = url,
-                    name = title,
-                    channelId = channelId,
-                    channelLogin = channelLogin,
-                    channelName = channelName,
-                    channelLogo = downloadedLogo,
-                    thumbnail = downloadedThumbnail,
-                    gameId = gameId,
-                    gameSlug = gameSlug,
-                    gameName = gameName,
-                    uploadDate = createdAt?.let { Instant.parseOrNull(it)?.toEpochMilliseconds()?.takeIf { ms -> ms > 0 } },
-                    downloadDate = System.currentTimeMillis(),
-                    downloadPath = downloadPath,
-                    fromTime = from,
-                    toTime = to,
-                    status = if (waitForWifi) {
-                        OfflineVideo.STATUS_WAITING_FOR_WIFI
-                    } else {
-                        OfflineVideo.STATUS_PENDING
-                    },
-                    type = type,
-                    videoId = id,
-                    quality = if (!quality.contains("Audio", true)) quality else "audio",
-                    downloadChat = downloadChat,
-                    downloadChatEmotes = downloadChatEmotes,
-                    playlistToFile = playlistToFile
+            val videoId = withContext(Dispatchers.IO) {
+                offlineVideosRepository.save(
+                    OfflineVideo(
+                        sourceUrl = url,
+                        name = title,
+                        channelId = channelId,
+                        channelLogin = channelLogin,
+                        channelName = channelName,
+                        channelLogo = downloadedLogo,
+                        thumbnail = downloadedThumbnail,
+                        gameId = gameId,
+                        gameSlug = gameSlug,
+                        gameName = gameName,
+                        uploadDate = createdAt?.let { Instant.parseOrNull(it)?.toEpochMilliseconds()?.takeIf { ms -> ms > 0 } },
+                        downloadDate = System.currentTimeMillis(),
+                        downloadPath = downloadPath,
+                        fromTime = from,
+                        toTime = to,
+                        status = if (waitForWifi) {
+                            OfflineVideo.STATUS_WAITING_FOR_WIFI
+                        } else {
+                            OfflineVideo.STATUS_PENDING
+                        },
+                        type = type,
+                        videoId = id,
+                        quality = if (!quality.contains("Audio", true)) quality else "audio",
+                        downloadChat = downloadChat,
+                        downloadChatEmotes = downloadChatEmotes,
+                        playlistToFile = playlistToFile
+                    )
                 )
-            ).toInt()
+            }.toInt()
             if (!waitForWifi) {
                 startDownloadService.emit(Pair(videoId, false))
             }
@@ -996,36 +1010,38 @@ class MainViewModel(
                 val networkCapabilities = connectivityManager.getNetworkCapabilities(connectivityManager.activeNetwork)
                 networkCapabilities != null && networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
             } else false
-            val videoId = offlineVideosRepository.save(
-                OfflineVideo(
-                    sourceUrl = url,
-                    sourceStartPosition = videoOffsetSeconds?.toLong()?.times(1000L),
-                    name = title,
-                    channelId = channelId,
-                    channelLogin = channelLogin,
-                    channelName = channelName,
-                    channelLogo = downloadedLogo,
-                    thumbnail = downloadedThumbnail,
-                    gameId = gameId,
-                    gameSlug = gameSlug,
-                    gameName = gameName,
-                    duration = durationSeconds?.times(1000L),
-                    uploadDate = createdAt?.let { Instant.parseOrNull(it)?.toEpochMilliseconds()?.takeIf { ms -> ms > 0 } },
-                    downloadDate = System.currentTimeMillis(),
-                    downloadPath = downloadPath,
-                    status = if (waitForWifi) {
-                        OfflineVideo.STATUS_WAITING_FOR_WIFI
-                    } else {
-                        OfflineVideo.STATUS_PENDING
-                    },
-                    videoId = videoId,
-                    videoCreatedAt = videoCreatedAt,
-                    clipId = clipId,
-                    quality = if (!quality.contains("Audio", true)) quality else "audio",
-                    downloadChat = downloadChat,
-                    downloadChatEmotes = downloadChatEmotes
+            val videoId = withContext(Dispatchers.IO) {
+                offlineVideosRepository.save(
+                    OfflineVideo(
+                        sourceUrl = url,
+                        sourceStartPosition = videoOffsetSeconds?.toLong()?.times(1000L),
+                        name = title,
+                        channelId = channelId,
+                        channelLogin = channelLogin,
+                        channelName = channelName,
+                        channelLogo = downloadedLogo,
+                        thumbnail = downloadedThumbnail,
+                        gameId = gameId,
+                        gameSlug = gameSlug,
+                        gameName = gameName,
+                        duration = durationSeconds?.times(1000L),
+                        uploadDate = createdAt?.let { Instant.parseOrNull(it)?.toEpochMilliseconds()?.takeIf { ms -> ms > 0 } },
+                        downloadDate = System.currentTimeMillis(),
+                        downloadPath = downloadPath,
+                        status = if (waitForWifi) {
+                            OfflineVideo.STATUS_WAITING_FOR_WIFI
+                        } else {
+                            OfflineVideo.STATUS_PENDING
+                        },
+                        videoId = videoId,
+                        videoCreatedAt = videoCreatedAt,
+                        clipId = clipId,
+                        quality = if (!quality.contains("Audio", true)) quality else "audio",
+                        downloadChat = downloadChat,
+                        downloadChatEmotes = downloadChatEmotes
+                    )
                 )
-            ).toInt()
+            }.toInt()
             if (!waitForWifi) {
                 startDownloadService.emit(Pair(videoId, false))
             }
@@ -1043,7 +1059,19 @@ class MainViewModel(
             initializer {
                 val application = (this[APPLICATION_KEY] as XtraApp)
                 val xtraModule = application.xtraModule
-                MainViewModel(application.applicationContext, xtraModule.graphQLRepository, xtraModule.helixRepository, xtraModule.playerRepository, xtraModule.playbackPersistence, xtraModule.offlineVideosRepository, xtraModule.localChannelFollowsRepository, xtraModule.httpEngine, xtraModule.cronetEngine, xtraModule.cronetExecutor, xtraModule.okHttpClient)
+                MainViewModel(
+                    application.applicationContext,
+                    xtraModule::graphQLRepository,
+                    xtraModule::helixRepository,
+                    xtraModule::playerRepository,
+                    xtraModule::playbackPersistence,
+                    xtraModule::offlineVideosRepository,
+                    xtraModule::localChannelFollowsRepository,
+                    xtraModule.httpEngine,
+                    xtraModule.cronetEngine,
+                    xtraModule.cronetExecutor,
+                    xtraModule.okHttpClient,
+                )
             }
         }
     }
