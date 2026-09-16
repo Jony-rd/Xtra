@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.util.AttributeSet
+import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -41,8 +42,9 @@ class PlayerHudLayout @JvmOverloads constructor(
     private var editorDragging = false
     private var compactMetricsApplied: Boolean? = null
     private var editorOnSelected: ((HudElementId) -> Unit)? = null
+    private var editorOnDragStarted: ((HudElementId) -> Unit)? = null
     private var editorOnMoved: ((HudElementId, HudPlacement) -> Unit)? = null
-    private var editorOnDropped: ((HudElementId, Boolean) -> Unit)? = null
+    private var editorOnDropped: ((HudElementId, Boolean, HudPlacement?) -> Unit)? = null
 
     init {
         clipChildren = false
@@ -138,11 +140,13 @@ class PlayerHudLayout @JvmOverloads constructor(
     fun setEditing(
         enabled: Boolean,
         onSelected: ((HudElementId) -> Unit)? = null,
+        onDragStarted: ((HudElementId) -> Unit)? = null,
         onMoved: ((HudElementId, HudPlacement) -> Unit)? = null,
-        onDropped: ((HudElementId, Boolean) -> Unit)? = null,
+        onDropped: ((HudElementId, Boolean, HudPlacement?) -> Unit)? = null,
     ) {
         editing = enabled
         editorOnSelected = onSelected
+        editorOnDragStarted = onDragStarted
         editorOnMoved = onMoved
         editorOnDropped = onDropped
         availability = if (enabled) HudElementId.entries.toSet() else runtimeAvailability()
@@ -192,10 +196,18 @@ class PlayerHudLayout @JvmOverloads constructor(
         return false
     }
 
-    fun snapEditorPlacement(id: HudElementId): HudPlacement {
-        val current = profile.placements[id] ?: defaultPlacement(id)
+    fun snapEditorPlacement(id: HudElementId): HudPlacement = editorSnapPreview(id).snapped
+
+    /**
+     * Computes prospective guides without changing the live placement. The
+     * editor uses this while the finger is down and only commits [snapped] on
+     * release.
+     */
+    fun editorSnapPreview(id: HudElementId, requested: HudPlacement? = null): HudEditorSnapPreview {
         val safe = safeRect(width.toFloat(), height.toFloat())
-        val selected = resolved[id] ?: return current
+        val raw = clampEditorPlacement(id, requested ?: profile.placements[id] ?: defaultPlacement(id))
+        val elements = editorElements(editorProfileWith(id, raw))
+        val selected = elements.firstOrNull { it.id == id } ?: return HudEditorSnapPreview(raw, raw, emptyList())
         val spec = HudElementRegistry.get(id)
         val currentX = when (spec.pivot) {
             HudPivot.TOP_START -> if (layoutDirection == View.LAYOUT_DIRECTION_RTL) selected.visualRect.right else selected.visualRect.left
@@ -206,31 +218,106 @@ class PlayerHudLayout @JvmOverloads constructor(
             HudPivot.BOTTOM_CENTER -> selected.visualRect.bottom
             HudPivot.CENTER -> selected.visualRect.centerY
         }
-        val guideDistance = 8f * density
+        val siblingElements = elements.filter { it.id != id }
         val xGuides = buildList {
-            add(safe.left)
-            add(safe.centerX)
-            add(safe.right)
-            resolved.values.filter { it.id != id }.forEach { add(it.visualRect.centerX) }
+            add(HudEditorGuide(HudEditorGuideAxis.VERTICAL, safe.left, HudEditorGuideKind.SAFE_EDGE))
+            add(HudEditorGuide(HudEditorGuideAxis.VERTICAL, safe.centerX, HudEditorGuideKind.SAFE_CENTER))
+            add(HudEditorGuide(HudEditorGuideAxis.VERTICAL, safe.right, HudEditorGuideKind.SAFE_EDGE))
+            siblingElements.forEach { sibling ->
+                add(HudEditorGuide(HudEditorGuideAxis.VERTICAL, sibling.visualRect.centerX, HudEditorGuideKind.SIBLING_CENTER, sibling.id))
+            }
         }
         val yGuides = buildList {
-            add(safe.top)
-            add(safe.centerY)
-            add(safe.bottom)
-            add(safe.bottom - 48f * density)
-            resolved.values.filter { it.id != id }.forEach { add(it.visualRect.centerY) }
+            add(HudEditorGuide(HudEditorGuideAxis.HORIZONTAL, safe.top, HudEditorGuideKind.SAFE_EDGE))
+            add(HudEditorGuide(HudEditorGuideAxis.HORIZONTAL, safe.centerY, HudEditorGuideKind.SAFE_CENTER))
+            add(HudEditorGuide(HudEditorGuideAxis.HORIZONTAL, safe.bottom, HudEditorGuideKind.SAFE_EDGE))
+            add(HudEditorGuide(HudEditorGuideAxis.HORIZONTAL, safe.bottom - 48f * density, HudEditorGuideKind.CONTROL_BASELINE))
+            siblingElements.forEach { sibling ->
+                add(HudEditorGuide(HudEditorGuideAxis.HORIZONTAL, sibling.visualRect.centerY, HudEditorGuideKind.SIBLING_CENTER, sibling.id))
+                if (sibling.visualRect.top <= safe.top + 96f * density) {
+                    add(HudEditorGuide(HudEditorGuideAxis.HORIZONTAL, sibling.visualRect.top, HudEditorGuideKind.CONTROL_BASELINE, sibling.id))
+                }
+                if (sibling.visualRect.bottom >= safe.bottom - 96f * density) {
+                    add(HudEditorGuide(HudEditorGuideAxis.HORIZONTAL, sibling.visualRect.bottom, HudEditorGuideKind.CONTROL_BASELINE, sibling.id))
+                }
+            }
         }
-        val snappedX = xGuides.minByOrNull { abs(it - currentX) }
-            ?.takeIf { abs(it - currentX) <= guideDistance }
-            ?: currentX
-        val snappedY = yGuides.minByOrNull { abs(it - currentY) }
-            ?.takeIf { abs(it - currentY) <= guideDistance }
-            ?: currentY
-        val next = current.copy(
-            x = ((snappedX - safe.left) / safe.width.coerceAtLeast(1f)).coerceIn(0f, 1f),
-            y = ((snappedY - safe.top) / safe.height.coerceAtLeast(1f)).coerceIn(0f, 1f),
+        val guideDistance = 8f * density
+        val vertical = nearestGuide(currentX, xGuides, guideDistance)
+        val horizontal = nearestGuide(currentY, yGuides, guideDistance)
+        val snapped = raw.copy(
+            x = ((vertical?.coordinate ?: currentX) - safe.left) / safe.width.coerceAtLeast(1f),
+            y = ((horizontal?.coordinate ?: currentY) - safe.top) / safe.height.coerceAtLeast(1f),
+        ).let { clampEditorPlacement(id, it) }
+        return HudEditorSnapPreview(
+            raw = raw,
+            snapped = snapped,
+            guides = listOfNotNull(vertical, horizontal),
         )
-        return clampEditorPlacement(id, next)
+    }
+
+    /**
+     * Resolves a release while preserving the user's intended pivot. The
+     * selected element is authoritative; only implicit default controls in
+     * the collided row may be repacked around it.
+     */
+    fun resolveEditorDrop(
+        id: HudElementId,
+        dragStart: HudPlacement,
+        requested: HudPlacement,
+    ): HudEditorDropResult {
+        val raw = clampEditorPlacement(id, requested)
+        val rawProfile = editorProfileWith(id, raw)
+        val rawBlockers = editorCollisionIds(id, raw, rawProfile)
+        val snap = editorSnapPreview(id, raw)
+        if (snap.snapped != raw) {
+            val snappedProfile = editorProfileWith(id, snap.snapped)
+            if (editorProfileIsLegal(snappedProfile, affectedIds = setOf(id))) {
+                return HudEditorDropResult(
+                    profile = snappedProfile,
+                    selectedPlacement = snap.snapped,
+                    movedElements = changedElements(profile, snappedProfile),
+                    kind = HudEditorDropKind.SNAPPED,
+                    guides = snap.guides,
+                    blockers = emptySet(),
+                    explanation = null,
+                )
+            }
+        }
+        if (rawBlockers.isEmpty() && editorProfileIsLegal(rawProfile, affectedIds = setOf(id))) {
+            return HudEditorDropResult(
+                profile = rawProfile,
+                selectedPlacement = raw,
+                movedElements = changedElements(profile, rawProfile),
+                kind = HudEditorDropKind.RAW,
+                guides = emptyList(),
+                blockers = emptySet(),
+                explanation = null,
+            )
+        }
+
+        val pushed = tryRelocateBlockers(id, raw, dragStart, rawBlockers)
+        if (pushed != null) {
+            return HudEditorDropResult(
+                profile = pushed.first,
+                selectedPlacement = raw,
+                movedElements = changedElements(profile, pushed.first),
+                kind = HudEditorDropKind.NUDGED,
+                guides = emptyList(),
+                blockers = rawBlockers,
+                explanation = "Placed ${elementLabel(id)}; moved ${pushed.second.joinToString { elementLabel(it) }}",
+            )
+        }
+
+        return HudEditorDropResult(
+            profile = null,
+            selectedPlacement = null,
+            movedElements = emptySet(),
+            kind = HudEditorDropKind.REJECTED,
+            guides = emptyList(),
+            blockers = rawBlockers,
+            explanation = "No legal position without moving ${elementLabel(id)} or a fixed control",
+        )
     }
 
     fun clampEditorPlacement(id: HudElementId, placement: HudPlacement): HudPlacement {
@@ -253,19 +340,317 @@ class PlayerHudLayout @JvmOverloads constructor(
         )
     }
 
-    fun editorDropHasCollision(id: HudElementId, placement: HudPlacement): Boolean {
-        val safe = safeRect(width.toFloat(), height.toFloat())
-        val candidateProfile = profile.copy(
+    private fun editorProfileWith(id: HudElementId, placement: HudPlacement): HudProfile =
+        profile.copy(
             mode = HudProfileMode.CUSTOM,
             placements = profile.placements + (id to placement),
         )
-        val interactive = resolve(safe, candidateProfile, HudElementId.entries.toSet())
-            .filter { HudElementRegistry.get(it.id).isInteractive }
-        val candidate = interactive
-            .associateBy { it.id }
-            .getValue(id)
-        return interactive
-            .any { it.id != id && it.hitRect.overlaps(candidate.hitRect, density * 4f) }
+
+    private fun editorElements(candidateProfile: HudProfile): List<ResolvedHudElement> {
+        val safe = safeRect(width.toFloat(), height.toFloat())
+        return resolve(safe, candidateProfile.copy(mode = HudProfileMode.CUSTOM), HudElementId.entries.toSet())
+    }
+
+    private fun editorProfileIsLegal(
+        candidateProfile: HudProfile,
+        selectedId: HudElementId? = null,
+        affectedIds: Set<HudElementId>? = null,
+    ): Boolean {
+        val safe = safeRect(width.toFloat(), height.toFloat())
+        val elements = editorElements(candidateProfile)
+        if (selectedId != null) {
+            val selected = elements.firstOrNull { it.id == selectedId } ?: return false
+            if (!selected.hitRect.isInside(safe)) return false
+            return editorCollisionIds(selectedId, selectedPlacement(selectedId, selected, candidateProfile), candidateProfile).isEmpty()
+        }
+        return elements.all { it.hitRect.isInside(safe) } &&
+            elements.withIndex().none { (index, element) ->
+                elements.drop(index + 1).any { other ->
+                    (affectedIds == null || element.id in affectedIds || other.id in affectedIds) &&
+                        element.hitRect.overlaps(other.hitRect)
+                }
+            }
+    }
+
+    private fun selectedPlacement(
+        id: HudElementId,
+        element: ResolvedHudElement,
+        candidateProfile: HudProfile,
+    ): HudPlacement {
+        val safe = safeRect(width.toFloat(), height.toFloat())
+        val spec = HudElementRegistry.get(id)
+        val x = when (spec.pivot) {
+            HudPivot.TOP_START -> if (layoutDirection == View.LAYOUT_DIRECTION_RTL) element.visualRect.right else element.visualRect.left
+            else -> element.visualRect.centerX
+        }
+        val y = when (spec.pivot) {
+            HudPivot.TOP_START -> element.visualRect.top
+            HudPivot.BOTTOM_CENTER -> element.visualRect.bottom
+            HudPivot.CENTER -> element.visualRect.centerY
+        }
+        return candidateProfile.placements[id] ?: HudPlacement(
+            enabled = true,
+            x = ((x - safe.left) / safe.width.coerceAtLeast(1f)).coerceIn(0f, 1f),
+            y = ((y - safe.top) / safe.height.coerceAtLeast(1f)).coerceIn(0f, 1f),
+            scale = 1f,
+        )
+    }
+
+    fun editorCollisionIds(
+        id: HudElementId,
+        placement: HudPlacement,
+        candidateProfile: HudProfile = editorProfileWith(id, placement),
+    ): Set<HudElementId> {
+        val elements = editorElements(candidateProfile)
+        val candidate = elements.firstOrNull { it.id == id } ?: return emptySet()
+        return elements
+            .asSequence()
+            .filter { it.id != id && it.hitRect.overlaps(candidate.hitRect) }
+            .mapTo(linkedSetOf()) { it.id }
+    }
+
+    private fun tryRelocateBlockers(
+        id: HudElementId,
+        selectedPlacement: HudPlacement,
+        dragStart: HudPlacement,
+        blockers: Set<HudElementId>,
+    ): Pair<HudProfile, Set<HudElementId>>? {
+        if (blockers.isEmpty()) return null
+        val base = editorProfileWith(id, selectedPlacement)
+        val baseElements = editorElements(base).associateBy { it.id }
+        val selected = baseElements[id] ?: return null
+        val eligible = blockers.filter { isMovableDefaultBlocker(it) }
+        if (eligible.size != blockers.size) return null
+        val safe = safeRect(width.toFloat(), height.toFloat())
+        val dx = (selectedPlacement.x - dragStart.x) * safe.width
+        val dy = (selectedPlacement.y - dragStart.y) * safe.height
+        val blockerSets = eligible
+            .groupBy { defaultLane(it) }
+            .filterKeys { it != null }
+            .toList()
+            .sortedBy { it.first }
+        for ((lane, blockerSet) in blockerSets) {
+            val semanticLane = lane!!
+            val horizontal = defaultLaneIsHorizontal(semanticLane)
+            val primaryMovement = if (horizontal) dx else dy
+            val firstDirection = pushDirection(
+                selected = selected,
+                blockers = blockerSet,
+                elements = baseElements,
+                horizontal = horizontal,
+                primaryMovement = primaryMovement,
+            )
+            for (direction in listOf(firstDirection, -firstDirection).distinct()) {
+                val candidate = expandBlockerChain(
+                    id = id,
+                    selected = selected,
+                    baseProfile = base,
+                    blockers = blockerSet,
+                    lane = semanticLane,
+                    horizontal = horizontal,
+                    direction = direction,
+                    safe = safe,
+                ) ?: continue
+                val affected = changedElements(profile, candidate.first)
+                if (editorProfileIsLegal(candidate.first, affectedIds = affected)) return candidate
+            }
+        }
+        return null
+    }
+
+    private fun pushDirection(
+        selected: ResolvedHudElement,
+        blockers: List<HudElementId>,
+        elements: Map<HudElementId, ResolvedHudElement>,
+        horizontal: Boolean,
+        primaryMovement: Float,
+    ): Int {
+        if (abs(primaryMovement) > 0.5f) return if (primaryMovement > 0f) -1 else 1
+        val selectedCenter = if (horizontal) selected.hitRect.centerX else selected.hitRect.centerY
+        val blockerCenter = blockers.mapNotNull { elements[it] }
+            .map { if (horizontal) it.hitRect.centerX else it.hitRect.centerY }
+            .average()
+        return if (selectedCenter >= blockerCenter) -1 else 1
+    }
+
+    private fun expandBlockerChain(
+        id: HudElementId,
+        selected: ResolvedHudElement,
+        baseProfile: HudProfile,
+        blockers: List<HudElementId>,
+        lane: Int,
+        horizontal: Boolean,
+        direction: Int,
+        safe: HudRect,
+    ): Pair<HudProfile, Set<HudElementId>>? {
+        val chain = blockers.toCollection(linkedSetOf())
+        repeat(HudElementId.entries.size) {
+            val candidate = translateBlockerLane(
+                selected = selected,
+                baseProfile = baseProfile,
+                blockers = chain.toList(),
+                horizontal = horizontal,
+                direction = direction,
+                safe = safe,
+            ) ?: return null
+            val candidateElements = editorElements(candidate.first).associateBy { it.id }
+            val moved = candidate.second
+            val next = candidateElements.values
+                .filter { element ->
+                    element.id != id &&
+                        element.id !in chain &&
+                        isMovableDefaultBlocker(element.id) &&
+                        defaultLane(element.id) == lane &&
+                        moved.any { movedId ->
+                            candidateElements[movedId]?.hitRect?.overlaps(element.hitRect) == true
+                        }
+                }
+                .map { it.id }
+            if (next.isEmpty()) return candidate
+            chain += next
+        }
+        return null
+    }
+
+    private fun translateBlockerLane(
+        selected: ResolvedHudElement,
+        baseProfile: HudProfile,
+        blockers: List<HudElementId>,
+        horizontal: Boolean,
+        direction: Int,
+        safe: HudRect,
+    ): Pair<HudProfile, Set<HudElementId>>? {
+        val baseElements = editorElements(baseProfile).associateBy { it.id }
+        val lane = blockers
+            .mapNotNull { baseElements[it] }
+            .sortedWith(
+                if (horizontal) compareBy<ResolvedHudElement> { it.hitRect.left }
+                else compareBy<ResolvedHudElement> { it.hitRect.top },
+            )
+        if (lane.isEmpty()) return null
+
+        val spacing = HudDefaultLayout.SPACING * density
+        val translation = if (horizontal) {
+            if (direction < 0) {
+                selected.hitRect.left - spacing - lane.maxOf { it.hitRect.right }
+            } else {
+                selected.hitRect.right + spacing - lane.minOf { it.hitRect.left }
+            }
+        } else if (direction < 0) {
+            selected.hitRect.top - spacing - lane.maxOf { it.hitRect.bottom }
+        } else {
+            selected.hitRect.bottom + spacing - lane.minOf { it.hitRect.top }
+        }
+        if (abs(translation) < 0.5f) return null
+
+        var nextProfile = baseProfile
+        val moved = linkedSetOf<HudElementId>()
+        lane.forEach { element ->
+            val currentPlacement = nextProfile.placements[element.id]
+                ?: placementFromResolved(element.id, element, nextProfile)
+            val nextPlacement = if (horizontal) {
+                currentPlacement.copy(x = currentPlacement.x + translation / safe.width.coerceAtLeast(1f))
+            } else {
+                currentPlacement.copy(y = currentPlacement.y + translation / safe.height.coerceAtLeast(1f))
+            }
+            if ((horizontal && nextPlacement.x !in 0f..1f) ||
+                (!horizontal && nextPlacement.y !in 0f..1f)
+            ) return null
+            nextProfile = nextProfile.copy(placements = nextProfile.placements + (element.id to nextPlacement))
+            moved += element.id
+        }
+        return nextProfile to moved
+    }
+
+    private fun placementFromResolved(
+        id: HudElementId,
+        element: ResolvedHudElement,
+        candidateProfile: HudProfile,
+    ): HudPlacement {
+        val safe = safeRect(width.toFloat(), height.toFloat())
+        val spec = HudElementRegistry.get(id)
+        val x = when (spec.pivot) {
+            HudPivot.TOP_START -> if (layoutDirection == View.LAYOUT_DIRECTION_RTL) element.visualRect.right else element.visualRect.left
+            else -> element.visualRect.centerX
+        }
+        val y = when (spec.pivot) {
+            HudPivot.TOP_START -> element.visualRect.top
+            HudPivot.BOTTOM_CENTER -> element.visualRect.bottom
+            HudPivot.CENTER -> element.visualRect.centerY
+        }
+        return HudPlacement(
+            enabled = true,
+            x = ((x - safe.left) / safe.width.coerceAtLeast(1f)).coerceIn(0f, 1f),
+            y = ((y - safe.top) / safe.height.coerceAtLeast(1f)).coerceIn(0f, 1f),
+            scale = candidateProfile.placements[id]?.scale ?: 1f,
+        )
+    }
+
+    private fun elementLabel(id: HudElementId): String = id.name
+        .replace('_', ' ')
+        .lowercase()
+        .replaceFirstChar(Char::uppercase)
+
+    private fun isMovableDefaultBlocker(id: HudElementId): Boolean =
+        id != HudElementId.STREAM_INFO &&
+            id != HudElementId.TIMELINE &&
+            id != HudElementId.SEEK_BACK &&
+            id != HudElementId.PLAY_PAUSE &&
+            id != HudElementId.SEEK_FORWARD &&
+            id !in profile.placements &&
+            HudElementRegistry.get(id).pivot == HudPivot.CENTER
+
+    private fun defaultLane(id: HudElementId): Int? {
+        val safeWidth = safeRect(width.toFloat(), height.toFloat()).width / density.coerceAtLeast(0.001f)
+        return when {
+            id == HudElementId.STREAM_INFO || id in HudDefaultLayout.topEndElements(orientation, safeWidth) -> 0
+            id == HudElementId.SEEK_BACK ||
+                id == HudElementId.PLAY_PAUSE ||
+                id == HudElementId.SEEK_FORWARD -> 1
+            id == HudElementId.VOLUME ||
+                id == HudElementId.CLIP ||
+                id == HudElementId.MORE ||
+                id == HudElementId.CAPTIONS ||
+                id == HudElementId.CHAT ||
+                id == HudElementId.FULLSCREEN -> 2
+            id == HudElementId.TIMELINE -> 3
+            else -> null
+        }
+    }
+
+    private fun defaultLaneIsHorizontal(lane: Int): Boolean = when (lane) {
+        0, 1, 2 -> true
+        else -> false
+    }
+
+    private fun changedElements(before: HudProfile, after: HudProfile): Set<HudElementId> =
+        HudElementId.entries.filterTo(linkedSetOf()) { id ->
+            before.placements[id] != after.placements[id]
+        }
+
+    private fun nearestGuide(
+        coordinate: Float,
+        guides: List<HudEditorGuide>,
+        threshold: Float,
+    ): HudEditorGuide? {
+        fun priority(guide: HudEditorGuide): Int = when (guide.kind) {
+            HudEditorGuideKind.SAFE_CENTER -> 0
+            HudEditorGuideKind.SAFE_EDGE -> 1
+            HudEditorGuideKind.SIBLING_CENTER -> 2
+            HudEditorGuideKind.CONTROL_BASELINE -> 3
+        }
+        return guides.minWithOrNull(
+            compareBy<HudEditorGuide>(
+                { abs(it.coordinate - coordinate) },
+                { priority(it) },
+                { it.source?.ordinal ?: -1 },
+                { it.coordinate },
+            ),
+        )?.takeIf { abs(it.coordinate - coordinate) <= threshold }
+    }
+
+    fun editorDropHasCollision(id: HudElementId, placement: HudPlacement): Boolean {
+        return editorCollisionIds(id, placement).isNotEmpty()
     }
 
     fun editorProfileHasCollision(candidateProfile: HudProfile): Boolean {
@@ -273,10 +658,10 @@ class PlayerHudLayout @JvmOverloads constructor(
             safeRect(width.toFloat(), height.toFloat()),
             candidateProfile.copy(mode = HudProfileMode.CUSTOM),
             HudElementId.entries.toSet(),
-        ).filter { HudElementRegistry.get(it.id).isInteractive }
+        )
         return elements.withIndex().any { (index, element) ->
             elements.drop(index + 1).any { other ->
-                element.hitRect.overlaps(other.hitRect, density * 4f)
+                element.hitRect.overlaps(other.hitRect)
             }
         }
     }
@@ -306,11 +691,13 @@ class PlayerHudLayout @JvmOverloads constructor(
         val measuredHeight = MeasureSpec.getSize(heightMeasureSpec).coerceAtLeast(1)
         val safe = safeRect(measuredWidth.toFloat(), measuredHeight.toFloat())
         val compact = safe.height < 260f * density
+        frames.values.forEach(HudElementFrame::resetPresentationMetrics)
         if (compactMetricsApplied != compact) {
             applyCompactMetrics(compact)
             compactMetricsApplied = compact
         }
         applyMetadataWidth(safe)
+        frames.values.forEach(HudElementFrame::captureCanonicalPresentationMetrics)
         val frameWidthSpec = MeasureSpec.makeMeasureSpec(safe.width.roundToInt().coerceAtLeast(1), MeasureSpec.AT_MOST)
         val frameHeightSpec = MeasureSpec.makeMeasureSpec(safe.height.roundToInt().coerceAtLeast(1), MeasureSpec.AT_MOST)
         frames.values.forEach { it.measureNatural(frameWidthSpec, frameHeightSpec) }
@@ -323,6 +710,7 @@ class PlayerHudLayout @JvmOverloads constructor(
             frame.setGeometry(element)
             frame.setActive(element != null)
             if (element != null) {
+                frame.applyPresentationScale(element.effectiveScale)
                 frame.measure(
                     MeasureSpec.makeMeasureSpec(element.hitRect.width.roundToInt().coerceAtLeast(1), MeasureSpec.EXACTLY),
                     MeasureSpec.makeMeasureSpec(element.hitRect.height.roundToInt().coerceAtLeast(1), MeasureSpec.EXACTLY),
@@ -382,7 +770,10 @@ class PlayerHudLayout @JvmOverloads constructor(
                 val id = editorSelected ?: return false
                 val start = editorStartPlacement ?: return true
                 val slop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
-                if (!editorDragging && hypot(event.x - editorStartX, event.y - editorStartY) > slop) editorDragging = true
+                if (!editorDragging && hypot(event.x - editorStartX, event.y - editorStartY) > slop) {
+                    editorDragging = true
+                    editorOnDragStarted?.invoke(id)
+                }
                 if (editorDragging) {
                     val next = clampEditorPlacement(
                         id,
@@ -402,7 +793,7 @@ class PlayerHudLayout @JvmOverloads constructor(
                 val canceled = event.actionMasked == MotionEvent.ACTION_CANCEL
                 if (id != null && editorDragging) {
                     if (canceled) editorStartProfile?.let { profile = it; requestLayout() }
-                    editorOnDropped?.invoke(id, canceled)
+                    editorOnDropped?.invoke(id, canceled, editorStartPlacement)
                 }
                 editorSelected = null
                 editorStartPlacement = null
@@ -457,12 +848,52 @@ class PlayerHudLayout @JvmOverloads constructor(
     ).resolve(safe, orientation, value, sizes, availability = visible)
 
     private fun safeRect(rootWidth: Float, rootHeight: Float): HudRect {
+        val viewport = videoViewport(rootWidth, rootHeight)
         val insets = safeInsetsOverride ?: safeInsets
         return HudRect(
-        insets.left.toFloat().coerceAtMost(rootWidth / 2f),
-        insets.top.toFloat().coerceAtMost(rootHeight / 2f),
-        (rootWidth - insets.right).coerceAtLeast(rootWidth / 2f),
-        (rootHeight - insets.bottom).coerceAtLeast(rootHeight / 2f),
+        (viewport.left + insets.left).coerceAtMost(viewport.centerX),
+        (viewport.top + insets.top).coerceAtMost(viewport.centerY),
+        (viewport.right - insets.right).coerceAtLeast(viewport.centerX),
+        (viewport.bottom - insets.bottom).coerceAtLeast(viewport.centerY),
+        )
+    }
+
+    /**
+     * The player overlay is a sibling of the aspect-ratio child. Use that
+     * child's local bounds as the HUD coordinate plane so letterbox space never
+     * becomes a place where controls can be positioned. The position is derived
+     * from the same measured size and gravity that PlayerLayout will use.
+     */
+    private fun videoViewport(rootWidth: Float, rootHeight: Float): HudRect {
+        val parentGroup = parent as? ViewGroup ?: return HudRect(0f, 0f, rootWidth, rootHeight)
+        val video = parentGroup.findViewById<View>(R.id.aspectRatioFrameLayout)
+            ?: return HudRect(0f, 0f, rootWidth, rootHeight)
+        val videoWidth = video.measuredWidth.takeIf { it > 0 } ?: video.width
+        val videoHeight = video.measuredHeight.takeIf { it > 0 } ?: video.height
+        if (videoWidth <= 0 || videoHeight <= 0) return HudRect(0f, 0f, rootWidth, rootHeight)
+
+        val params = video.layoutParams as? android.widget.FrameLayout.LayoutParams
+        val gravity = params?.gravity ?: Gravity.TOP or Gravity.START
+        val absoluteGravity = Gravity.getAbsoluteGravity(gravity, layoutDirection)
+        val horizontal = absoluteGravity and Gravity.HORIZONTAL_GRAVITY_MASK
+        val vertical = gravity and Gravity.VERTICAL_GRAVITY_MASK
+        val left = when (horizontal) {
+            Gravity.CENTER_HORIZONTAL -> (rootWidth - videoWidth) / 2f
+            Gravity.RIGHT -> rootWidth - videoWidth - (params?.rightMargin ?: 0)
+            else -> (params?.leftMargin ?: 0).toFloat()
+        }
+        val top = when (vertical) {
+            Gravity.CENTER_VERTICAL -> (rootHeight - videoHeight) / 2f
+            Gravity.BOTTOM -> rootHeight - videoHeight - (params?.bottomMargin ?: 0)
+            else -> (params?.topMargin ?: 0).toFloat()
+        }
+        val boundedLeft = left.coerceIn(0f, (rootWidth - videoWidth).coerceAtLeast(0f))
+        val boundedTop = top.coerceIn(0f, (rootHeight - videoHeight).coerceAtLeast(0f))
+        return HudRect(
+            boundedLeft,
+            boundedTop,
+            (boundedLeft + videoWidth).coerceAtMost(rootWidth),
+            (boundedTop + videoHeight).coerceAtMost(rootHeight),
         )
     }
 
@@ -573,9 +1004,14 @@ class PlayerHudLayout @JvmOverloads constructor(
         findViewById<TextView>(R.id.category)?.apply { visibility = VISIBLE; text = "Just Chatting" }
         findViewById<View>(R.id.viewersLayout)?.visibility = VISIBLE
         findViewById<TextView>(R.id.viewersText)?.apply { visibility = VISIBLE; text = "for 12,345 viewers" }
-        frames.values.forEach { frame ->
-            setDescendantsVisible(frame, true)
-        }
+        // Keep the XML hierarchy's ordinary controls as the preview's
+        // canonical presentation. Only data-bearing fields need synthetic
+        // content; recursively forcing every descendant visible makes preview
+        // availability disagree with runtime (notably captions).
+        findViewById<View>(R.id.position)?.visibility = VISIBLE
+        findViewById<View>(R.id.duration)?.visibility = VISIBLE
+        findViewById<View>(R.id.liveCaptions)?.visibility = VISIBLE
+        findViewById<View>(R.id.subtitles)?.visibility = GONE
         findViewById<View>(R.id.liveTimeGroup)?.visibility = GONE
     }
 
@@ -588,11 +1024,6 @@ class PlayerHudLayout @JvmOverloads constructor(
     private fun refreshTimelineSettings() {
         findViewById<HudTimelineContent>(R.id.timelineContent)
             ?.setLiveRewindTimePosition(store.loadTimelineTimePosition())
-    }
-
-    private fun setDescendantsVisible(view: View, visible: Boolean) {
-        if (view.id != id && view.id != R.id.timelineContent) view.visibility = if (visible) VISIBLE else view.visibility
-        if (view is ViewGroup) (0 until view.childCount).forEach { setDescendantsVisible(view.getChildAt(it), visible) }
     }
 
     private fun currentOrientation(): HudOrientation = if (

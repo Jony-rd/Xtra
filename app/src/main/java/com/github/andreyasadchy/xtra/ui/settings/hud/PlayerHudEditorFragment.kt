@@ -21,6 +21,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.doOnLayout
 import androidx.core.view.isVisible
 import androidx.core.view.updatePadding
+import androidx.appcompat.content.res.AppCompatResources
 import androidx.fragment.app.Fragment
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -47,6 +48,7 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.slider.Slider
+import java.util.ArrayDeque
 import kotlin.math.roundToInt
 
 /**
@@ -72,6 +74,8 @@ class PlayerHudEditorFragment : Fragment() {
     private lateinit var swapButton: MaterialButton
     private lateinit var portraitButton: MaterialButton
     private lateinit var landscapeButton: MaterialButton
+    private lateinit var undoButton: MaterialButton
+    private lateinit var redoButton: MaterialButton
     private lateinit var elementList: LinearLayout
     private lateinit var editorScroll: ScrollView
 
@@ -79,16 +83,40 @@ class PlayerHudEditorFragment : Fragment() {
     private var workingConfig: PlayerHudConfig = PlayerHudDefaults.config()
     private var orientation = HudOrientation.PORTRAIT
     private var selected: HudElementId? = null
-    private var previousProfile: HudProfile? = null
+    private var dragStartSnapshot: HudEditorSnapshot? = null
+    private var sliderStartSnapshot: HudEditorSnapshot? = null
     private var suppressPanelCallbacks = false
     private val elementSwitches = linkedMapOf<HudElementId, MaterialSwitch>()
     private val elementRows = linkedMapOf<HudElementId, View>()
+    private val undoStack = ArrayDeque<HudEditorSnapshot>()
+    private val redoStack = ArrayDeque<HudEditorSnapshot>()
+
+    private data class HudEditorSnapshot(
+        val config: PlayerHudConfig,
+        val orientation: HudOrientation,
+        val selected: HudElementId?,
+    )
+
+    private companion object {
+        const val HISTORY_LIMIT = 50
+    }
 
     private val previewProgressUpdate = object : Runnable {
         override fun run() {
             if (!isAdded || !::preview.isInitialized) return
             syncPreviewProgress()
             preview.postDelayed(this, 250L)
+        }
+    }
+
+    private val sliderHistoryListener = object : Slider.OnSliderTouchListener {
+        override fun onStartTrackingTouch(slider: Slider) {
+            sliderStartSnapshot = snapshot()
+        }
+
+        override fun onStopTrackingTouch(slider: Slider) {
+            sliderStartSnapshot?.let { commitAction(it) }
+            sliderStartSnapshot = null
         }
     }
 
@@ -174,9 +202,15 @@ class PlayerHudEditorFragment : Fragment() {
         preview.setHudOrientation(orientation)
         preview.setPreviewMode(true)
 
-        previewPlayerView = PlayerView(requireContext()).apply {
+        previewPlayerView = inflater.inflate(
+            R.layout.view_stream_preview,
+            previewContainer,
+            false,
+        ) as PlayerView
+        previewPlayerView.apply {
             useController = false
             resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+            setKeepContentOnPlayerReset(true)
             setShutterBackgroundColor(Color.BLACK)
             isClickable = false
             isFocusable = false
@@ -220,7 +254,11 @@ class PlayerHudEditorFragment : Fragment() {
         enabledSwitch = MaterialSwitch(requireContext()).apply {
             text = "Show this control"
             setOnCheckedChangeListener { _, value ->
-                if (!suppressPanelCallbacks) selected?.let { updateSelected(it) { placement -> placement.copy(enabled = value) } }
+                if (!suppressPanelCallbacks) {
+                    selected?.let { id ->
+                        updateSelected(id, transform = { placement -> placement.copy(enabled = value) })
+                    }
+                }
             }
         }
         selectedPanel.addView(enabledSwitch, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)))
@@ -242,9 +280,16 @@ class PlayerHudEditorFragment : Fragment() {
             stepSize = 1f
             addOnChangeListener { _, value, fromUser ->
                 if (fromUser && !suppressPanelCallbacks) {
-                    selected?.let { updateSelected(it) { placement -> placement.copy(scale = value / 100f) } }
+                    selected?.let {
+                        updateSelected(
+                            it,
+                            transform = { placement -> placement.copy(scale = value.roundToInt() / 100f) },
+                            recordHistory = false,
+                        )
+                    }
                 }
             }
+            addOnSliderTouchListener(sliderHistoryListener)
         }
         selectedPanel.addView(scaleSlider, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)))
 
@@ -266,9 +311,10 @@ class PlayerHudEditorFragment : Fragment() {
             addOnChangeListener { _, value, fromUser ->
                 if (fromUser && !suppressPanelCallbacks) {
                     if (currentProfile().mode == HudProfileMode.DEFAULT) materializeDefault()
-                    setProfile(currentProfile().copy(globalScale = value / 100f))
+                    setProfile(currentProfile().copy(globalScale = value.roundToInt() / 100f))
                 }
             }
+            addOnSliderTouchListener(sliderHistoryListener)
         }
         selectedPanel.addView(globalScaleSlider, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)))
 
@@ -318,17 +364,21 @@ class PlayerHudEditorFragment : Fragment() {
             text = "Reset this orientation"
             isAllCaps = false
             setOnClickListener {
+                val before = snapshot()
                 setProfile(PlayerHudDefaults.config().profile(orientation))
                 selectElement(null)
+                commitAction(before)
             }
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)))
         resetSection.addView(MaterialButton(requireContext()).apply {
             text = "Reset both orientations"
             isAllCaps = false
             setOnClickListener {
+                val before = snapshot()
                 workingConfig = PlayerHudDefaults.config()
                 setProfile(currentProfile())
                 selectElement(null)
+                commitAction(before)
             }
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(8) })
         content.addView(resetSection)
@@ -336,32 +386,48 @@ class PlayerHudEditorFragment : Fragment() {
         preview.setEditing(
             true,
             onSelected = { id ->
-                previousProfile = preview.hudProfile()
+                guideOverlay.clearCollision()
                 selectElement(id)
+            },
+            onDragStarted = { id ->
+                dragStartSnapshot = snapshot()
+                guideOverlay.setDragging(true)
+                guideOverlay.selected = id
+                guideOverlay.invalidate()
             },
             onMoved = { id, value ->
                 selected = id
                 updateWorkingPlacement(id, value)
                 guideOverlay.selected = id
+                val snap = preview.editorSnapPreview(id, value)
+                guideOverlay.setDragging(true)
+                guideOverlay.setCollision(id, preview.editorCollisionIds(id, value))
+                guideOverlay.setProspectiveGuides(snap.guides)
                 guideOverlay.invalidate()
             },
-            onDropped = { id, canceled ->
-                val previous = previousProfile
+            onDropped = { id, canceled, dragStart ->
+                val before = dragStartSnapshot
                 if (canceled) {
-                    previous?.let(::setProfile)
-                    guideOverlay.collision = null
+                    before?.let(::applySnapshot)
+                    guideOverlay.clearCollision()
+                    guideOverlay.setDragging(false)
                 } else {
-                    val snapped = preview.snapEditorPlacement(id)
-                    if (preview.editorDropHasCollision(id, snapped)) {
-                        previous?.let(::setProfile)
-                        guideOverlay.collision = id
+                    val raw = preview.editorPlacement(id) ?: placement(id)
+                    val result = preview.resolveEditorDrop(id, dragStart ?: placement(id), raw)
+                    if (result.profile == null) {
+                        before?.let(::applySnapshot)
+                        guideOverlay.setDragging(false)
+                        guideOverlay.setCollision(id, result.blockers)
+                        guideOverlay.showDropFeedback(result.explanation)
                     } else {
-                        preview.updateEditorPlacement(id, snapped)
-                        updateWorkingPlacement(id, snapped)
-                        guideOverlay.collision = null
+                        setProfile(result.profile)
+                        before?.let { commitAction(it) }
+                        guideOverlay.clearCollision()
+                        guideOverlay.setDragging(false)
+                        guideOverlay.showDropResult(result)
                     }
                 }
-                previousProfile = null
+                dragStartSnapshot = null
                 guideOverlay.invalidate()
                 updateSelectedPanel()
             },
@@ -426,11 +492,17 @@ class PlayerHudEditorFragment : Fragment() {
             isAllCaps = false
             setOnClickListener { requireActivity().finish() }
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)))
+        undoButton = historyButton(R.drawable.ic_undo_24, "Undo") { undo() }
+        addView(undoButton, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginStart = dp(4) })
+        redoButton = historyButton(R.drawable.ic_redo_24, "Redo") { redo() }
+        addView(redoButton, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginStart = dp(2) })
         addView(TextView(context).apply {
             text = "Customize player HUD"
             textSize = 20f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER_VERTICAL
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
         }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(8) })
         addView(MaterialButton(context).apply {
             text = "Save"
@@ -441,6 +513,26 @@ class PlayerHudEditorFragment : Fragment() {
             }
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)))
     }
+
+    private fun historyButton(icon: Int, description: String, action: () -> Unit): MaterialButton =
+        MaterialButton(requireContext()).apply {
+            text = ""
+            this.icon = AppCompatResources.getDrawable(requireContext(), icon)
+            iconTint = ColorStateList.valueOf(Color.WHITE)
+            iconSize = dp(28)
+            iconPadding = 0
+            iconGravity = MaterialButton.ICON_GRAVITY_TEXT_START
+            gravity = Gravity.CENTER
+            textAlignment = View.TEXT_ALIGNMENT_CENTER
+            insetTop = 0
+            insetBottom = 0
+            minWidth = 0
+            minimumWidth = 0
+            contentDescription = description
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            setPadding(0, 0, 0, 0)
+            setOnClickListener { action() }
+        }
 
     private fun sectionLabel(text: String): TextView = TextView(requireContext()).apply {
         this.text = text
@@ -491,7 +583,7 @@ class PlayerHudEditorFragment : Fragment() {
             setOnCheckedChangeListener { _, value ->
                 if (!suppressPanelCallbacks) {
                     selectElement(id)
-                    updateSelected(id) { placement -> placement.copy(enabled = value) }
+                    updateSelected(id, transform = { placement -> placement.copy(enabled = value) })
                 }
             }
         }
@@ -528,11 +620,58 @@ class PlayerHudEditorFragment : Fragment() {
             HudOrientation.LANDSCAPE -> workingConfig.copy(landscape = value)
         }
         preview.setHudOrientationAndProfile(orientation, value)
-        preview.setPreviewMode(true)
-        preview.refreshAvailability()
         guideOverlay.invalidate()
         updateSelectedPanel()
         updateElementList()
+        updateHistoryButtons()
+    }
+
+    private fun snapshot(): HudEditorSnapshot = HudEditorSnapshot(workingConfig, orientation, selected)
+
+    private fun commitAction(before: HudEditorSnapshot) {
+        val after = snapshot()
+        if (before.config == after.config) return
+        undoStack.addLast(before)
+        while (undoStack.size > HISTORY_LIMIT) undoStack.removeFirst()
+        redoStack.clear()
+        updateHistoryButtons()
+    }
+
+    private fun applySnapshot(value: HudEditorSnapshot) {
+        workingConfig = value.config
+        orientation = value.orientation
+        selected = value.selected
+        updateOrientationButtons()
+        preview.setHudOrientationAndProfile(orientation, currentProfile())
+        guideOverlay.clearCollision()
+        guideOverlay.setDragging(false)
+        guideOverlay.selected = selected
+        updateSelectedPanel()
+        updateElementList()
+        updateHistoryButtons()
+        guideOverlay.invalidate()
+    }
+
+    private fun undo() {
+        if (undoStack.isEmpty()) return
+        val target = undoStack.removeLast()
+        redoStack.addLast(snapshot())
+        applySnapshot(target)
+    }
+
+    private fun redo() {
+        if (redoStack.isEmpty()) return
+        val target = redoStack.removeLast()
+        undoStack.addLast(snapshot())
+        applySnapshot(target)
+    }
+
+    private fun updateHistoryButtons() {
+        if (!::undoButton.isInitialized || !::redoButton.isInitialized) return
+        undoButton.isEnabled = undoStack.isNotEmpty()
+        redoButton.isEnabled = redoStack.isNotEmpty()
+        undoButton.alpha = if (undoButton.isEnabled) 1f else 0.45f
+        redoButton.alpha = if (redoButton.isEnabled) 1f else 0.45f
     }
 
     private fun currentProfile(): HudProfile = when (orientation) {
@@ -549,11 +688,16 @@ class PlayerHudEditorFragment : Fragment() {
 
     private fun materializeDefault() {
         if (currentProfile().mode != HudProfileMode.DEFAULT) return
-        setProfile(preview.materializedDefaultProfile())
+        val materialized = preview.materializedDefaultProfile()
+        workingConfig = when (orientation) {
+            HudOrientation.PORTRAIT -> workingConfig.copy(portrait = materialized)
+            HudOrientation.LANDSCAPE -> workingConfig.copy(landscape = materialized)
+        }
     }
 
     private fun selectElement(id: HudElementId?) {
         selected = id
+        guideOverlay.clearCollision()
         guideOverlay.selected = id
         updateSelectedPanel()
         updateElementList()
@@ -578,16 +722,29 @@ class PlayerHudEditorFragment : Fragment() {
         swapButton.isVisible = value.enabled && spec.isInteractive && spec.pivot == HudPivot.CENTER
         suppressPanelCallbacks = true
         enabledSwitch.isChecked = value.enabled
-        scaleSlider.valueFrom = spec.minimumScale * 100f
-        scaleSlider.valueTo = spec.maximumScale * 100f
-        scaleSlider.value = (value.scale * 100f).coerceIn(scaleSlider.valueFrom, scaleSlider.valueTo)
-        globalScaleSlider.value = currentProfile().globalScale * 100f
+        bindSlider(
+            scaleSlider,
+            (spec.minimumScale * 100f).roundToInt(),
+            (spec.maximumScale * 100f).roundToInt(),
+            (value.scale * 100f).roundToInt(),
+        )
+        bindSlider(
+            globalScaleSlider,
+            85,
+            130,
+            (currentProfile().globalScale * 100f).roundToInt(),
+        )
         scaleValueText.text = "${scaleSlider.value.roundToInt()}%"
         globalScaleValueText.text = "${globalScaleSlider.value.roundToInt()}%"
         suppressPanelCallbacks = false
     }
 
-    private fun updateSelected(id: HudElementId, transform: (HudPlacement) -> HudPlacement) {
+    private fun updateSelected(
+        id: HudElementId,
+        transform: (HudPlacement) -> HudPlacement,
+        recordHistory: Boolean = true,
+    ) {
+        val before = snapshot()
         val originalProfile = currentProfile()
         if (currentProfile().mode == HudProfileMode.DEFAULT) materializeDefault()
         val current = placement(id)
@@ -597,16 +754,23 @@ class PlayerHudEditorFragment : Fragment() {
         } else {
             requested
         }
+        if (next != null && next.enabled && preview.editorDropHasCollision(id, next)) {
+            if (originalProfile.mode == HudProfileMode.DEFAULT) setProfile(originalProfile)
+            guideOverlay.setCollision(id, preview.editorCollisionIds(id, next))
+            updateSelectedPanel()
+            updateElementList()
+            return
+        }
         if (next == null) {
             if (originalProfile.mode == HudProfileMode.DEFAULT) setProfile(originalProfile)
-            guideOverlay.collision = id
+            guideOverlay.setCollision(id, preview.editorCollisionIds(id, requested))
             updateSelectedPanel()
             updateElementList()
             return
         }
         setProfile(currentProfile().copy(mode = HudProfileMode.CUSTOM, placements = currentProfile().placements + (id to next)))
-        preview.updateEditorPlacement(id, next)
-        guideOverlay.collision = null
+        guideOverlay.clearCollision()
+        if (recordHistory) commitAction(before)
         updateSelectedPanel()
         updateElementList()
     }
@@ -625,7 +789,7 @@ class PlayerHudEditorFragment : Fragment() {
 
     private fun alignSelected(x: Float?, y: Float?) {
         val id = selected ?: return
-        updateSelected(id) { value -> value.copy(x = x ?: value.x, y = y ?: value.y) }
+        updateSelected(id, transform = { value -> value.copy(x = x ?: value.x, y = y ?: value.y) })
     }
 
     private fun showSwapDialog() {
@@ -655,6 +819,7 @@ class PlayerHudEditorFragment : Fragment() {
             HudElementRegistry.get(first).pivot != HudPivot.CENTER ||
             HudElementRegistry.get(second).pivot != HudPivot.CENTER
         ) return
+        val before = snapshot()
         if (currentProfile().mode == HudProfileMode.DEFAULT) materializeDefault()
         val profile = currentProfile()
         val firstPlacement = placement(first)
@@ -668,19 +833,22 @@ class PlayerHudEditorFragment : Fragment() {
                 (second to secondPlacement.copy(x = firstPlacement.x, y = firstPlacement.y)),
         )
         if (preview.editorProfileHasCollision(swapped)) {
-            guideOverlay.collision = first
+            guideOverlay.setCollision(first, setOf(second))
             guideOverlay.invalidate()
             return
         }
         setProfile(
             swapped,
         )
+        commitAction(before)
         selectElement(first)
     }
 
     private fun resetElement(id: HudElementId) {
+        val before = snapshot()
         if (currentProfile().mode == HudProfileMode.DEFAULT) materializeDefault()
         setProfile(currentProfile().copy(placements = currentProfile().placements - id))
+        commitAction(before)
         selectElement(id)
     }
 
@@ -701,6 +869,19 @@ class PlayerHudEditorFragment : Fragment() {
         .replace('_', ' ')
         .lowercase()
         .replaceFirstChar(Char::uppercase)
+
+    private fun bindSlider(slider: Slider, minimum: Int, maximum: Int, value: Int) {
+        val min = minimum.coerceAtMost(maximum)
+        val max = maximum.coerceAtLeast(min + 1)
+        // Material Slider validates stepped values against exact float
+        // endpoints. Bind the editor in integer percentages, even though the
+        // persisted layout model remains a Float.
+        slider.stepSize = 0f
+        slider.valueFrom = min.toFloat()
+        slider.valueTo = max.toFloat()
+        slider.value = value.coerceIn(min, max).toFloat()
+        slider.stepSize = 1f
+    }
 
     private fun roundedBackground(color: Int) = android.graphics.drawable.GradientDrawable().apply {
         shape = android.graphics.drawable.GradientDrawable.RECTANGLE
@@ -728,16 +909,37 @@ class PlayerHudEditorFragment : Fragment() {
                 else -> desiredHeight.coerceAtMost(MeasureSpec.getSize(heightMeasureSpec).takeIf { it > 0 } ?: desiredHeight)
             }
             setMeasuredDimension(width, height)
+            val exactWidth = MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY)
+            val exactHeight = MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY)
             for (index in 0 until childCount) {
-                getChildAt(index).measure(
-                    MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
-                    MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY),
-                )
+                val child = getChildAt(index)
+                // HUD drag updates must not make Media3 resize its TextureView
+                // surface. The video child owns one stable viewport; only the
+                // HUD and guide overlay are remeasured as editor state changes.
+                if (child is PlayerView &&
+                    child.measuredWidth == width &&
+                    child.measuredHeight == height &&
+                    !child.isLayoutRequested
+                ) {
+                    continue
+                }
+                child.measure(exactWidth, exactHeight)
             }
         }
 
         override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-            for (index in 0 until childCount) getChildAt(index).layout(0, 0, width, height)
+            for (index in 0 until childCount) {
+                val child = getChildAt(index)
+                if (child is PlayerView &&
+                    child.left == 0 &&
+                    child.top == 0 &&
+                    child.right == width &&
+                    child.bottom == height
+                ) {
+                    continue
+                }
+                child.layout(0, 0, width, height)
+            }
         }
     }
 
@@ -748,28 +950,115 @@ class PlayerHudEditorFragment : Fragment() {
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeWidth = 1f }
         var selected: HudElementId? = null
         var collision: HudElementId? = null
+        private var collisionIds: Set<HudElementId> = emptySet()
+        private var dragging = false
+        private var prospectiveGuides: List<com.github.andreyasadchy.xtra.ui.player.hud.HudEditorGuide> = emptyList()
+        private var releaseGuides: List<com.github.andreyasadchy.xtra.ui.player.hud.HudEditorGuide> = emptyList()
+        private var feedbackText: String? = null
+        private var feedbackUntil = 0L
+
+        fun setDragging(value: Boolean) {
+            dragging = value
+            if (!value) prospectiveGuides = emptyList()
+            invalidate()
+        }
+
+        fun setProspectiveGuides(value: List<com.github.andreyasadchy.xtra.ui.player.hud.HudEditorGuide>) {
+            prospectiveGuides = value
+        }
+
+        fun setCollision(selectedId: HudElementId, blockers: Set<HudElementId>) {
+            selected = selectedId
+            collision = selectedId.takeIf { blockers.isNotEmpty() }
+            collisionIds = if (collision == null) blockers else blockers + selectedId
+        }
+
+        fun clearCollision() {
+            collision = null
+            collisionIds = emptySet()
+            feedbackText = null
+            feedbackUntil = 0L
+            prospectiveGuides = emptyList()
+            releaseGuides = emptyList()
+        }
+
+        fun showDropResult(result: com.github.andreyasadchy.xtra.ui.player.hud.HudEditorDropResult) {
+            releaseGuides = result.guides
+            feedbackText = result.explanation
+            feedbackUntil = android.os.SystemClock.uptimeMillis() + 1100L
+            postDelayed({ invalidate() }, 1150L)
+        }
+
+        fun showDropFeedback(text: String?) {
+            releaseGuides = emptyList()
+            feedbackText = text
+            feedbackUntil = android.os.SystemClock.uptimeMillis() + 1600L
+            postDelayed({ invalidate() }, 1650L)
+        }
 
         override fun onDraw(canvas: Canvas) {
             val safe = preview.safeHudRect()
-            paint.style = Paint.Style.STROKE
-            paint.color = if (collision != null) 0xFFFF6B6B.toInt() else 0x99B388FF.toInt()
-            canvas.drawRect(safe.left, safe.top, safe.right, safe.bottom, paint)
-            paint.style = Paint.Style.FILL
-            paint.color = 0x669B7BFF
-            canvas.drawRect(safe.centerX - 0.5f, safe.top, safe.centerX + 0.5f, safe.bottom, paint)
-            canvas.drawRect(safe.left, safe.centerY - 0.5f, safe.right, safe.centerY + 0.5f, paint)
-            preview.resolvedElements().forEach { element ->
-                if (element.id == selected) {
-                    paint.color = if (element.id == collision) 0xFFFF6B6B.toInt() else 0xFFB388FF.toInt()
-                    paint.style = Paint.Style.STROKE
-                    canvas.drawRect(
-                        element.hitRect.left,
-                        element.hitRect.top,
-                        element.hitRect.right,
-                        element.hitRect.bottom,
-                        paint,
-                    )
+            val showGuides = dragging || collision != null || android.os.SystemClock.uptimeMillis() < feedbackUntil
+            if (showGuides) {
+                paint.style = Paint.Style.STROKE
+                paint.color = 0x99B388FF.toInt()
+                canvas.drawRect(safe.left, safe.top, safe.right, safe.bottom, paint)
+                val guides = prospectiveGuides + releaseGuides
+                guides.forEach { guide ->
+                    paint.style = Paint.Style.FILL
+                    paint.color = when (guide.kind) {
+                        com.github.andreyasadchy.xtra.ui.player.hud.HudEditorGuideKind.SAFE_CENTER -> 0xFFB388FF.toInt()
+                        else -> 0xCC8FD3FF.toInt()
+                    }
+                    if (guide.axis == com.github.andreyasadchy.xtra.ui.player.hud.HudEditorGuideAxis.VERTICAL) {
+                        canvas.drawRect(guide.coordinate - 0.75f, safe.top, guide.coordinate + 0.75f, safe.bottom, paint)
+                    } else {
+                        canvas.drawRect(safe.left, guide.coordinate - 0.75f, safe.right, guide.coordinate + 0.75f, paint)
+                    }
                 }
+            }
+            preview.resolvedElements().forEach { element ->
+                if (element.id != selected && element.id !in collisionIds) return@forEach
+                val isSelected = element.id == selected
+                val isCollision = element.id in collisionIds
+                paint.color = when {
+                    isCollision -> 0xFFFF6B6B.toInt()
+                    isSelected -> 0xFFB388FF.toInt()
+                    else -> 0x559B9AA6
+                }
+                paint.style = Paint.Style.STROKE
+                canvas.drawRect(
+                    element.hitRect.left,
+                    element.hitRect.top,
+                    element.hitRect.right,
+                    element.hitRect.bottom,
+                    paint,
+                )
+            }
+            val label = feedbackText ?: collision?.let { selectedId ->
+                val blockers = collisionIds
+                    .filter { it != selectedId }
+                    .joinToString { it.name.replace('_', ' ').lowercase() }
+                "Overlaps $blockers"
+            }
+            if (showGuides && label != null) {
+                paint.textSize = 12f * resources.displayMetrics.density
+                val textWidth = paint.measureText(label) + 24f
+                paint.style = Paint.Style.FILL
+                paint.color = 0xDD2A1D2F.toInt()
+                canvas.drawRoundRect(
+                    safe.centerX - textWidth / 2f,
+                    safe.top + 8f,
+                    safe.centerX + textWidth / 2f,
+                    safe.top + 36f,
+                    14f,
+                    14f,
+                    paint,
+                )
+                paint.color = Color.WHITE
+                paint.textAlign = Paint.Align.CENTER
+                canvas.drawText(label, safe.centerX, safe.top + 27f, paint)
+                paint.textAlign = Paint.Align.LEFT
             }
         }
     }

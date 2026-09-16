@@ -9,6 +9,48 @@ data class ResolvedHudElement(
     val effectiveScale: Float,
 )
 
+enum class HudEditorGuideAxis {
+    VERTICAL,
+    HORIZONTAL,
+}
+
+enum class HudEditorGuideKind {
+    SAFE_EDGE,
+    SAFE_CENTER,
+    SIBLING_CENTER,
+    CONTROL_BASELINE,
+}
+
+data class HudEditorGuide(
+    val axis: HudEditorGuideAxis,
+    val coordinate: Float,
+    val kind: HudEditorGuideKind,
+    val source: HudElementId? = null,
+)
+
+data class HudEditorSnapPreview(
+    val raw: HudPlacement,
+    val snapped: HudPlacement,
+    val guides: List<HudEditorGuide>,
+)
+
+enum class HudEditorDropKind {
+    RAW,
+    SNAPPED,
+    NUDGED,
+    REJECTED,
+}
+
+data class HudEditorDropResult(
+    val profile: HudProfile?,
+    val selectedPlacement: HudPlacement?,
+    val movedElements: Set<HudElementId>,
+    val kind: HudEditorDropKind,
+    val guides: List<HudEditorGuide>,
+    val blockers: Set<HudElementId>,
+    val explanation: String?,
+)
+
 class HudLayoutEngine(
     private val density: Float = 1f,
     private val rtl: Boolean = false,
