@@ -257,6 +257,15 @@ INTENTIONAL_FALLBACK_RESOURCES = {
     # Player accessibility status is currently English-only until translated.
     "player_playing",
     "player_move_chat",
+    # Live-rewind labels currently use the default English wording until
+    # their translations are reviewed by native speakers.
+    "player_live_tap_seek_back",
+    "player_live_tap_seek_forward",
+    "player_live_tap_seek_live",
+    "player_return_to_live",
+    "settings_live_rewind_time_position",
+    "settings_live_rewind_time_left",
+    "settings_live_rewind_time_right",
     # Player-control editor labels are currently English-only until translated.
     "settings_home_controls",
     "settings_home_controls_summary",
