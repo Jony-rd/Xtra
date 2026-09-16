@@ -126,6 +126,18 @@ internal class StreamPreloadResolver(
         }
     }
 
+    /** Cancels browsing and preview flights while preserving playback-promoted flights. */
+    fun cancelSpeculative(configurationFingerprint: String) {
+        flights.entries
+            .filter { (key, flight) ->
+                key.configurationFingerprint != configurationFingerprint || !flight.promotedForPlayback
+            }
+            .forEach { (key, flight) -> cancel(key, flight) }
+        failureUntil.keys.toList()
+            .filter { it.configurationFingerprint != configurationFingerprint }
+            .forEach(failureUntil::remove)
+    }
+
     fun hasFlight(channelLogin: String, configurationFingerprint: String): Boolean =
         flights.containsKey(key(channelLogin, configurationFingerprint))
 

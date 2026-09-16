@@ -13,6 +13,7 @@ import androidx.media3.exoplayer.analytics.PlayerId
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.preload.DefaultPreloadManager
 import androidx.media3.exoplayer.source.preload.PreloadException
+import androidx.media3.exoplayer.source.preload.PreloadMediaSource
 import androidx.media3.exoplayer.source.preload.PreloadManagerListener
 import androidx.media3.exoplayer.source.preload.TargetPreloadStatusControl
 import com.github.andreyasadchy.xtra.BuildConfig
@@ -137,6 +138,7 @@ class StreamMedia3Runtime(
                 MediaPreloadPlanEntry(it.channelLogin, it.url, it.rank)
             },
         )
+        var managerChanged = false
         plan.removed.forEach { removed ->
             val entry = generation.entries[removed.channelLogin] ?: return@forEach
             if (generation.playbackOwnership.protects(entry.mediaItem)) {
@@ -146,6 +148,8 @@ class StreamMedia3Runtime(
             generation.entries.remove(removed.channelLogin)
             debug("preload_evicted", entry.channelLogin)
             generation.manager.remove(entry.mediaItem)
+            managerChanged = true
+            if (entry.rank == 0) generation.targetPreloadState.rankZeroSampleComplete = false
         }
 
         plan.added.sortedBy { it.rank }.forEach { planned ->
@@ -172,7 +176,13 @@ class StreamMedia3Runtime(
                 return@forEach
             }
             generation.manager.add(item, candidate.rank)
+            managerChanged = true
+            if (candidate.rank == 0) generation.targetPreloadState.rankZeroSampleComplete = false
         }
+        // A viewport update often repeats the same candidates. Re-invalidating
+        // here would re-arm a completed live preload and start downloading it
+        // again after the completion callback has cleared its period.
+        if (!managerChanged) return
         generation.manager.setCurrentPlayingIndex(0)
         generation.manager.invalidate()
     }
@@ -413,9 +423,17 @@ class StreamMedia3Runtime(
             .buildLoadControl {
                 setPlayerTargetBufferBytes(PlayerId.PRELOAD.name, PRELOAD_TARGET_BYTES)
             }
+        val targetPreloadState = TargetPreloadState()
         val statusControl = TargetPreloadStatusControl<Int, DefaultPreloadManager.PreloadStatus> { rank ->
             when (rank) {
-                0 -> DefaultPreloadManager.PreloadStatus.specifiedRangeLoaded(SAMPLE_PRELOAD_DURATION_MS)
+                // Live HLS never reaches a terminal range. Once the first
+                // sample warmup completes, only retain source/track setup so
+                // manager invalidations cannot turn it back into a stream.
+                0 -> if (targetPreloadState.rankZeroSampleComplete) {
+                    DefaultPreloadManager.PreloadStatus.PRELOAD_STATUS_TRACKS_SELECTED
+                } else {
+                    DefaultPreloadManager.PreloadStatus.specifiedRangeLoaded(SAMPLE_PRELOAD_DURATION_MS)
+                }
                 1 -> DefaultPreloadManager.PreloadStatus.PRELOAD_STATUS_TRACKS_SELECTED
                 2 -> DefaultPreloadManager.PreloadStatus.PRELOAD_STATUS_SOURCE_PREPARED
                 else -> DefaultPreloadManager.PreloadStatus.PRELOAD_STATUS_NOT_PRELOADED
@@ -433,12 +451,28 @@ class StreamMedia3Runtime(
                     presentationDelayMs = xtraModule.liveCaptionManager::presentationDelayMs,
                 ),
             )
-        val generation = Generation(configuration, hlsFactory, builder, builder.build(), captionAudioSink)
+        val generation = Generation(
+            configuration = configuration,
+            hlsFactory = hlsFactory,
+            builder = builder,
+            manager = builder.build(),
+            captionAudioSink = captionAudioSink,
+            targetPreloadState = targetPreloadState,
+        )
         generation.manager.addListener(object : PreloadManagerListener {
             override fun onCompleted(mediaItem: MediaItem) {
                 val entry = generation.entries.values.firstOrNull { it.mediaItem == mediaItem } ?: return
-                entry.achievedStage = targetStage(entry.rank)
-                if (entry.rank == 0) entry.samplesLoadedAtMs = elapsedRealtimeMs()
+                if (entry.achievedStage == STAGE_NOT_ACHIEVED) {
+                    entry.achievedStage = targetStage(entry.rank)
+                }
+                if (entry.rank == 0) {
+                    if (!generation.targetPreloadState.rankZeroSampleComplete) {
+                        generation.targetPreloadState.rankZeroSampleComplete = true
+                        entry.samplesLoadedAtMs = elapsedRealtimeMs()
+                        debug("sample_preload_complete", entry.channelLogin)
+                        clearPreloadPeriod(generation, entry)
+                    }
+                }
                 logStage(entry.rank, entry.channelLogin)
             }
 
@@ -466,6 +500,15 @@ class StreamMedia3Runtime(
         else -> DefaultPreloadManager.PreloadStatus.STAGE_SOURCE_PREPARED
     }
 
+    private fun clearPreloadPeriod(generation: Generation, entry: Entry) {
+        val source = runCatching { generation.manager.getMediaSource(entry.mediaItem) }.getOrNull()
+        if (source is PreloadMediaSource) {
+            source.clear()
+        } else {
+            debug("sample_preload_clear_failed", entry.channelLogin)
+        }
+    }
+
     private fun logStage(rank: Int, login: String) {
         if (!BuildConfig.DEBUG) return
         val stage = when (rank) {
@@ -491,12 +534,18 @@ class StreamMedia3Runtime(
         var samplesLoadedAtMs: Long? = null,
     )
 
+    private class TargetPreloadState {
+        @Volatile
+        var rankZeroSampleComplete = false
+    }
+
     private class Generation(
         val configuration: StreamPlaybackConfiguration,
         val hlsFactory: StreamHlsMediaSourceFactory,
         val builder: DefaultPreloadManager.Builder,
         val manager: DefaultPreloadManager,
         val captionAudioSink: LiveCaptionManager.AudioBufferSinkSession,
+        val targetPreloadState: TargetPreloadState,
         val entries: StreamMedia3PreloadEntries<Entry> = StreamMedia3PreloadEntries(),
         var player: ExoPlayer? = null,
         val playbackOwnership: StreamMedia3PlaybackOwnership = StreamMedia3PlaybackOwnership(),

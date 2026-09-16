@@ -14,6 +14,11 @@ enum class StreamPreloadMode(val preferenceValue: String) {
     }
 }
 
+internal fun allowsSpeculativeStreamPreload(
+    previewMode: StreamPreviewMode,
+    preloadMode: StreamPreloadMode,
+): Boolean = previewMode != StreamPreviewMode.OFF && preloadMode != StreamPreloadMode.OFF
+
 data class StreamPreloadCandidate(
     val streamKey: String,
     val channelLogin: String,
