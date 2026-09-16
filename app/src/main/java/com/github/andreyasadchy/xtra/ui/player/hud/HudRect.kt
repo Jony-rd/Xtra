@@ -16,6 +16,9 @@ data class HudRect(
     fun contains(x: Float, y: Float): Boolean =
         x >= left && x <= right && y >= top && y <= bottom
 
+    fun isInside(bounds: HudRect): Boolean =
+        left >= bounds.left && top >= bounds.top && right <= bounds.right && bottom <= bounds.bottom
+
     fun inset(horizontal: Float, vertical: Float = horizontal): HudRect = HudRect(
         left + horizontal,
         top + vertical,

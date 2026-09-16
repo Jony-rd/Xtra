@@ -30,10 +30,10 @@ object HudElementRegistry {
         HudElementSpec(HudElementId.PLAY_PAUSE, normalVisualSize = HudSize(60f, 60f), compactVisualSize = HudSize(56f, 56f), minimumHitSize = HudSize(72f, 72f)),
         HudElementSpec(HudElementId.SEEK_FORWARD, normalVisualSize = HudSize(48f, 48f), compactVisualSize = HudSize(44f, 44f), minimumHitSize = HudSize(56f, 56f)),
         HudElementSpec(HudElementId.FOLLOW, normalVisualSize = icon, compactVisualSize = compactIcon, minimumHitSize = iconHit),
-        // The pill is intentionally wider than the old 72dp box. The gear
-        // icon and labels such as 720p60 must be readable without changing
-        // the top-row geometry when the selected quality changes.
-        HudElementSpec(HudElementId.QUALITY, normalVisualSize = HudSize(88f, 36f), compactVisualSize = HudSize(88f, 36f), minimumHitSize = HudSize(96f, 48f)),
+        // The pill keeps one deterministic width large enough for the gear and
+        // labels such as 1080p60. The label may ellipsize, but quality changes
+        // never change the top-row geometry.
+        HudElementSpec(HudElementId.QUALITY, normalVisualSize = HudSize(104f, 36f), compactVisualSize = HudSize(104f, 36f), minimumHitSize = HudSize(112f, 48f)),
         HudElementSpec(HudElementId.ASPECT_RATIO, normalVisualSize = icon, compactVisualSize = compactIcon, minimumHitSize = iconHit),
         HudElementSpec(HudElementId.VOLUME, normalVisualSize = icon, compactVisualSize = compactIcon, minimumHitSize = iconHit),
         HudElementSpec(HudElementId.CLIP, normalVisualSize = icon, compactVisualSize = compactIcon, minimumHitSize = iconHit),

@@ -253,7 +253,7 @@
     <com.github.andreyasadchy.xtra.ui.player.hud.HudElementFrame android:tag="QUALITY">
         <com.google.android.material.button.MaterialButton
             android:id="@+id/quality"
-            android:layout_width="88dp"
+            android:layout_width="104dp"
             android:layout_height="36dp"
             android:ellipsize="end"
             android:contentDescription="@string/player_quality"

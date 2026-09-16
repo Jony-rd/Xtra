@@ -6,7 +6,11 @@ import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.TextView
+import com.google.android.material.button.MaterialButton
+import java.util.IdentityHashMap
 import kotlin.math.roundToInt
 
 class HudElementFrame @JvmOverloads constructor(
@@ -20,6 +24,17 @@ class HudElementFrame @JvmOverloads constructor(
     private var touchDownY = 0f
     private var touchMoved = false
     private var expandedTouchTarget: View? = null
+    private val baselineMetrics = IdentityHashMap<View, PresentationMetrics>()
+    private val canonicalMetrics = IdentityHashMap<View, PresentationMetrics>()
+
+    private data class PresentationMetrics(
+        val textSize: Float?,
+        val maxWidth: Int?,
+        val padding: IntArray,
+        val margin: IntArray?,
+        val iconSize: Int?,
+        val iconPadding: Int?,
+    )
 
     init {
         clipChildren = false
@@ -86,6 +101,33 @@ class HudElementFrame @JvmOverloads constructor(
             resolved.hitRect.width.roundToInt().coerceAtLeast(1),
             resolved.hitRect.height.roundToInt().coerceAtLeast(1),
         )
+    }
+
+    /**
+     * Restores the canonical XML presentation before natural measurement.
+     *
+     * Geometry is resolved from canonical content sizes. Presentation scale is
+     * applied only after the engine has returned its visual rectangle, so a
+     * previous slider change can never feed back into the next measurement.
+     */
+    fun resetPresentationMetrics() {
+        val child = getChildAt(0) ?: return
+        captureBaseline(child)
+        restoreCanonical(child)
+    }
+
+    /** Records the current unscaled, orientation-specific presentation state. */
+    fun captureCanonicalPresentationMetrics() {
+        val child = getChildAt(0) ?: return
+        captureBaseline(child)
+        captureCanonical(child)
+    }
+
+    /** Applies scale to the actual content metrics, without view transforms. */
+    fun applyPresentationScale(scale: Float) {
+        val child = getChildAt(0) ?: return
+        captureBaseline(child)
+        applyScale(child, scale.coerceAtLeast(0.01f))
     }
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
@@ -250,4 +292,114 @@ class HudElementFrame @JvmOverloads constructor(
     private fun measuredContentWidth(): Int = getChildAt(0)?.measuredWidth ?: 0
 
     private fun measuredContentHeight(): Int = getChildAt(0)?.measuredHeight ?: 0
+
+    private fun captureBaseline(view: View) {
+        if (!baselineMetrics.containsKey(view)) {
+            val margins = (view.layoutParams as? MarginLayoutParams)?.let {
+                intArrayOf(it.leftMargin, it.topMargin, it.rightMargin, it.bottomMargin)
+            }
+            baselineMetrics[view] = PresentationMetrics(
+                textSize = (view as? TextView)?.textSize,
+                maxWidth = (view as? TextView)?.maxWidth,
+                padding = intArrayOf(view.paddingLeft, view.paddingTop, view.paddingRight, view.paddingBottom),
+                margin = margins,
+                iconSize = (view as? MaterialButton)?.iconSize,
+                iconPadding = (view as? MaterialButton)?.iconPadding,
+            )
+        }
+        if (view is ViewGroup) {
+            for (index in 0 until view.childCount) captureBaseline(view.getChildAt(index))
+        }
+    }
+
+    private fun restoreBaseline(view: View) {
+        val metrics = canonicalMetrics[view] ?: baselineMetrics[view]
+        if (metrics != null) {
+            (view as? TextView)?.let { text ->
+                metrics.textSize?.let { text.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, it) }
+                metrics.maxWidth?.let { text.maxWidth = it }
+            }
+            view.setPadding(
+                metrics.padding[0],
+                metrics.padding[1],
+                metrics.padding[2],
+                metrics.padding[3],
+            )
+            (view as? MaterialButton)?.let { button ->
+                metrics.iconSize?.let { button.iconSize = it }
+                metrics.iconPadding?.let { button.iconPadding = it }
+            }
+            metrics.margin?.let { margin ->
+                (view.layoutParams as? MarginLayoutParams)?.let { params ->
+                    params.setMargins(margin[0], margin[1], margin[2], margin[3])
+                    view.layoutParams = params
+                }
+            }
+        }
+        if (view is ViewGroup) {
+            for (index in 0 until view.childCount) restoreBaseline(view.getChildAt(index))
+        }
+    }
+
+    private fun restoreCanonical(view: View) = restoreBaseline(view)
+
+    private fun captureCanonical(view: View) {
+        canonicalMetrics[view] = metricsFor(view)
+        if (view is ViewGroup) {
+            for (index in 0 until view.childCount) captureCanonical(view.getChildAt(index))
+        }
+    }
+
+    private fun metricsFor(view: View): PresentationMetrics {
+        val margins = (view.layoutParams as? MarginLayoutParams)?.let {
+            intArrayOf(it.leftMargin, it.topMargin, it.rightMargin, it.bottomMargin)
+        }
+        return PresentationMetrics(
+            textSize = (view as? TextView)?.textSize,
+            maxWidth = (view as? TextView)?.maxWidth,
+            padding = intArrayOf(view.paddingLeft, view.paddingTop, view.paddingRight, view.paddingBottom),
+            margin = margins,
+            iconSize = (view as? MaterialButton)?.iconSize,
+            iconPadding = (view as? MaterialButton)?.iconPadding,
+        )
+    }
+
+    private fun applyScale(view: View, scale: Float) {
+        val text = view as? TextView
+        if (text != null) {
+            text.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, text.textSize * scale)
+            if (text.maxWidth != Int.MAX_VALUE) {
+                text.maxWidth = (text.maxWidth * scale).roundToInt().coerceAtLeast(1)
+            }
+        }
+        view.setPadding(
+            (view.paddingLeft * scale).roundToInt(),
+            (view.paddingTop * scale).roundToInt(),
+            (view.paddingRight * scale).roundToInt(),
+            (view.paddingBottom * scale).roundToInt(),
+        )
+        (view as? MaterialButton)?.let { button ->
+            button.iconSize = (button.iconSize * scale).roundToInt().coerceAtLeast(1)
+            button.iconPadding = (button.iconPadding * scale).roundToInt().coerceAtLeast(0)
+        }
+        if (view.id == com.github.andreyasadchy.xtra.R.id.channelAvatar) {
+            (view.layoutParams as? MarginLayoutParams)?.let { params ->
+                params.width = (params.width * scale).roundToInt().coerceAtLeast(1)
+                params.height = (params.height * scale).roundToInt().coerceAtLeast(1)
+                view.layoutParams = params
+            }
+        }
+        (view.layoutParams as? MarginLayoutParams)?.let { params ->
+            params.setMargins(
+                (params.leftMargin * scale).roundToInt(),
+                (params.topMargin * scale).roundToInt(),
+                (params.rightMargin * scale).roundToInt(),
+                (params.bottomMargin * scale).roundToInt(),
+            )
+            view.layoutParams = params
+        }
+        if (view is ViewGroup) {
+            for (index in 0 until view.childCount) applyScale(view.getChildAt(index), scale)
+        }
+    }
 }
