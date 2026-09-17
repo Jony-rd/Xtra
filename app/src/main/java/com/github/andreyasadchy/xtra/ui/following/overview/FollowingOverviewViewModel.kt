@@ -223,19 +223,20 @@ class FollowingOverviewViewModel(
                     }
                 }
                 coroutineScope {
+                    val followedChannels = if (loadUpcomingStreams) {
+                        async { loadFollowedChannels() }
+                    } else null
                     val recentVideos = async {
                         if (loadRecentVideos) {
-                            loadRecentFollowedVideos()
-                        } else null
-                    }
-                    val followedChannels = async {
-                        if (loadUpcomingStreams) {
-                            loadFollowedChannels()
+                            loadRecentFollowedVideos {
+                                if (followedChannels != null) followedChannels.await()
+                                else loadFollowedChannels()
+                            }
                         } else null
                     }
                     val loadedRecentVideos = recentVideos.await()
                     val loadedUpcomingStreams = if (loadUpcomingStreams) {
-                        followedChannels.await()?.let { loadUpcomingStreams(it, _upcomingStreams.value) }
+                        followedChannels?.await()?.let { loadUpcomingStreams(it, _upcomingStreams.value) }
                     } else null
                     if (isCurrentOverviewRequest(generation, requestAccountId)) {
                         loadedRecentVideos?.let {
@@ -290,7 +291,9 @@ class FollowingOverviewViewModel(
         return overviewContentGeneration == generation && accountId.value == requestAccountId
     }
 
-    private suspend fun loadRecentFollowedVideos(): List<Video>? {
+    private suspend fun loadRecentFollowedVideos(
+        followedChannelsLoader: suspend () -> List<FollowedChannel>?,
+    ): List<Video>? {
         val networkLibrary = applicationContext.prefs().getString(C.NETWORK_LIBRARY, C.OKHTTP)
         val gqlHeaders = TwitchApiHelper.getGQLHeaders(applicationContext, true)
         val localChannels = loadLocalChannels()
@@ -334,7 +337,7 @@ class FollowingOverviewViewModel(
             }
         }
 
-        val channels = loadFollowedChannels() ?: return null
+        val channels = followedChannelsLoader() ?: return null
         val helixHeaders = TwitchApiHelper.getHelixHeaders(applicationContext)
         val videos = loadHelixVideos(
             channels = channels.take(RECENT_VOD_CHANNEL_LIMIT),
