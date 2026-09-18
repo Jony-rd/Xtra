@@ -1188,7 +1188,9 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                 audioOnly.setOnClickListener {
                     showController(force = true)
                     when (viewModel.quality?.name) {
-                        AUDIO_ONLY_QUALITY -> changeQuality(VideoQuality(CHAT_ONLY_QUALITY))
+                        AUDIO_ONLY_QUALITY -> changeQuality(
+                            resolveAudioModeRestoreQuality(viewModel.previousQuality, viewModel.qualities),
+                        )
                         CHAT_ONLY_QUALITY -> changeQuality(viewModel.previousQuality)
                         else -> changeQuality(viewModel.qualities?.find { it.name == AUDIO_ONLY_QUALITY })
                     }

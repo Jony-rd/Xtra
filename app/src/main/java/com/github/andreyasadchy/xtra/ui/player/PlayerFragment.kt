@@ -2089,7 +2089,12 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 audioOnly.setOnClickListener {
                     showController(force = true)
                     when (playbackService?.quality?.name) {
-                        BasePlaybackService.AUDIO_ONLY_QUALITY -> changeQuality(VideoQuality(BasePlaybackService.CHAT_ONLY_QUALITY))
+                        BasePlaybackService.AUDIO_ONLY_QUALITY -> changeQuality(
+                            resolveAudioModeRestoreQuality(
+                                playbackService?.previousQuality,
+                                playbackService?.qualities,
+                            ),
+                        )
                         BasePlaybackService.CHAT_ONLY_QUALITY -> changeQuality(playbackService?.previousQuality)
                         else -> changeQuality(playbackService?.qualities?.find { it.name == BasePlaybackService.AUDIO_ONLY_QUALITY })
                     }
