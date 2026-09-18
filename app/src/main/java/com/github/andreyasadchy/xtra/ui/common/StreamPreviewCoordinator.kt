@@ -39,9 +39,10 @@ import com.github.andreyasadchy.xtra.repository.preload.StreamPreviewQuality
 import com.github.andreyasadchy.xtra.repository.preload.StreamPreviewSelectionCandidate
 import com.github.andreyasadchy.xtra.repository.preload.StreamPreviewSelectionPolicy
 import com.github.andreyasadchy.xtra.repository.streamfeed.StreamFeedRefreshCoordinator
+import com.github.andreyasadchy.xtra.ui.player.forwardVideoSurfaceTouchToView
 import com.github.andreyasadchy.xtra.util.C
-import com.github.andreyasadchy.xtra.util.prefs
 import com.github.andreyasadchy.xtra.util.isTelevision
+import com.github.andreyasadchy.xtra.util.prefs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
@@ -610,7 +611,7 @@ class StreamPreviewCoordinator(
     private fun attachSurfaceIfNeeded(active: ActivePreview, candidate: StreamPreviewCandidate) {
         val surfaceChanged = active.surface !== candidate.surface
         if (surfaceChanged) {
-            // A rebound TextureView has no decoded frame yet. Keep the card thumbnail
+            // A rebound SurfaceView has no decoded frame yet. Keep the card thumbnail
             // visible until Media3 confirms that the new output surface has a frame.
             active.firstFrameRendered = false
             if (active.surface != null) detachPreviewSurface(active)
@@ -622,6 +623,14 @@ class StreamPreviewCoordinator(
         if (active.playerView.parent !== candidate.surface) {
             candidate.surface.addView(active.playerView)
         }
+        active.touchRelay?.let { relay ->
+            (relay.parent as? ViewGroup)?.removeView(relay)
+        }
+        active.touchRelay = createPreviewTouchRelay(candidate.surface)
+        candidate.surface.addView(
+            active.touchRelay,
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
+        )
         attachPreviewPlayer(active)
         active.playerView.alpha = if (active.firstFrameRendered) 1f else 0f
         active.playerView.visibility = View.VISIBLE
@@ -770,12 +779,37 @@ class StreamPreviewCoordinator(
         }
         active.surface?.let { surface ->
             surface.removeView(active.playerView)
+            active.touchRelay?.let(surface::removeView)
             surface.alpha = 0f
             surface.visibility = View.GONE
         }
         active.playerView.alpha = 0f
         active.playerView.visibility = View.GONE
         active.surface = null
+        active.touchRelay = null
+    }
+
+    private fun createPreviewTouchRelay(surface: FrameLayout): View {
+        val target = findPreviewClickTarget(surface)
+        return View(surface.context).apply {
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            isClickable = true
+            setOnTouchListener { view, event ->
+                target?.let { clickTarget ->
+                    forwardVideoSurfaceTouchToView(view, clickTarget, event)
+                }
+                true
+            }
+        }
+    }
+
+    private fun findPreviewClickTarget(surface: View): View? {
+        var parent = surface.parent
+        while (parent is View) {
+            if (parent.isClickable || parent.isLongClickable) return parent
+            parent = parent.parent
+        }
+        return null
     }
 
     private fun attachPreviewPlayer(active: ActivePreview) {
@@ -813,6 +847,7 @@ class StreamPreviewCoordinator(
         val player: ExoPlayer,
         val playerView: PlayerView,
         var surface: FrameLayout? = null,
+        var touchRelay: View? = null,
         var firstFrameRendered: Boolean = false,
     )
 

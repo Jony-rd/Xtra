@@ -77,6 +77,8 @@ import com.github.andreyasadchy.xtra.ui.channel.ChannelPagerFragmentDirections
 import com.github.andreyasadchy.xtra.ui.chat.ChatFragment
 import com.github.andreyasadchy.xtra.ui.common.BaseNetworkFragment
 import com.github.andreyasadchy.xtra.ui.common.RadioButtonDialogFragment
+import com.github.andreyasadchy.xtra.ui.common.formatStreamUptime
+import com.github.andreyasadchy.xtra.ui.common.parseStreamStartedAtMs
 import com.github.andreyasadchy.xtra.ui.download.DownloadDialog
 import com.github.andreyasadchy.xtra.ui.game.GamePagerFragmentDirections
 import com.github.andreyasadchy.xtra.ui.main.MainActivity
@@ -184,6 +186,7 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
     private var liveRewindScrubPositionMs: Long? = null
     private var liveRewindDiscoveryJob: Job? = null
     private var liveRewindTickerJob: Job? = null
+    private var streamUptimeTickerJob: Job? = null
     private var liveRewindSwitchJob: Job? = null
     private var liveCaptionModelVerificationJob: Job? = null
     private var liveRewindSessionGeneration = 0L
@@ -191,6 +194,7 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
     private var liveRewindFrozenEdgeMs: Long? = null
     private var pausedLivePositionMs: Long? = null
     private var liveRewindStreamWasLive = false
+    private var streamUptimeWasLive = false
     private var liveRewindStreamOffline = false
     private var pendingLiveSession: LiveRewindSession? = null
     private var liveRewindSwitching = false
@@ -1272,6 +1276,7 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                         repeatOnLifecycle(Lifecycle.State.STARTED) {
                             viewModel.stream.collectLatest { stream ->
                                 if (stream != null) {
+                                    startStreamUptimeTicker()
                                     if (requireContext().prefs().getBoolean(C.PLAYER_CHANNEL, true)) {
                                         stream.channelImage?.takeIf { it.isNotBlank() }?.let(::updateChannelAvatar)
                                     }
@@ -1314,7 +1319,11 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                                     if (isLiveRewindAvailable()) {
                                         updateLiveRewindProgress()
                                     }
-                                } else if (shouldMarkLiveStreamOffline(viewModel.streamStatusKnown.value, liveRewindStreamWasLive, false)) {
+                                } else if (shouldMarkLiveStreamOffline(
+                                        viewModel.streamStatusKnown.value,
+                                        liveRewindStreamWasLive || streamUptimeWasLive,
+                                        false,
+                                    )) {
                                     onLiveStreamWentOffline()
                                 }
                             }
@@ -1352,6 +1361,7 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                         requireArguments().getString(KEY_GAME_NAME)
                     )
                     updateViewerCount(requireArguments().getInt(KEY_VIEWER_COUNT).takeIf { it != -1 })
+                    startStreamUptimeTicker()
                 } else {
                     speed.visibility = View.VISIBLE
                     speed.setOnClickListener {
@@ -2371,6 +2381,7 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                     )
                     startLiveRewindTicker()
                 }
+                if (videoType == BasePlaybackService.STREAM) startStreamUptimeTicker()
                 restartPlayer()
             } else {
                 onLiveStreamWentOffline()
@@ -3096,6 +3107,65 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
         liveRewindTickerJob = null
     }
 
+    @SuppressLint("RepeatOnLifecycleWrongUsage")
+    private fun startStreamUptimeTicker() {
+        streamUptimeWasLive = true
+        if (streamUptimeTickerJob?.isActive == true) return
+        streamUptimeTickerJob = viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (isActive) {
+                    updateStreamUptime()
+                    delay(1_000L)
+                }
+            }
+        }
+    }
+
+    private fun stopStreamUptimeTicker() {
+        streamUptimeTickerJob?.cancel()
+        streamUptimeTickerJob = null
+    }
+
+    private fun streamStartedAt(): String? =
+        viewModel.stream.value?.createdAt
+            ?: requireArguments().getString(KEY_STARTED_AT)
+
+    private fun hideStreamUptime() {
+        val timeView = binding.playerControls.liveTimeGroup
+        val wasVisible = timeView.isVisible
+        timeView.visibility = View.GONE
+        timeView.text = null
+        timeView.contentDescription = null
+        timeView.setOnClickListener(null)
+        timeView.isClickable = false
+        timeView.isFocusable = false
+        if (wasVisible) binding.playerControls.root.refreshAvailabilityIfChanged()
+    }
+
+    private fun updateStreamUptime() {
+        if (videoType != BasePlaybackService.STREAM || isLiveRewindAvailable()) return
+        if (!requireContext().prefs().getBoolean(C.UI_UPTIME, true)) {
+            hideStreamUptime()
+            return
+        }
+        val startedAtMs = parseStreamStartedAtMs(streamStartedAt())
+        val uptime = startedAtMs?.let { formatStreamUptime(it, System.currentTimeMillis()) }
+        if (uptime == null) {
+            hideStreamUptime()
+            return
+        }
+        val timeView = binding.playerControls.liveTimeGroup
+        val wasVisible = timeView.isVisible
+        val timeText = getString(R.string.player_live_position, uptime, getString(R.string.player_live))
+        timeView.visibility = View.VISIBLE
+        timeView.text = timeText
+        timeView.contentDescription = getString(R.string.player_uptime, timeText)
+        timeView.setOnClickListener(null)
+        timeView.isClickable = false
+        timeView.isFocusable = false
+        if (!wasVisible) binding.playerControls.root.refreshAvailabilityIfChanged()
+    }
+
     protected fun updateLiveRewindProgress() {
         val vod = liveRewindVod ?: return
         if (!isLiveRewindAvailable() || view == null) {
@@ -3129,7 +3199,11 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                 updateLiveRewindUi()
                 return
             }
-        } else if (shouldMarkLiveStreamOffline(viewModel.streamStatusKnown.value, liveRewindStreamWasLive, false) && !liveRewindStreamOffline) {
+        } else if (shouldMarkLiveStreamOffline(
+                viewModel.streamStatusKnown.value,
+                liveRewindStreamWasLive || streamUptimeWasLive,
+                false,
+            ) && !liveRewindStreamOffline) {
             onLiveStreamWentOffline()
             return
         }
@@ -3573,11 +3647,19 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
     private fun onLiveStreamWentOffline() {
         if (view == null) return
         cancelLiveTapSeek()
+        streamUptimeWasLive = false
+        val liveEdgeMs = liveRewindVod?.predictedDurationMs()
+        if (liveEdgeMs == null) {
+            stopStreamUptimeTicker()
+            hideStreamUptime()
+            return
+        }
         val state = liveRewindSourceState().streamEnded(
-            liveRewindVod?.predictedDurationMs() ?: return,
+            liveEdgeMs,
         )
         liveRewindStreamOffline = state.offline
         liveRewindFrozenEdgeMs = state.frozenEdgeMs
+        stopStreamUptimeTicker()
         stopLiveRewindTicker()
         updateLiveRewindProgress()
     }
@@ -4226,6 +4308,8 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
         liveCaptionModelVerificationJob?.cancel()
         liveCaptionModelVerificationJob = null
         stopLiveRewindTicker()
+        stopStreamUptimeTicker()
+        streamUptimeWasLive = false
         liveRewindScrubPositionMs = null
         pausedLivePositionMs = null
         liveRewindSwitchGeneration++
