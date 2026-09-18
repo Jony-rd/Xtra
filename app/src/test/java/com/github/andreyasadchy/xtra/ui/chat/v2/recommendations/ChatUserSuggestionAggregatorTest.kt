@@ -48,6 +48,52 @@ class ChatUserSuggestionAggregatorTest {
         assertEquals(300L, result.single().lastSeenAt)
     }
 
+    @Test
+    fun `presence adds quiet chatters while messages keep their activity ranking`() {
+        val result = aggregator.aggregate(
+            messages = listOf(message("alice-1", "alice", "Alice", 100)),
+            presence = listOf(
+                ChatUserSuggestion(
+                    userId = null,
+                    login = "alice",
+                    displayName = "Alice",
+                ),
+                ChatUserSuggestion(
+                    userId = null,
+                    login = "quiet_viewer",
+                    displayName = "QuietViewer",
+                ),
+            ),
+        )
+
+        assertEquals(listOf("alice", "quiet_viewer"), result.map { it.login })
+        assertEquals(1, result[0].messageCount)
+        assertEquals(0, result[1].messageCount)
+    }
+
+    @Test
+    fun `presence does not restore activity after a message leaves the current window`() {
+        val previous = aggregator.aggregate(
+            messages = listOf(message("alice-1", "alice", "Alice", 100)),
+        )
+
+        val result = aggregator.aggregate(
+            messages = listOf(message("bob-1", "bob", "Bob", 200)),
+            previous = previous.associateBy { it.login },
+            presence = listOf(
+                ChatUserSuggestion(
+                    userId = null,
+                    login = "alice",
+                    displayName = "Alice",
+                ),
+            ),
+        )
+
+        val alice = result.single { it.login == "alice" }
+        assertEquals(0, alice.messageCount)
+        assertEquals(0L, alice.lastSeenAt)
+    }
+
     private fun message(
         id: String,
         login: String?,

@@ -16,7 +16,7 @@ data class UsernameRecommendation(
     val match: FuzzyMatch?,
 )
 
-/** Ranks users who have appeared in the active chat using the same fuzzy matching as emotes. */
+/** Ranks users in the active chat using the same fuzzy matching as emotes. */
 class UsernameRecommendationEngine(
     private val matcher: FuzzySubsequenceMatcher = FuzzySubsequenceMatcher(),
     private val maxResults: Int = 8,
