@@ -519,6 +519,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
 
     private data class UsernameRecommendationResult(
         val query: String,
+        val autocompleteActive: Boolean,
         val recommendations: List<UsernameRecommendation>,
     )
 
@@ -1594,6 +1595,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                                         val mentionToken = token?.takeIf { it.text.startsWith("@") }
                                         UsernameRecommendationResult(
                                             query = mentionToken?.text.orEmpty(),
+                                            autocompleteActive = mentionToken != null,
                                             recommendations = mentionToken?.let {
                                                 usernameRecommendationEngine.recommend(
                                                     query = it.text,
@@ -1603,6 +1605,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                                         )
                                     }
                                 }.collectLatest { result ->
+                                    viewModel.setChatUsernameAutocompleteActive(result.autocompleteActive)
                                     val queryChanged = currentUsernameQuery != result.query
                                     currentUsernameQuery = result.query
                                     currentUserRecommendations = result.recommendations
@@ -4117,6 +4120,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
 
     override fun onStop() {
         chatIdentityPopup?.dismiss()
+        viewModel.setChatUsernameAutocompleteActive(false)
         super.onStop()
         if (!useChatV2 && (!requireArguments().getBoolean(KEY_IS_LIVE) || !requireContext().prefs().getBoolean(C.PLAYER_KEEP_CHAT_OPEN, false))) {
             viewModel.stopLiveChat()
@@ -4143,6 +4147,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
     }
 
     override fun onDestroyView() {
+        viewModel.setChatUsernameAutocompleteActive(false)
         pinnedMessageTimerJob?.cancel()
         pinnedMessageTimerJob = null
         pinnedMessageBinding = null

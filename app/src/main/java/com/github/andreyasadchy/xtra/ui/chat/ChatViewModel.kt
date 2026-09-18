@@ -825,6 +825,12 @@ class ChatViewModel(
     private val chatUserAvatarCache = mutableMapOf<String, String?>()
     private val chatUserSuggestionAggregator = ChatUserSuggestionAggregator()
     private var chatUserAvatarLoadJob: Job? = null
+    private var chatUserPresenceRefreshJob: Job? = null
+    private var chatUserPresenceAutocompleteActive = false
+    private var chatUserPresence = emptyList<ChatUserSuggestion>()
+    private var chatUserPresenceLoadedAtMillis = 0L
+    private var latestV2ChatMessages = emptyList<com.github.andreyasadchy.xtra.ui.chat.v2.domain.ChatMessage>()
+    private var hasV2ChatUserTimeline = false
     private var chatUserAvatarGeneration = 0L
     private var chatUserSequence = 0L
 
@@ -2132,12 +2138,15 @@ class ChatViewModel(
         messages: List<com.github.andreyasadchy.xtra.ui.chat.v2.domain.ChatMessage>,
     ) {
         if (!chatUsernameRecommendationsEnabled) return
+        latestV2ChatMessages = messages.toList()
+        hasV2ChatUserTimeline = true
         var changed = false
         synchronized(chatUserRecords) {
             val previous = chatUserRecords.toMap()
             val next = chatUserSuggestionAggregator.aggregate(
                 messages = messages,
                 previous = previous,
+                presence = chatUserPresence,
                 avatarFor = { userId, login -> cachedChatUserAvatar(userId, login) },
             )
             val activeAvatarKeys = next.flatMap(::chatUserAvatarKeys).toSet()
@@ -2153,6 +2162,135 @@ class ChatViewModel(
         }
         if (changed) scheduleChatUserAvatarLoad()
     }
+
+    private fun startChatUserPresenceRefresh() {
+        chatUserPresenceRefreshJob?.cancel()
+        chatUserPresenceRefreshJob = null
+        if (!chatUsernameRecommendationsEnabled || !chatUserPresenceAutocompleteActive) return
+        val expectedChannelId = activeChannelId ?: return
+        val expectedChannelLogin = activeChannelLogin?.takeIf(String::isNotBlank) ?: return
+        val networkLibrary = applicationContext.prefs().getString(C.NETWORK_LIBRARY, C.OKHTTP)
+        val cacheAge = System.currentTimeMillis() - chatUserPresenceLoadedAtMillis
+        val initialDelay = if (chatUserPresenceLoadedAtMillis > 0L &&
+            cacheAge < CHAT_USER_PRESENCE_CACHE_TTL_MILLIS
+        ) {
+            CHAT_USER_PRESENCE_CACHE_TTL_MILLIS - cacheAge
+        } else {
+            0L
+        }
+        lateinit var refreshJob: Job
+        refreshJob = viewModelScope.launch {
+            try {
+                if (initialDelay > 0L) delay(initialDelay)
+                while (isActive && chatUserPresenceLoadStillCurrent(expectedChannelId, expectedChannelLogin)) {
+                    loadChatUserPresence(networkLibrary, expectedChannelLogin)?.let { presence ->
+                        if (chatUserPresenceLoadStillCurrent(expectedChannelId, expectedChannelLogin)) {
+                            applyChatUserPresence(presence)
+                        }
+                    }
+                    delay(
+                        if (chatUserPresenceLoadedAtMillis > 0L) {
+                            CHAT_USER_PRESENCE_CACHE_TTL_MILLIS
+                        } else {
+                            CHAT_USER_PRESENCE_REFRESH_INTERVAL_MILLIS
+                        },
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } finally {
+                if (chatUserPresenceRefreshJob === refreshJob) {
+                    chatUserPresenceRefreshJob = null
+                }
+            }
+        }
+        chatUserPresenceRefreshJob = refreshJob
+    }
+
+    private suspend fun loadChatUserPresence(
+        networkLibrary: String?,
+        channelLogin: String,
+    ): List<ChatUserSuggestion>? = try {
+        val response = graphQLRepository.loadQueryUserChatters(
+            networkLibrary = networkLibrary,
+            headers = TwitchApiHelper.getGQLHeaders(applicationContext, includeToken = true),
+            login = channelLogin,
+        )
+        val chatters = if (response.errors.isNullOrEmpty()) {
+            response.data?.user?.channel?.chatters
+        } else {
+            null
+        } ?: return null
+        val users = LinkedHashMap<String, ChatUserSuggestion>()
+        fun add(login: String?) {
+            val normalized = login?.trim()?.takeIf(String::isNotBlank) ?: return
+            val key = normalized.lowercase(Locale.ROOT)
+            users.putIfAbsent(
+                key,
+                ChatUserSuggestion(
+                    userId = null,
+                    login = normalized,
+                    displayName = normalized,
+                ),
+            )
+        }
+        chatters.broadcasters?.forEach { add(it.login) }
+        chatters.moderators?.forEach { add(it.login) }
+        chatters.vips?.forEach { add(it.login) }
+        chatters.viewers?.forEach { add(it.login) }
+        users.values.toList()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun applyChatUserPresence(presence: List<ChatUserSuggestion>) {
+        if (!chatUsernameRecommendationsEnabled) return
+        chatUserPresence = presence
+        chatUserPresenceLoadedAtMillis = System.currentTimeMillis()
+        if (hasV2ChatUserTimeline) {
+            reconcileV2ChatUsers(latestV2ChatMessages)
+            return
+        }
+        val presenceKeys = presence.mapTo(HashSet()) { it.login.lowercase(Locale.ROOT) }
+        var changed = false
+        synchronized(chatUserRecords) {
+            val iterator = chatUserRecords.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                if (entry.value.messageCount == 0 && entry.key !in presenceKeys) {
+                    iterator.remove()
+                    changed = true
+                }
+            }
+            presence.forEach { presentUser ->
+                val key = presentUser.login.lowercase(Locale.ROOT)
+                val current = chatUserRecords[key]
+                val next = current?.copy(
+                    userId = current.userId ?: presentUser.userId,
+                    displayName = current.displayName.takeIf(String::isNotBlank) ?: presentUser.displayName,
+                    profileImageUrl = current.profileImageUrl ?: presentUser.profileImageUrl,
+                ) ?: presentUser.copy(profileImageUrl = cachedChatUserAvatar(null, presentUser.login))
+                if (next != current) {
+                    chatUserRecords[key] = next
+                    changed = true
+                }
+            }
+            if (changed) {
+                chatUserAvatarGeneration++
+                _chatUserSuggestions.value = chatUserRecords.values.toList()
+            }
+        }
+        if (changed) scheduleChatUserAvatarLoad()
+    }
+
+    private fun chatUserPresenceLoadStillCurrent(
+        expectedChannelId: String,
+        expectedChannelLogin: String,
+    ): Boolean = activeChannelId == expectedChannelId &&
+            activeChannelLogin.equals(expectedChannelLogin, ignoreCase = true) &&
+            chatUsernameRecommendationsEnabled
 
     private fun scheduleChatUserAvatarLoad() {
         if (!chatUsernameRecommendationsEnabled) return
@@ -2333,10 +2471,16 @@ class ChatViewModel(
     private fun clearChatUserSuggestions() {
         chatUserAvatarLoadJob?.cancel()
         chatUserAvatarLoadJob = null
+        chatUserPresenceRefreshJob?.cancel()
+        chatUserPresenceRefreshJob = null
         synchronized(chatUserRecords) {
             chatUserRecords.clear()
             recordedChatUserMessageIds.clear()
             chatUserAvatarCache.clear()
+            chatUserPresence = emptyList()
+            chatUserPresenceLoadedAtMillis = 0L
+            latestV2ChatMessages = emptyList()
+            hasV2ChatUserTimeline = false
             chatUserAvatarGeneration++
             chatUserSequence = 0L
             _chatUserSuggestions.value = emptyList()
@@ -2346,7 +2490,27 @@ class ChatViewModel(
     fun setChatUsernameRecommendationsEnabled(enabled: Boolean) {
         if (chatUsernameRecommendationsEnabled == enabled) return
         chatUsernameRecommendationsEnabled = enabled
-        if (!enabled) clearChatUserSuggestions()
+        if (enabled) {
+            if (chatUserPresenceAutocompleteActive) startChatUserPresenceRefresh()
+        } else {
+            clearChatUserSuggestions()
+        }
+    }
+
+    fun setChatUsernameAutocompleteActive(active: Boolean) {
+        if (chatUserPresenceAutocompleteActive == active) {
+            if (active && chatUserPresenceRefreshJob?.isActive != true) {
+                startChatUserPresenceRefresh()
+            }
+            return
+        }
+        chatUserPresenceAutocompleteActive = active
+        if (active) {
+            startChatUserPresenceRefresh()
+        } else {
+            chatUserPresenceRefreshJob?.cancel()
+            chatUserPresenceRefreshJob = null
+        }
     }
 
     private fun clearChatMessages() {
@@ -3576,6 +3740,7 @@ class ChatViewModel(
         }
         activeChannelId = channelId
         activeChannelLogin = channelLogin
+        if (chatUserPresenceAutocompleteActive) startChatUserPresenceRefresh()
         if (!predictionPreferenceListenerRegistered) {
             applicationContext.prefs().registerOnSharedPreferenceChangeListener(predictionPreferenceListener)
             predictionPreferenceListenerRegistered = true
@@ -3922,6 +4087,8 @@ class ChatViewModel(
         _streamInfo.value = null
         activeChannelId = null
         activeChannelLogin = null
+        chatUserPresenceRefreshJob?.cancel()
+        chatUserPresenceRefreshJob = null
         if (applicationContext.tokenPrefs().getString(C.USER_ID, null).isNullOrBlank()) {
             chatIdentityLoadJob?.cancel()
             chatIdentityLoadJob = null
@@ -7766,6 +7933,8 @@ class ChatViewModel(
         private const val METERED_CACHE_MAX_AGE_MS = 604_800_000L
         private const val MAX_BADGE_CACHE_FILES = 100
         private const val MAX_CHAT_USER_AVATARS = 100
+        private const val CHAT_USER_PRESENCE_CACHE_TTL_MILLIS = 5 * 60_000L
+        private const val CHAT_USER_PRESENCE_REFRESH_INTERVAL_MILLIS = 60_000L
         private const val DEFAULT_REWARD_COLOR = "#9146FF"
         private const val MIN_PREDICTION_POINTS = 10
         private const val MAX_PREDICTION_POINTS = 250_000
