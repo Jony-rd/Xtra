@@ -103,7 +103,7 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost {
     private var renderedDurationMs = Long.MIN_VALUE
     private var renderedPlaybackChrome: PlaybackChromeState? = null
     private val updateProgressAction = Runnable { if (view != null) updateProgress() }
-    private val useTextureVideoOutput = shouldUseTextureViewForVideoOutput()
+    private val useTextureVideoOutput = USE_TEXTURE_VIDEO_OUTPUT
     private val videoOutputOwner = VideoOutputOwner<Player, View>(
         attachTarget = { currentPlayer, target ->
             when (target) {
@@ -134,6 +134,16 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost {
         binding.playerSurface.visibility =
             if (useTextureVideoOutput) View.GONE else View.VISIBLE
 
+        binding.playerSurface.setOnTouchListener(
+            if (useTextureVideoOutput) {
+                null
+            } else {
+                View.OnTouchListener { _, event ->
+                    forwardVideoSurfaceTouch(binding.playerSurface, binding.dragView, event)
+                }
+            },
+        )
+
         if (!useTextureVideoOutput &&
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
         ) {
@@ -154,7 +164,7 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost {
         if (BuildConfig.DEBUG) {
             Log.d(
                 "VideoSurface",
-                "renderer=${videoOutputView.javaClass.simpleName} emulatorFallback=$useTextureVideoOutput",
+                "renderer=${videoOutputView.javaClass.simpleName} textureOutput=$useTextureVideoOutput",
             )
         }
 
@@ -1377,7 +1387,7 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost {
         mediaSourceRebuilt: Boolean,
     ): Boolean =
         previous != null &&
-                useTextureVideoOutput &&
+                isAndroidEmulator() &&
                 videoType == STREAM &&
                 viewModel.qualities?.any { it.name == AUTO_QUALITY } == true &&
                 next.name != AUDIO_ONLY_QUALITY &&

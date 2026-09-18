@@ -2151,7 +2151,7 @@ class ExoPlayerService : BasePlaybackService() {
         mediaSourceRebuilt: Boolean,
     ): Boolean =
         previous != null &&
-                shouldUseTextureViewForVideoOutput() &&
+                isAndroidEmulator() &&
                 type == STREAM &&
                 canUseLiveSource(type, liveRewindActive, liveRewindTransitioning) &&
                 qualities?.any { it.name == AUTO_QUALITY } == true &&

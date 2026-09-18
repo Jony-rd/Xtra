@@ -79,7 +79,7 @@ class ExoPlayerFragment : PlayerFragment(), ClipEditorDialogFragment.Host, Playb
     private var liveSurfaceRestoreTimeout: Runnable? = null
     private var clipEditorCoverTimeout: Runnable? = null
     private var videoOutputCover: View? = null
-    private val useTextureVideoOutput = shouldUseTextureViewForVideoOutput()
+    private val useTextureVideoOutput = USE_TEXTURE_VIDEO_OUTPUT
     private val videoOutputOwner = VideoOutputOwner<Player, View>(
         attachTarget = { currentPlayer, target ->
             when (target) {
@@ -109,6 +109,16 @@ class ExoPlayerFragment : PlayerFragment(), ClipEditorDialogFragment.Host, Playb
             if (useTextureVideoOutput) View.VISIBLE else View.GONE
         binding.playerSurface.visibility =
             if (useTextureVideoOutput) View.GONE else View.VISIBLE
+
+        binding.playerSurface.setOnTouchListener(
+            if (useTextureVideoOutput) {
+                null
+            } else {
+                View.OnTouchListener { _, event ->
+                    forwardVideoSurfaceTouch(binding.playerSurface, binding.dragView, event)
+                }
+            },
+        )
 
         if (!useTextureVideoOutput &&
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
@@ -143,15 +153,14 @@ class ExoPlayerFragment : PlayerFragment(), ClipEditorDialogFragment.Host, Playb
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         videoOutputCover = outputCover
-        // Keep the cover above the selected video renderer until the player confirms a new
-        // decoded frame. Physical devices use SurfaceView; emulators use TextureView because
-        // their SurfaceView compositor can corrupt frames during quality changes.
+        // Keep the cover above the SurfaceView until the player confirms a new decoded frame.
+        // Emulator quality changes still use the decoder-reset safety path in the service.
         binding.aspectRatioFrameLayout.addView(outputCover)
         configureVideoOutputView()
         if (BuildConfig.DEBUG) {
             Log.d(
                 "VideoSurface",
-                "renderer=${videoOutputView.javaClass.simpleName} emulatorFallback=$useTextureVideoOutput",
+                "renderer=${videoOutputView.javaClass.simpleName} textureOutput=$useTextureVideoOutput",
             )
         }
         logVideoSurfaceBinding("on_view_created", playbackService?.player, videoOutputView)
