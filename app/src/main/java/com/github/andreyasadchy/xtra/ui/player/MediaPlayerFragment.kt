@@ -40,7 +40,7 @@ class MediaPlayerFragment : PlayerFragment() {
         binding.playerSurface.visibility = if (visible) View.VISIBLE else View.GONE
         // PlayerHudLayout positions the fixed timeline from the rendered output.
         // Re-measure it when audio mode hides or restores that output.
-        binding.playerControls.root.requestLayout()
+        refreshPlayerHudLayout()
     }
 
     override fun startLiveRewindChat(positionMs: Long) {
@@ -85,6 +85,7 @@ class MediaPlayerFragment : PlayerFragment() {
                 when (what) {
                     MediaPlayer.MEDIA_INFO_BUFFERING_START -> binding.bufferingIndicator.visibility = View.VISIBLE
                     MediaPlayer.MEDIA_INFO_BUFFERING_END -> binding.bufferingIndicator.visibility = View.GONE
+                    MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START -> refreshPlayerHudLayout()
                 }
             }
 
@@ -93,6 +94,7 @@ class MediaPlayerFragment : PlayerFragment() {
                     val aspectRatio = width.toFloat() / height
                     binding.aspectRatioFrameLayout.setAspectRatio(aspectRatio)
                 }
+                refreshPlayerHudLayout()
             }
 
             override fun onError(player: MediaPlayer, what: Int, extra: Int) {

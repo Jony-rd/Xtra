@@ -557,6 +557,19 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
         binding.playerControls.clip.isEnabled = available
     }
 
+    /**
+     * SurfaceView can become measurable one traversal after audio-only
+     * playback restores the video output. Re-run the HUD layout after that
+     * traversal so fixed chrome stays on the rendered video boundary.
+     */
+    protected fun refreshPlayerHudLayout() {
+        val root = _binding?.playerControls?.root ?: return
+        root.requestLayout()
+        root.post {
+            if (root.isAttachedToWindow) root.requestLayout()
+        }
+    }
+
     protected fun configureClipControl() {
         if (_binding == null) return
         val playbackType = playbackService?.type
@@ -3960,7 +3973,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
         }
     }
 
-    fun maximize() {
+    fun maximize(showControls: Boolean = false) {
         with(binding) {
             isMaximized = true
             dismissPlayer.visibility = View.GONE
@@ -3977,10 +3990,11 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
             }
             updateInteractionLockBackCallback()
             useController = true
-            if (!controllerHideOnTouch) {
+            if (showControls || !controllerHideOnTouch) {
                 showController(force = true)
                 updateProgress()
             }
+            refreshPlayerHudLayout()
             if (isPortrait) {
                 setChatLayoutVisibility(View.VISIBLE)
             } else {

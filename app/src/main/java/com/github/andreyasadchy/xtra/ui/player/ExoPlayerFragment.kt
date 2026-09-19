@@ -272,6 +272,7 @@ class ExoPlayerFragment : PlayerFragment(), ClipEditorDialogFragment.Host, Playb
                     val aspectRatio = (videoSize.width * videoSize.pixelWidthHeightRatio) / videoSize.height
                     binding.aspectRatioFrameLayout.setAspectRatio(aspectRatio)
                 }
+                refreshPlayerHudLayout()
             }
 
             override fun onCues(cueGroup: CueGroup) {
@@ -344,6 +345,7 @@ class ExoPlayerFragment : PlayerFragment(), ClipEditorDialogFragment.Host, Playb
             override fun onRenderedFirstFrame() {
                 logVideoSurfaceBinding("first_frame", playbackService?.player, videoOutputView)
                 hideVideoOutputCover()
+                refreshPlayerHudLayout()
             }
         }
         val serviceListener = object : ExoPlayerService.Listener {
@@ -1212,7 +1214,7 @@ class ExoPlayerFragment : PlayerFragment(), ClipEditorDialogFragment.Host, Playb
         // temporarily measure against the full aspect-ratio container. When
         // video is restored, force the HUD to measure again after the output
         // becomes visible or the timeline can remain below the video edge.
-        binding.playerControls.root.requestLayout()
+        refreshPlayerHudLayout()
         if (!visible) {
             showVideoOutputCover()
         }

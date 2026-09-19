@@ -393,6 +393,19 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
     protected fun isLiveRewindActiveOrSwitching(): Boolean =
         isLiveRewindSourceActiveOrSwitching(livePlaybackMode, liveRewindSwitching)
 
+    /**
+     * SurfaceView can become measurable one traversal after audio-only
+     * playback restores the video output. Re-run the HUD layout after that
+     * traversal so fixed chrome stays on the rendered video boundary.
+     */
+    protected fun refreshPlayerHudLayout() {
+        val root = _binding?.playerControls?.root ?: return
+        root.requestLayout()
+        root.post {
+            if (root.isAttachedToWindow) root.requestLayout()
+        }
+    }
+
     private fun liveRewindSourceState(): LiveRewindSourceState = LiveRewindSourceState(
         mode = livePlaybackMode,
         vod = liveRewindVod,
@@ -4041,7 +4054,7 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
         }
     }
 
-    fun maximize() {
+    fun maximize(showControls: Boolean = false) {
         with(binding) {
             isMaximized = true
             dismissPlayer.visibility = View.GONE
@@ -4055,10 +4068,11 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                 chatFragment?.toggleBackPressedCallback(true)
             }
             useController = true
-            if (!controllerHideOnTouch) {
+            if (showControls || !controllerHideOnTouch) {
                 showController(force = true)
                 updateProgress()
             }
+            refreshPlayerHudLayout()
             if (isPortrait) {
                 setChatLayoutVisibility(View.VISIBLE)
             } else {
