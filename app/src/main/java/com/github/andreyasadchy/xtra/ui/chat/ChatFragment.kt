@@ -76,6 +76,7 @@ import com.github.andreyasadchy.xtra.model.chat.PollVoteState
 import com.github.andreyasadchy.xtra.model.chat.PinnedChatMessage
 import com.github.andreyasadchy.xtra.model.chat.Prediction
 import com.github.andreyasadchy.xtra.model.chat.PredictionBetState
+import com.github.andreyasadchy.xtra.model.chat.TwitchBadge
 import com.github.andreyasadchy.xtra.model.ui.ChannelPoints
 import com.github.andreyasadchy.xtra.model.ui.ChannelPointReward
 import com.github.andreyasadchy.xtra.model.ui.ChannelPointRedemptionResult
@@ -103,6 +104,7 @@ import com.github.andreyasadchy.xtra.ui.chat.v2.catalog.ChatAssetProvider
 import com.github.andreyasadchy.xtra.ui.chat.v2.domain.ChatAssetKey
 import com.github.andreyasadchy.xtra.ui.chat.v2.domain.ChatAssetSpec
 import com.github.andreyasadchy.xtra.ui.chat.v2.catalog.ChatCatalogBadge
+import com.github.andreyasadchy.xtra.ui.chat.v2.catalog.ChatCatalogSnapshot
 import com.github.andreyasadchy.xtra.ui.chat.v2.catalog.ChatDecorationSnapshot
 import com.github.andreyasadchy.xtra.ui.chat.v2.catalog.ChatEmoteScope
 import com.github.andreyasadchy.xtra.ui.chat.v2.catalog.ChatNamePaint
@@ -112,6 +114,7 @@ import com.github.andreyasadchy.xtra.ui.chat.v2.session.LiveChatSessionSpec
 import com.github.andreyasadchy.xtra.ui.chat.v2.session.ChatSessionHandle
 import com.github.andreyasadchy.xtra.ui.chat.v2.ui.ChatV2RendererController
 import com.github.andreyasadchy.xtra.ui.chat.v2.ui.ChatViewportState
+import com.github.andreyasadchy.xtra.ui.chat.v2.transport.TwitchChatEventParser
 import com.github.andreyasadchy.xtra.ui.chat.v2.presentation.ChatPresentationLabels
 import com.github.andreyasadchy.xtra.ui.chat.v2.recommendations.ChatInputToken
 import com.github.andreyasadchy.xtra.ui.chat.v2.recommendations.ChatInputEmoteRenderer
@@ -149,6 +152,7 @@ import com.google.mlkit.nl.translate.TranslatorOptions
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -265,6 +269,19 @@ private fun STVBadge.toV2(): Pair<String, ChatCatalogBadge>? {
     )
 }
 
+private fun TwitchBadge.toV2CatalogEntry(): Pair<String, ChatCatalogBadge>? {
+    val url = url4x ?: url3x ?: url2x ?: url1x ?: return null
+    val key = "$setId:$version"
+    return key to ChatCatalogBadge(
+        name = key,
+        asset = ChatAssetSpec(ChatAssetKey(url), 18, 18, 18),
+        provider = ChatAssetProvider.TWITCH,
+        setId = setId,
+        versionId = version,
+        info = title,
+    )
+}
+
 internal data class ComposerOverlaySnapshot<Overlay, RestoreState>(
     val overlay: Overlay,
     val input: String,
@@ -343,6 +360,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
     private val chatV2SessionSlot = ChatV2SessionSlot()
     private var chatV2ViewportState = ChatViewportState()
     private var useChatV2 = false
+    private var useChatV2Renderer = false
     private var chatV2RendererVisible = true
     private var selectedV2Message: V2ChatMessage? = null
     private var selectedPinnedMessage: ChatMessage? = null
@@ -818,6 +836,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
         applyChatBackgroundAppearance()
         chatV2ViewportState = restoreChatV2ViewportState(savedInstanceState)
         useChatV2 = false
+        useChatV2Renderer = false
         seenPinnedMessageId = savedInstanceState?.getString(KEY_SEEN_PINNED_MESSAGE_ID)
         displayedPinnedMessageId = savedInstanceState?.getString(KEY_DISPLAYED_PINNED_MESSAGE_ID)
         pinnedMessageMinimized = savedInstanceState?.getBoolean(KEY_PINNED_MESSAGE_MINIMIZED) ?: false
@@ -1041,6 +1060,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                 val channelLogin = args.getString(KEY_CHANNEL_LOGIN)
                 val isLive = args.getBoolean(KEY_IS_LIVE)
                 useChatV2 = shouldUseChatV2ForLive(isLive, channelId, channelLogin)
+                useChatV2Renderer = useChatV2 || !isLive
                 val accountLogin = requireContext().tokenPrefs().getString(C.USERNAME, null)
                 val isLoggedIn = !accountLogin.isNullOrBlank() &&
                         (!TwitchApiHelper.getGQLHeaders(requireContext(), true)[C.HEADER_TOKEN].isNullOrBlank() ||
@@ -1180,7 +1200,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                         emotePopoutMode = emotePopoutMode,
                     )
                     interactionAdapterFactory = ChatInteractionAdapterFactory(interactionConfiguration)
-                    adapter = if (isLive) {
+                    adapter = if (useChatV2Renderer) {
                         null
                     } else {
                         // The initial snapshot is rendered off-main before the adapter is attached.
@@ -1189,16 +1209,16 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                             it.onMessagesPublished = ::onChatMessagesPublished
                         }
                     }
-                    if (useChatV2) {
+                    if (useChatV2Renderer) {
                         val app = requireContext().applicationContext as XtraApp
-                        val activeSessionSource = chatV2ActiveSessions()
-                        viewModel.bindV2SessionSource(activeSessionSource)
+                        val activeSessionSource = if (useChatV2) chatV2ActiveSessions() else emptyFlow()
+                        if (useChatV2) viewModel.bindV2SessionSource(activeSessionSource)
                         chatV2Renderer = ChatV2RendererController(
                             recyclerView = recyclerView,
                             activeSessions = activeSessionSource,
                             assets = app.xtraModule.chatAssetRepository,
-                            expectedChannelId = channelId!!,
-                            expectedChannelLogin = channelLogin!!,
+                            expectedChannelId = channelId.orEmpty(),
+                            expectedChannelLogin = channelLogin.orEmpty(),
                             initialState = chatV2ViewportState,
                             emoteHeightPx = chatStyle.emoteHeightPx,
                             badgeHeightPx = chatStyle.badgeHeightPx,
@@ -1308,7 +1328,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                         it.addOnScrollListener(object : RecyclerView.OnScrollListener() {
                             override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
                                 super.onScrollStateChanged(recyclerView, newState)
-                                if (useChatV2) {
+                                if (useChatV2Renderer) {
                                     if (newState == RecyclerView.SCROLL_STATE_DRAGGING) {
                                         userGestureActive = true
                                         chatV2Renderer?.onUserScroll()
@@ -1358,7 +1378,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                     }
                     val chatAdapter = adapter
                     viewLifecycleOwner.lifecycleScope.launch {
-                        if (!isLive && _binding?.recyclerView === recyclerView && chatAdapter === adapter) {
+                        if (!isLive && !useChatV2Renderer && _binding?.recyclerView === recyclerView && chatAdapter === adapter) {
                             recyclerView.adapter = chatAdapter
                             chatAdapterReady = true
                             pendingChatPublicationFollowBottom = !recyclerView.canScrollVertically(1)
@@ -1380,7 +1400,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                     }
                     btnDown.setOnClickListener {
                         view.post {
-                            if (useChatV2) {
+                            if (useChatV2Renderer) {
                                 chatV2Renderer?.jumpToNewest()
                             } else {
                                 val lastIndex = adapter?.itemCount?.minus(1) ?: RecyclerView.NO_POSITION
@@ -1965,7 +1985,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                             }
                         }
                     }
-                    if (!useChatV2) {
+                    if (!useChatV2Renderer) {
                         viewLifecycleOwner.lifecycleScope.launch {
                             repeatOnLifecycle(Lifecycle.State.STARTED) {
                                 synchronizeChatAdapterToSnapshot()
@@ -2011,10 +2031,20 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                             }
                         }
                     }
+                    if (useChatV2Renderer && !useChatV2) {
+                        viewLifecycleOwner.lifecycleScope.launch {
+                            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                                synchronizeV2ReplaySnapshot()
+                                viewModel.chatMutations.collect {
+                                    synchronizeV2ReplaySnapshot()
+                                }
+                            }
+                        }
+                    }
                     viewLifecycleOwner.lifecycleScope.launch {
                         repeatOnLifecycle(Lifecycle.State.STARTED) {
                             viewModel.updateUserMessages.collectLatest { userId ->
-                                if (!useChatV2) {
+                                if (!useChatV2Renderer) {
                                     adapter?.let { adapter ->
                                         adapter.notifyUserMessages(userId)
                                     }
@@ -2486,10 +2516,10 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
         super.onResume()
         applyChatBackgroundAppearance()
         adapter?.refreshChatHighlightSettings()
-        if (useChatV2) {
+        if (useChatV2Renderer) {
             chatV2Renderer?.refreshStyle(resolveChatRenderStyle(requireContext()))
         }
-        if (useChatV2 && chatV2RendererVisible) chatV2Renderer?.setVisible(true)
+        if (useChatV2Renderer && chatV2RendererVisible) chatV2Renderer?.setVisible(true)
         val args = requireArguments()
         val channelId = args.getString(KEY_CHANNEL_ID)
         val channelLogin = args.getString(KEY_CHANNEL_LOGIN)
@@ -2582,13 +2612,13 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
     }
 
     override fun onPause() {
-        if (useChatV2) chatV2Renderer?.setVisible(false)
+        if (useChatV2Renderer) chatV2Renderer?.setVisible(false)
         super.onPause()
     }
 
     fun setV2RendererVisible(visible: Boolean) {
         chatV2RendererVisible = visible
-        if (useChatV2) chatV2Renderer?.setVisible(visible)
+        if (useChatV2Renderer) chatV2Renderer?.setVisible(visible)
     }
 
     fun reconnect() {
@@ -3720,7 +3750,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                     .hideSoftInputFromWindow(currentBinding.editText.windowToken, 0)
                 currentBinding.editText.clearFocus()
                 toggleEmoteMenu(false)
-                if (useChatV2) {
+                if (useChatV2Renderer) {
                     chatV2Renderer?.jumpToNewest()
                 } else {
                     val lastIndex = synchronized(viewModel.chatMessages) { viewModel.chatMessages.lastIndex }
@@ -3789,6 +3819,32 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
         ).show(childFragmentManager, "imageDialog")
     }
 
+    private fun replayMessageToV2(message: ChatMessage): V2ChatMessage =
+        TwitchChatEventParser.fromLegacyMessage(
+            message = message,
+            channelId = requireArguments().getString(KEY_CHANNEL_ID).orEmpty(),
+        )
+
+    private fun replayCatalogSnapshot(): ChatCatalogSnapshot {
+        val badges = buildMap {
+            synchronized(viewModel.globalBadges) {
+                viewModel.globalBadges.mapNotNull { it.toV2CatalogEntry() }.forEach { (key, value) -> put(key, value) }
+            }
+            synchronized(viewModel.channelBadges) {
+                viewModel.channelBadges.mapNotNull { it.toV2CatalogEntry() }.forEach { (key, value) -> put(key, value) }
+            }
+        }
+        return ChatCatalogSnapshot(
+            revision = badges.hashCode().toLong(),
+            badges = badges,
+        )
+    }
+
+    private suspend fun synchronizeV2ReplaySnapshot() {
+        val messages = viewModel.chatSnapshot().messages.map(::replayMessageToV2)
+        chatV2Renderer?.replaceExternalMessages(messages, replayCatalogSnapshot())
+    }
+
     private fun v2MessageToLegacy(message: V2ChatMessage): ChatMessage {
         val text = message.rawText ?: message.segments.joinToString(separator = "") { segment ->
             when (segment) {
@@ -3846,7 +3902,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
     override fun onCreateMessageClickedChatAdapter(): MessageClickedChatAdapter? {
         selectedPinnedMessage?.let { pinnedMessage ->
             selectedPinnedMessage = null
-            return if (useChatV2) {
+            return if (useChatV2Renderer) {
                 interactionAdapterFactory?.createMessageClickedChatAdapter(
                     sourceMessages = listOf(pinnedMessage),
                     selectedMessageOverride = pinnedMessage,
@@ -3858,7 +3914,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
             }
         }
         val clicked = selectedV2Message
-        if (!useChatV2 || clicked == null) return adapter?.createMessageClickedChatAdapter()
+        if (!useChatV2Renderer || clicked == null) return adapter?.createMessageClickedChatAdapter()
         val canonicalMessages = chatV2Renderer?.currentMessages().orEmpty()
         val history = if (clicked.user != null) {
             canonicalMessages.filter { matchesV2MessageUser(it, clicked) }
@@ -3881,7 +3937,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
     }
 
     override fun onCreateReplyClickedChatAdapter(): ReplyClickedChatAdapter? {
-        if (!useChatV2) return adapter?.createReplyClickedChatAdapter()
+        if (!useChatV2Renderer) return adapter?.createReplyClickedChatAdapter()
         return interactionAdapterFactory?.createReplyClickedChatAdapter(
             sourceMessages = chatV2Renderer?.currentMessages().orEmpty().map(::v2MessageToLegacy),
         )
@@ -4043,7 +4099,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
     }
 
     private fun syncV2Translation(chatMessage: ChatMessage) {
-        if (!useChatV2 || chatMessage.id.isNullOrBlank()) return
+        if (!useChatV2Renderer || chatMessage.id.isNullOrBlank()) return
         chatMessage.translatedMessage?.let { v2Translations[chatMessage.id!!] = it }
             ?: v2Translations.remove(chatMessage.id!!)
         chatV2Renderer?.invalidatePresentation()
