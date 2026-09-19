@@ -1266,7 +1266,8 @@ class MainActivity : AppCompatActivity() {
             }
             INTENT_OPEN_PLAYER -> {
                 if (playerFragment != null) {
-                    (playerFragment as? Media3PlayerFragment)?.maximize() ?: (playerFragment as? PlayerFragment)?.maximize()
+                    (playerFragment as? Media3PlayerFragment)?.maximize(showControls = true)
+                        ?: (playerFragment as? PlayerFragment)?.maximize(showControls = true)
                 } else {
                     if (playbackBackend() == PlaybackBackend.LEGACY_EXOPLAYER) {
                         viewModel.getPlaybackStates()

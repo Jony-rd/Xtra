@@ -160,7 +160,7 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost {
         // temporarily measure against the full aspect-ratio container. When
         // video is restored, force the HUD to measure again after the output
         // becomes visible or the timeline can remain below the video edge.
-        binding.playerControls.root.requestLayout()
+        refreshPlayerHudLayout()
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
@@ -310,6 +310,7 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost {
                         val aspectRatio = (videoSize.width * videoSize.pixelWidthHeightRatio) / videoSize.height
                         binding.aspectRatioFrameLayout.setAspectRatio(aspectRatio)
                     }
+                    refreshPlayerHudLayout()
                 }
 
                 override fun onCues(cueGroup: CueGroup) {
@@ -535,6 +536,7 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost {
 
                 override fun onRenderedFirstFrame() {
                     logVideoSurfaceBinding("first_frame", controller, videoOutputView)
+                    refreshPlayerHudLayout()
                 }
             }
             val restoreBackgroundVideo = shouldRestoreVideoAfterBackground(
