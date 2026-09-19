@@ -18,6 +18,13 @@ import kotlin.math.max
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Instant
 
+internal fun VideoChatMessage.replayTimestampMs(vodStartTimestampMs: Long?): Long? =
+    createdAt?.let { value ->
+        Instant.parseOrNull(value)?.toEpochMilliseconds()?.takeIf { it > 0L }
+    } ?: vodStartTimestampMs?.let { start ->
+        offsetSeconds?.toLong()?.times(1000L)?.let { offset -> start + offset }
+    }
+
 class ChatReplayManager(
     private val networkLibrary: String?,
     private val gqlHeaders: Map<String, String>,
@@ -219,6 +226,7 @@ class ChatReplayManager(
                             emotes = message.emotes,
                             badges = message.badges,
                             bits = 0,
+                            timestamp = message.replayTimestampMs(createdAt),
                             fullMsg = message.fullMsg
                         )
                     )

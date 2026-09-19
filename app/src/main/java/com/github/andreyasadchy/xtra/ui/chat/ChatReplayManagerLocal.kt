@@ -178,6 +178,7 @@ class ChatReplayManagerLocal(
                                 emotes = message.emotes,
                                 badges = message.badges,
                                 bits = 0,
+                                timestamp = message.replayTimestampMs(createdAt),
                                 fullMsg = message.fullMsg
                             )
                         )
