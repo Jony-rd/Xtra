@@ -17,6 +17,7 @@ import com.github.andreyasadchy.xtra.ui.chat.v2.domain.ChatEmoteInteraction
 import com.github.andreyasadchy.xtra.ui.chat.v2.domain.ChatGifInteraction
 import com.github.andreyasadchy.xtra.ui.chat.v2.catalog.ChatDecorationSnapshot
 import com.github.andreyasadchy.xtra.ui.chat.v2.catalog.ChatCatalogState
+import com.github.andreyasadchy.xtra.ui.chat.v2.catalog.ChatCatalogSnapshot
 import com.github.andreyasadchy.xtra.ui.chat.v2.presentation.ChatColorResolver
 import com.github.andreyasadchy.xtra.ui.chat.v2.presentation.ChatMetadataSettlement
 import com.github.andreyasadchy.xtra.ui.chat.v2.presentation.ChatPresentationSnapshot
@@ -180,6 +181,10 @@ class ChatV2RendererController(
     private val rendererVisible = MutableStateFlow(true)
     private var translateAllMessages = translateAllMessages
     private val requestedTranslationIds = HashSet<ChatMessageId>()
+    private var externalMessages: List<ChatMessage>? = null
+    private var externalCatalog = ChatCatalogSnapshot(revision = 0L)
+    private var externalTimelineVersion = 0L
+    private var externalTimelineDelta: ChatTimelineDelta = ChatTimelineDelta.Full
 
     init {
         recyclerView.itemAnimator = null
@@ -194,6 +199,70 @@ class ChatV2RendererController(
 
     internal fun currentMessages(): List<ChatMessage> = latestMessages.toList()
     internal fun currentRows(): List<ChatRowUiModel> = latestRows
+
+    /** Publishes a non-session timeline, such as recorded VOD chat, through the v2 renderer. */
+    internal suspend fun replaceExternalMessages(
+        messages: List<ChatMessage>,
+        catalog: ChatCatalogSnapshot = ChatCatalogSnapshot(revision = 0L),
+    ) {
+        val previousMessages = externalMessages
+        externalMessages = messages.toList()
+        externalCatalog = catalog
+        externalTimelineVersion++
+        externalTimelineDelta = previousMessages
+            ?.let { externalAppendDelta(it, messages) }
+            ?: ChatTimelineDelta.Full
+        publishExternalMessagesIfVisible()
+    }
+
+    private suspend fun publishExternalMessagesIfVisible() {
+        if (!rendererVisible.value || externalMessages == null) return
+        val messages = externalMessages.orEmpty()
+        val catalog = externalCatalog
+        val timelineDelta = externalTimelineDelta
+        publish(
+            PresentationPublication(
+                key = com.github.andreyasadchy.xtra.ui.chat.v2.domain.ChatSessionKey(
+                    expectedChannelId,
+                    EXTERNAL_SESSION_GENERATION,
+                ),
+                messages = messages,
+                fullSnapshot = { messages },
+                timelineVersion = externalTimelineVersion,
+                timelineDelta = timelineDelta,
+                metadataSettlement = ChatMetadataSettlement(
+                    structuralSettled = true,
+                    badgesSettled = true,
+                    rewardsSettled = true,
+                ),
+                forceRefreshRevision = catalog.revision,
+                catalog = catalog,
+            ),
+        )
+        externalTimelineDelta = ChatTimelineDelta.Full
+    }
+
+    private fun externalAppendDelta(
+        previous: List<ChatMessage>,
+        current: List<ChatMessage>,
+    ): ChatTimelineDelta.Append? {
+        val firstCurrentId = current.firstOrNull()?.id ?: return null
+        val retainedStart = previous.indexOfFirst { it.id == firstCurrentId }
+        if (retainedStart < 0) return null
+        val retainedCount = previous.size - retainedStart
+        if (current.size < retainedCount) return null
+        if (!previous.subList(retainedStart, previous.size).indices.all { index ->
+                previous[retainedStart + index].id == current[index].id
+            }
+        ) {
+            return null
+        }
+        return ChatTimelineDelta.Append(
+            messages = current.drop(retainedCount),
+            evictedCount = retainedStart,
+            resultingSize = current.size,
+        )
+    }
 
     fun attach(owner: LifecycleOwner) {
         collectionJob?.cancel()
@@ -232,6 +301,11 @@ class ChatV2RendererController(
         if (rendererVisible.value == visible) return
         rendererVisible.value = visible
         updateRenderingActive(visible && lifecycleOwner?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.STARTED) == true)
+        if (visible) {
+            lifecycleOwner?.lifecycleScope?.launch {
+                publishExternalMessagesIfVisible()
+            }
+        }
     }
 
     private fun updateRenderingActive(active: Boolean) {
@@ -263,6 +337,8 @@ class ChatV2RendererController(
         reuseIndex.clear()
         presentationSnapshot.clear()
         requestedTranslationIds.clear()
+        externalMessages = null
+        externalTimelineDelta = ChatTimelineDelta.Full
     }
 
     fun onUserScroll() {
@@ -759,6 +835,10 @@ class ChatV2RendererController(
         val forceRefreshRevision: Long,
         val catalog: com.github.andreyasadchy.xtra.ui.chat.v2.catalog.ChatCatalogSnapshot,
     )
+
+    private companion object {
+        private const val EXTERNAL_SESSION_GENERATION = Long.MIN_VALUE
+    }
 }
 
 internal fun isReadyForChatPublication(

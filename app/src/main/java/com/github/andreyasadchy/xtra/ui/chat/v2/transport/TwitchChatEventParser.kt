@@ -400,6 +400,7 @@ object TwitchChatEventParser {
                 }
             },
             segments = segments,
+            rawText = raw.takeIf { it.isNotEmpty() },
             kind = when {
                 legacyNoticeType == "raid" ||
                     legacyNoticeType == "unraid" ||
@@ -425,6 +426,10 @@ object TwitchChatEventParser {
             subscription = subscription,
         )
     }
+
+    /** Converts replay messages to the same domain model used by the live v2 renderer. */
+    internal fun fromLegacyMessage(message: LegacyChatMessage, channelId: String): ChatMessage =
+        fromLegacy(message, channelId)
 
     private fun subscriptionFromIrc(tags: Map<String, String>): ChatSubscription? {
         val noticeType = (tags["source-msg-id"] ?: tags["msg-id"]).orEmpty().lowercase()
