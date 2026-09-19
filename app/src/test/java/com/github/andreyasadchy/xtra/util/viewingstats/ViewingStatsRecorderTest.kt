@@ -4,6 +4,7 @@ import com.github.andreyasadchy.xtra.model.stats.ViewingInterval
 import com.github.andreyasadchy.xtra.model.stats.ViewingPlaybackMetadata
 import com.github.andreyasadchy.xtra.model.stats.ViewingSession
 import com.github.andreyasadchy.xtra.repository.ViewingStatsStore
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -292,7 +293,7 @@ class ViewingStatsRecorderTest {
     @Test
     fun sourceChurnDoesNotDelayAnotherSourcesCheckpointDeadline() = runBlocking {
         val localStore = FakeViewingStatsStore()
-        val localScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val localScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val localRecorder = ViewingStatsRecorder(
             repository = localStore,
             clock = clock,
@@ -302,9 +303,7 @@ class ViewingStatsRecorderTest {
         try {
             localRecorder.update("source-a", metadata("channel-a"), true, false)
             localRecorder.awaitIdle()
-            // Let the scheduler establish A's deadline without waiting for it
-            // in real time. The test advances only the fake monotonic clock.
-            delay(100L)
+            assertEquals(5.seconds, localRecorder.nextCheckpointAtForTest())
 
             // These B transitions continually change the active-source set.
             // A's deadline must remain anchored to its own start instead of
@@ -313,6 +312,10 @@ class ViewingStatsRecorderTest {
                 localRecorder.update("source-b", metadata("channel-b"), true, false)
                 localRecorder.update("source-b", metadata("channel-b"), false, false)
             }
+            localRecorder.awaitIdle()
+            // Source churn must not rebase A's shared deadline.
+            assertEquals(5.seconds, localRecorder.nextCheckpointAtForTest())
+
             clock.advance(5.seconds)
             // This source change wakes the scheduler exactly at A's original
             // deadline. It must emit the overdue timer rather than move the
@@ -320,9 +323,7 @@ class ViewingStatsRecorderTest {
             localRecorder.update("source-b", metadata("channel-b"), true, false)
             localRecorder.awaitIdle()
             withTimeout(1.seconds) {
-                while (localStore.checkpointBatches.none { "channel-a" in it }) {
-                    delay(10L)
-                }
+                localStore.channelACheckpoint.await()
             }
 
             assertTrue(
@@ -349,14 +350,17 @@ class ViewingStatsRecorderTest {
         try {
             localRecorder.update("source-a", metadata("channel-a"), true, false)
             localRecorder.awaitIdle()
-            delay(20L)
             clock.advance(40.milliseconds)
-            delay(60L)
+            withTimeout(1.seconds) {
+                localStore.channelACheckpoint.await()
+            }
 
             localRecorder.update("source-b", metadata("channel-b"), true, false)
             localRecorder.awaitIdle()
-            clock.advance(39.milliseconds)
-            delay(60L)
+            clock.advance(40.milliseconds)
+            withTimeout(1.seconds) {
+                localStore.channelBCheckpoint.await()
+            }
 
             assertTrue(
                 "B was not included in the next shared timer checkpoint: ${localStore.checkpointBatches}",
@@ -495,6 +499,7 @@ class ViewingStatsRecorderTest {
         recorder.awaitIdle()
         clock.advance(2.minutes)
         recorder.update("service", metadata("channel-a").copy(categoryId = "2", categoryName = "Just Chatting"), true, false)
+        recorder.awaitIdle()
         clock.advance(3.minutes)
         recorder.release("service")
         recorder.awaitIdle()
@@ -554,6 +559,8 @@ class ViewingStatsRecorderTest {
         val sessions = mutableListOf<ViewingSession>()
         val intervals = mutableListOf<ViewingInterval>()
         val checkpointBatches = mutableListOf<List<String>>()
+        val channelACheckpoint = CompletableDeferred<Unit>()
+        val channelBCheckpoint = CompletableDeferred<Unit>()
 
         override suspend fun insertSession(metadata: ViewingPlaybackMetadata, startedAt: Long): Long {
             delayIfNeeded()
@@ -614,6 +621,12 @@ class ViewingStatsRecorderTest {
         ) {
             checkpointCalls++
             checkpointBatches += intervals.map { it.channelId }
+            if (intervals.any { it.channelId == "channel-a" }) {
+                channelACheckpoint.complete(Unit)
+            }
+            if (intervals.any { it.channelId == "channel-b" }) {
+                channelBCheckpoint.complete(Unit)
+            }
             if (failNextCheckpoint) {
                 failNextCheckpoint = false
                 throw IllegalStateException("injected checkpoint failure")

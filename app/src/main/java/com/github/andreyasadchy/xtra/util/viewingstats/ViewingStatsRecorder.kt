@@ -18,6 +18,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.math.max
 
@@ -47,8 +48,8 @@ class ViewingStatsRecorder(
     private val commands = Channel<Command>(SEMANTIC_COMMAND_CAPACITY)
     /** Repeated metadata refreshes share one coalesced wake-up. */
     private val refreshWork = Channel<Unit>(Channel.CONFLATED)
-    /** Timer wakes are separate so a refresh cannot hide a forced checkpoint. */
-    private val timerWork = Channel<Unit>(Channel.CONFLATED)
+    /** Timer wakes are separate so a refresh cannot hide a shared-cadence checkpoint. */
+    private val timerWork = Channel<Long>(Channel.CONFLATED)
     private val schedulerWake = Channel<Unit>(Channel.CONFLATED)
     /**
      * There is one synchronous backpressure boundary for semantic commands.
@@ -59,6 +60,7 @@ class ViewingStatsRecorder(
     private val commandDepth = AtomicInteger(0)
     private val maxCommandDepth = AtomicInteger(0)
     private val activeSourceCount = AtomicInteger(0)
+    private val nextCheckpointAt = AtomicLong(NO_DEADLINE)
     private val closed = AtomicBoolean(false)
     private val ingressLock = Any()
     private val latestInputs = mutableMapOf<String, IngressState>()
@@ -69,9 +71,9 @@ class ViewingStatsRecorder(
             val work = nextWork() ?: break
             when (work) {
                 is Work.Semantic -> if (processSemanticCommand(work.command)) break
-                Work.Timer -> {
+                is Work.Timer -> {
                     drainPendingRefreshes()
-                    runCheckpoint(reading(), force = true)
+                    runCheckpoint(reading(), timerDeadline = work.deadline)
                 }
                 Work.Refresh -> {
                     drainPendingRefreshes()
@@ -81,24 +83,24 @@ class ViewingStatsRecorder(
         }
     }
     private val ticker = this.scope.launch {
-        var nextCheckpointAt = NO_DEADLINE
         while (isActive) {
-            if (activeSourceCount.get() == 0) {
-                nextCheckpointAt = NO_DEADLINE
+            val deadline = nextCheckpointAt.get()
+            if (deadline == NO_DEADLINE) {
                 schedulerWake.receive()
             } else {
                 val now = clock.elapsedRealtime()
-                if (nextCheckpointAt == NO_DEADLINE || nextCheckpointAt <= now) {
-                    nextCheckpointAt = safeAdd(now, checkpointIntervalMs)
-                }
-                val waitMs = (nextCheckpointAt - now).coerceAtLeast(1L)
-                val schedulerWoke = withTimeoutOrNull(waitMs) {
-                    schedulerWake.receive()
+                if (now < deadline) {
+                    withTimeoutOrNull(deadline - now) {
+                        schedulerWake.receive()
+                    }
                 }
                 val wakeTime = clock.elapsedRealtime()
-                if (schedulerWoke == null || wakeTime >= nextCheckpointAt) {
-                    timerWork.trySend(Unit)
-                    nextCheckpointAt = safeAdd(wakeTime, checkpointIntervalMs)
+                val currentDeadline = nextCheckpointAt.get()
+                if (currentDeadline != NO_DEADLINE && wakeTime >= currentDeadline) {
+                    val nextDeadline = safeAdd(wakeTime, checkpointIntervalMs)
+                    if (nextCheckpointAt.compareAndSet(currentDeadline, nextDeadline)) {
+                        timerWork.trySend(currentDeadline)
+                    }
                 }
             }
         }
@@ -218,8 +220,8 @@ class ViewingStatsRecorder(
             commandDepth.decrementAndGet()
             return Work.Semantic(it)
         }
-        timerWork.tryReceive().getOrNull()?.let {
-            return Work.Timer
+        timerWork.tryReceive().getOrNull()?.let { deadline ->
+            return Work.Timer(deadline)
         }
         val selected = kotlinx.coroutines.selects.select<Work?> {
             commands.onReceiveCatching { result ->
@@ -228,7 +230,7 @@ class ViewingStatsRecorder(
                     Work.Semantic(it)
                 }
             }
-            timerWork.onReceive { Work.Timer }
+            timerWork.onReceive { deadline -> Work.Timer(deadline) }
             refreshWork.onReceive { Work.Refresh }
         }
         if (selected is Work.Timer || selected is Work.Refresh) {
@@ -259,11 +261,11 @@ class ViewingStatsRecorder(
                     }
                     is Command.Barrier -> {
                         drainPendingRefreshes()
-                        val timerPending = timerWork.tryReceive().isSuccess
+                        val timerDeadline = timerWork.tryReceive().getOrNull()
                         val refreshPending = refreshWork.tryReceive().isSuccess
-                        if (timerPending || refreshPending) {
+                        if (timerDeadline != null || refreshPending) {
                             drainPendingRefreshes()
-                            runCheckpoint(reading(), force = timerPending)
+                            runCheckpoint(reading(), timerDeadline = timerDeadline)
                         }
                         command.completed.complete(Unit)
                     }
@@ -366,10 +368,18 @@ class ViewingStatsRecorder(
         }
     }
 
-    private suspend fun runCheckpoint(reading: ClockReading, force: Boolean = false) {
+    private suspend fun runCheckpoint(
+        reading: ClockReading,
+        force: Boolean = false,
+        timerDeadline: Long? = null,
+    ) {
         val activeStates = states.values.filter { it.actualPlaying }
         activeStates.forEach { accrue(it, reading) }
-        val dueStates = activeStates.filter { force || shouldCheckpoint(it, reading) }
+        val dueStates = activeStates.filter {
+            force ||
+                shouldCheckpoint(it, reading) ||
+                (timerDeadline != null && it.lastPersistElapsed < timerDeadline)
+        }
         if (dueStates.isEmpty()) return
 
         try {
@@ -474,13 +484,21 @@ class ViewingStatsRecorder(
 
     internal fun maxPendingSemanticWorkForTest(): Int = maxCommandDepth.get()
 
-    private fun setActualPlaying(state: SourceState, actualPlaying: Boolean) {
+    internal fun nextCheckpointAtForTest(): Long? =
+        nextCheckpointAt.get().takeUnless { it == NO_DEADLINE }
+
+    private fun setActualPlaying(
+        state: SourceState,
+        actualPlaying: Boolean,
+    ) {
         if (state.actualPlaying == actualPlaying) return
         state.actualPlaying = actualPlaying
         if (actualPlaying) {
-            activeSourceCount.incrementAndGet()
-        } else {
-            activeSourceCount.decrementAndGet()
+            if (activeSourceCount.incrementAndGet() == 1) {
+                nextCheckpointAt.set(safeAdd(state.lastPersistElapsed, checkpointIntervalMs))
+            }
+        } else if (activeSourceCount.decrementAndGet() == 0) {
+            nextCheckpointAt.set(NO_DEADLINE)
         }
         schedulerWake.trySend(Unit)
     }
@@ -520,10 +538,10 @@ class ViewingStatsRecorder(
         state.intervalStartWall = reading.wallTimeMillis
         state.intervalWatchedMs = 0L
         state.intervalId = repository.insertInterval(state.metadata, state.sessionId!!, reading.wallTimeMillis)
-        setActualPlaying(state, true)
         state.lastElapsed = reading.elapsedRealtime
         state.lastWall = reading.wallTimeMillis
         state.lastPersistElapsed = reading.elapsedRealtime
+        setActualPlaying(state, true)
     }
 
     private suspend fun finish(state: SourceState, reading: ClockReading) {
@@ -709,7 +727,7 @@ class ViewingStatsRecorder(
 
     private sealed interface Work {
         data class Semantic(val command: Command) : Work
-        data object Timer : Work
+        data class Timer(val deadline: Long) : Work
         data object Refresh : Work
     }
 
