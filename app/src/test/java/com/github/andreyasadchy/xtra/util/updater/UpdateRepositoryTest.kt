@@ -713,13 +713,24 @@ class UpdateRepositoryTest {
 
         val downloadEntries = logger.snapshot().filter { it.operation == "update_download" }
         assertTrue("download diagnostics: $downloadEntries", downloadEntries.isNotEmpty())
-        val downloadStart = downloadEntries.first { it.event == DiagnosticsLifecycleEvent.REQUEST_STARTED.value }
-        val downloadComplete = downloadEntries.first { it.event == DiagnosticsLifecycleEvent.REQUEST_COMPLETED.value }
-        assertEquals(downloadStart.correlationId, downloadComplete.correlationId)
-        assertEquals("1", downloadComplete.fields.single { it.key == DiagnosticsFieldKey.ATTEMPT }.value)
+        val downloadStarts = downloadEntries.filter { it.event == DiagnosticsLifecycleEvent.REQUEST_STARTED.value }
+        val downloadCompletions = downloadEntries.filter { it.event == DiagnosticsLifecycleEvent.REQUEST_COMPLETED.value }
+        assertTrue("download starts: $downloadEntries", downloadStarts.isNotEmpty())
+        assertTrue("download completions: $downloadEntries", downloadCompletions.isNotEmpty())
+        downloadCompletions.forEach { completion ->
+            assertTrue(
+                "download completion has no matching start: $downloadEntries",
+                downloadStarts.any { it.correlationId == completion.correlationId },
+            )
+            assertEquals("1", completion.fields.single { it.key == DiagnosticsFieldKey.ATTEMPT }.value)
+        }
 
         repository.install()
-        awaitCondition { preparer.commitSawSessionId != null }
+        awaitCondition {
+            preparer.commitSawSessionId != null && logger.snapshot().any {
+                it.operation == "update_install" && it.event == "install_handoff"
+            }
+        }
         val handoff = logger.snapshot().first { it.operation == "update_install" && it.event == "install_handoff" }
         assertEquals("handoff", handoff.fields.single { it.key == DiagnosticsFieldKey.STATE }.value)
 
