@@ -375,6 +375,86 @@ class ChatMessageTextViewTest {
     }
 
     @Test
+    fun inlineObjectCarriersKeepWrappedEmotesVisible() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val drawCount = AtomicInteger()
+        val repository = ChatAssetRepository(scope, ChatAssetLoader {
+            ChatImageHandle { CountingDrawable(drawCount) }
+        })
+        val attached = attachView(repository)
+        val view = attached.view
+        val spec = ChatAssetSpec(ChatAssetKey("inline-object-emote"), 20, 20, 28)
+        val normalRow = ChatRowUiModel(
+            id = ChatMessageId("inline-object-normal"),
+            channelId = "channel",
+            timestampText = null,
+            pieces = buildList {
+                add(ChatPiece.Username("viewer", 0xffff8a80.toInt()))
+                add(ChatPiece.Text(" AGREED."))
+                repeat(8) { index ->
+                    add(ChatPiece.Text(" "))
+                    add(ChatPiece.Emote(spec, "EMOTE_$index", animated = false))
+                }
+            },
+            background = 0xff101010.toInt(),
+            accessibilityText = "viewer AGREED. 8 emotes",
+            reply = null,
+            source = null,
+            isAction = false,
+        )
+        val event = ChatEventPresentation(
+            kind = ChatEventKind.SUBSCRIPTION,
+            visualStyle = ChatEventVisualStyle.SUPPORT,
+            icon = ChatPiece.Text("★"),
+            titlePieces = listOf(ChatPiece.Text("Viewer subscribed", bold = true)),
+            bodyPieces = buildList {
+                add(ChatPiece.Username("0__x", 0xffff8a80.toInt()))
+                add(ChatPiece.Text("biden:"))
+                repeat(27) { index ->
+                    add(ChatPiece.Text(" "))
+                    add(ChatPiece.Emote(spec, "DUMPER_$index", animated = false))
+                }
+            },
+            accessibilityText = "Viewer subscribed with 27 emotes",
+        )
+        val eventRow = ChatRowUiModel(
+            id = ChatMessageId("inline-object-event"),
+            channelId = "channel",
+            timestampText = null,
+            pieces = event.flatten(),
+            background = 0xff101010.toInt(),
+            backgroundStyle = ChatRowBackground.EVENT,
+            eventPresentation = event,
+            accessibilityText = event.accessibilityText,
+            reply = null,
+            source = null,
+            isAction = false,
+        )
+        try {
+            runOnMain { view.bind(normalRow) }
+            awaitSettled(repository, listOf(spec.key))
+            awaitPreDraw(view)
+            val normalWide = runOnMainValue { drawView(view, 600, drawCount) }
+            val normalNarrow = runOnMainValue { drawView(view, 150, drawCount) }
+            assertEquals(8, normalWide.draws)
+            assertEquals(8, normalNarrow.draws)
+            assertTrue(normalNarrow.lines > normalWide.lines)
+
+            runOnMain { view.bind(eventRow) }
+            awaitPreDraw(view)
+            val eventWide = runOnMainValue { drawView(view, 600, drawCount) }
+            val eventNarrow = runOnMainValue { drawView(view, 180, drawCount) }
+            assertEquals(27, eventWide.draws)
+            assertEquals(27, eventNarrow.draws)
+            assertTrue(eventNarrow.lines > eventWide.lines)
+        } finally {
+            attached.close()
+            scope.cancel()
+        }
+    }
+
+    @Test
     fun stagedRowSurvivesDetachAndReattachUntilItsAssetCompletes() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val releaseCandidate = CompletableDeferred<ChatImageHandle?>()
@@ -2066,6 +2146,20 @@ class ChatMessageTextViewTest {
         return bitmap
     }
 
+    private fun drawView(view: ChatMessageTextView, width: Int, drawCount: AtomicInteger): DrawnView {
+        drawCount.set(0)
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+        )
+        view.layout(0, 0, width, view.measuredHeight)
+        val bitmap = Bitmap.createBitmap(width, view.measuredHeight.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        view.draw(Canvas(bitmap))
+        return DrawnView(drawCount.get(), view.layout.lineCount)
+    }
+
+    private data class DrawnView(val draws: Int, val lines: Int)
+
     private fun hasVisiblePixels(bitmap: Bitmap): Boolean {
         for (x in 0 until bitmap.width) {
             for (y in 0 until bitmap.height) {
@@ -2263,6 +2357,20 @@ class ChatMessageTextViewTest {
 
         override fun draw(canvas: Canvas) {
             paint.color = color
+            canvas.drawRect(bounds, paint)
+        }
+
+        override fun setAlpha(alpha: Int) = Unit
+        override fun setColorFilter(colorFilter: android.graphics.ColorFilter?) = Unit
+        override fun getOpacity(): Int = PixelFormat.OPAQUE
+    }
+
+    private class CountingDrawable(private val drawCount: AtomicInteger) : Drawable() {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+        override fun draw(canvas: Canvas) {
+            drawCount.incrementAndGet()
+            paint.color = Color.GREEN
             canvas.drawRect(bounds, paint)
         }
 
