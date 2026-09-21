@@ -74,6 +74,7 @@ import kotlin.math.roundToInt
 private const val REPLY_TEXT_SCALE = 0.82f
 private const val REPLY_ICON_SIZE_DP = 15
 private const val CUSTOM_BACKGROUND_ROW_ALPHA = 0x80
+private const val INLINE_OBJECT_CHAR = '\uFFFC'
 
 open class ChatMessageTextView private constructor(
     context: Context,
@@ -1241,7 +1242,9 @@ open class ChatMessageTextView private constructor(
         val layerSpecs = resolvedSpec.flatten()
         val compositionKey = resolvedSpec.compositionKey
         val start = output.length
-        output.append(" ")
+        // A normal space is breakable and Android may trim it at a line boundary. That can
+        // remove the carrier for a ReplacementSpan even though its width was measured.
+        output.append(INLINE_OBJECT_CHAR)
         val end = output.length
         output.setSpan(
             ChatAssetSpan(
