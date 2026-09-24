@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.preference.PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <SwitchPreferenceCompat
+        android:defaultValue="false"
+        android:key="player_swipe_controls_enabled"
+        android:summary="@string/settings_player_swipe_enabled_summary"
+        android:title="@string/settings_player_swipe_controls"
+        app:iconSpaceReserved="false" />
+
+    <ListPreference
+        android:defaultValue="brightness"
+        android:entries="@array/playerSwipeGestureEntries"
+        android:entryValues="@array/playerSwipeGestureValues"
+        android:key="player_swipe_left_gesture"
+        android:title="@string/settings_player_swipe_left_gesture"
+        app:iconSpaceReserved="false"
+        app:useSimpleSummaryProvider="true" />
+
+    <ListPreference
+        android:defaultValue="volume"
+        android:entries="@array/playerSwipeGestureEntries"
+        android:entryValues="@array/playerSwipeGestureValues"
+        android:key="player_swipe_right_gesture"
+        android:title="@string/settings_player_swipe_right_gesture"
+        app:iconSpaceReserved="false"
+        app:useSimpleSummaryProvider="true" />
+
+    <SeekBarPreference
+        android:defaultValue="37"
+        android:key="player_swipe_edge_width_percent"
+        android:max="50"
+        android:min="5"
+        android:summary="@string/settings_player_swipe_edge_width_summary"
+        android:title="@string/settings_player_swipe_edge_width"
+        app:iconSpaceReserved="false"
+        app:showSeekBarValue="true" />
+
+    <ListPreference
+        android:defaultValue="off"
+        android:entries="@array/playerSwipeTopGestureEntries"
+        android:entryValues="@array/playerSwipeTopGestureValues"
+        android:key="player_swipe_top_gesture"
+        android:title="@string/settings_player_swipe_top_gesture"
+        app:iconSpaceReserved="false"
+        app:useSimpleSummaryProvider="true" />
+
+    <SeekBarPreference
+        android:defaultValue="30"
+        android:key="player_swipe_speed_zone_height_percent"
+        android:max="75"
+        android:min="5"
+        android:summary="@string/settings_player_swipe_speed_height_summary"
+        android:title="@string/settings_player_swipe_speed_height"
+        app:iconSpaceReserved="false"
+        app:showSeekBarValue="true" />
+
+    <com.github.andreyasadchy.xtra.ui.settings.PlayerSwipeControlsPreviewPreference
+        android:key="player_swipe_zones_preview"
+        android:selectable="false"
+        android:summary="@string/settings_player_swipe_preview_summary"
+        android:title="@string/settings_player_swipe_preview"
+        app:iconSpaceReserved="false" />
+
+    <SeekBarPreference
+        android:defaultValue="50"
+        android:key="player_swipe_brightness_sensitivity"
+        android:max="100"
+        android:min="1"
+        android:summary="@string/settings_player_swipe_brightness_sensitivity_summary"
+        android:title="@string/settings_player_swipe_brightness_sensitivity"
+        app:iconSpaceReserved="false"
+        app:showSeekBarValue="true" />
+
+    <SeekBarPreference
+        android:defaultValue="50"
+        android:key="player_swipe_volume_sensitivity"
+        android:max="100"
+        android:min="1"
+        android:summary="@string/settings_player_swipe_volume_sensitivity_summary"
+        android:title="@string/settings_player_swipe_volume_sensitivity"
+        app:iconSpaceReserved="false"
+        app:showSeekBarValue="true" />
+
+    <SeekBarPreference
+        android:defaultValue="50"
+        android:key="player_swipe_speed_sensitivity"
+        android:max="100"
+        android:min="1"
+        android:summary="@string/settings_player_swipe_speed_sensitivity_summary"
+        android:title="@string/settings_player_swipe_speed_sensitivity"
+        app:iconSpaceReserved="false"
+        app:showSeekBarValue="true" />
+
+    <ListPreference
+        android:defaultValue="0.05"
+        android:entries="@array/playerSwipeSpeedStepEntries"
+        android:entryValues="@array/playerSwipeSpeedStepValues"
+        android:key="player_swipe_speed_step"
+        android:title="@string/settings_player_swipe_speed_step"
+        app:iconSpaceReserved="false"
+        app:useSimpleSummaryProvider="true" />
+
+    <SwitchPreferenceCompat
+        android:defaultValue="true"
+        android:key="player_swipe_ignore_when_locked"
+        android:title="@string/settings_player_swipe_ignore_locked"
+        app:iconSpaceReserved="false" />
+
+</androidx.preference.PreferenceScreen>

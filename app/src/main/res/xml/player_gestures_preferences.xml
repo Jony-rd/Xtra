@@ -1,3 +1,8 @@
 <androidx.preference.PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <Preference
+        android:key="player_swipe_controls"
+        android:summary="@string/settings_player_swipe_controls_summary"
+        android:title="@string/settings_player_swipe_controls"
+        app:iconSpaceReserved="false" />
     <SwitchPreferenceCompat android:defaultValue="true" android:key="player_doubletap" android:summary="@string/settings_double_tap_chat_summary" android:title="@string/settings_double_tap_chat" app:iconSpaceReserved="false" />
 </androidx.preference.PreferenceScreen>
