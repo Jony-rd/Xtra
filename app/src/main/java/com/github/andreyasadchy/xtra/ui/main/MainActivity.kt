@@ -290,9 +290,18 @@ class MainActivity : AppCompatActivity() {
             } else {
                 windowInsets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime() or WindowInsetsCompat.Type.displayCutout())
             }
+            val multiviewActive = currentMultiviewFragment() != null
             binding.navHostFragment.updateLayoutParams<ViewGroup.MarginLayoutParams> {
-                leftMargin = insets.left
-                rightMargin = insets.right
+                if (multiviewActive) {
+                    // Immersive multiview draws edge-to-edge, including into
+                    // the display cutout. Any margin here becomes the black
+                    // bar beside the camera hole in landscape.
+                    leftMargin = 0
+                    rightMargin = 0
+                } else {
+                    leftMargin = insets.left
+                    rightMargin = insets.right
+                }
             }
             binding.navBarContainer.updateLayoutParams<ViewGroup.MarginLayoutParams> {
                 leftMargin = insets.left
