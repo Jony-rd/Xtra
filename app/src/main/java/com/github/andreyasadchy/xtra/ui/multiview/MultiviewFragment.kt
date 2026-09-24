@@ -10,11 +10,15 @@ import android.view.Gravity
 import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.GridLayout
 import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.Toast
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.doOnLayout
 import androidx.core.view.isVisible
 import androidx.core.view.updatePadding
@@ -62,6 +66,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     private var previousNavBarVisibility = View.VISIBLE
     private var controlsLockCount = 0
     private var suppressBackgroundOnNextStop = false
+    private var previousCutoutMode: Int? = null
 
     private val bindingOrNull: FragmentMultiviewBinding?
         get() = _binding
@@ -75,15 +80,16 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             navBar.visibility = View.GONE
         }
 
+                // Full-immersive multiview: never pad for system bars or the display
+        // cutout — the streams own the whole screen. Only the IME may push
+        // content up so the chat input stays visible while typing.
         ViewCompat.setOnApplyWindowInsetsListener(binding.multiviewRoot) { root, insets ->
-            val bars = insets.getInsets(
-                androidx.core.view.WindowInsetsCompat.Type.systemBars() or
-                    androidx.core.view.WindowInsetsCompat.Type.displayCutout() or
-                    androidx.core.view.WindowInsetsCompat.Type.ime(),
-            )
-            root.updatePadding(top = bars.top, bottom = bars.bottom, left = 0, right = 0)
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            root.updatePadding(top = 0, bottom = ime.bottom, left = 0, right = 0)
             insets
         }
+
+                enterImmersiveMode()
 
         binding.backButton.setOnClickListener { requireActivity().onBackPressedDispatcher.onBackPressed() }
         binding.addStreamButton.setOnClickListener { showAddStreamSheet() }
@@ -147,11 +153,13 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     override fun onStart() {
         super.onStart()
         if ((activity as? MainActivity)?.playerFragment != null) return
+        enterImmersiveMode()
         (activity as? MainActivity)?.prepareMultiviewPictureInPicture()
         viewModel.onStart()
     }
 
     override fun onStop() {
+        exitImmersiveMode()
         if ((activity as? MainActivity)?.playerFragment != null) {
             suppressBackgroundOnNextStop = false
             super.onStop()
@@ -173,6 +181,45 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         }
     }
 
+    private fun enterImmersiveMode() {
+        val mainActivity = activity as? MainActivity ?: return
+        val window = mainActivity.window
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            if (previousCutoutMode == null) {
+                previousCutoutMode = window.attributes.layoutInDisplayCutoutMode
+            }
+            // SHORT_EDGES lets content render into the camera cutout area,
+            // which removes the black bar beside the camera in landscape.
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
+        }
+        // Re-dispatch insets so the activity clears the navHostFragment
+        // cutout margins while multiview is open.
+        window.decorView.requestApplyInsets()
+    }
+
+    private fun exitImmersiveMode() {
+        val mainActivity = activity ?: return
+        val window = mainActivity.window
+        WindowCompat.getInsetsController(window, window.decorView)
+            .show(WindowInsetsCompat.Type.systemBars())
+        val cutoutMode = previousCutoutMode
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && cutoutMode != null) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode = cutoutMode
+            }
+            previousCutoutMode = null
+        }
+        window.decorView.requestApplyInsets()
+    }
+
     override fun onDestroyView() {
         viewModel.stopRaidMonitoring()
         controlsHandler.removeCallbacks(hideControls)
@@ -189,6 +236,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         renderedLayoutKey = null
         (activity as? MainActivity)?.clearMultiviewPictureInPicture()
         requireActivity().findViewById<View>(R.id.navBarContainer)?.visibility = previousNavBarVisibility
+        exitImmersiveMode()
         _binding = null
         super.onDestroyView()
     }
@@ -788,6 +836,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     fun resumeAfterExternalPlayer() {
         suppressBackgroundOnNextStop = false
         if (_binding != null) {
+            enterImmersiveMode()
             (activity as? MainActivity)?.prepareMultiviewPictureInPicture()
             viewModel.onStart()
         }
