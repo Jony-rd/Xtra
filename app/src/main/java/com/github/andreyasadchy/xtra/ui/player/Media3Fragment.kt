@@ -102,6 +102,8 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost {
                             codecs = args.getString(PlaybackService.VIDEO_QUALITY_CODECS),
                             bitrate = args.getInt(PlaybackService.VIDEO_QUALITY_BITRATE)
                                 .takeIf { args.containsKey(PlaybackService.VIDEO_QUALITY_BITRATE) },
+                            frameRate = args.getFloat(PlaybackService.VIDEO_QUALITY_FRAME_RATE)
+                                .takeIf { args.containsKey(PlaybackService.VIDEO_QUALITY_FRAME_RATE) },
                         ),
                         controller,
                     )
@@ -2075,6 +2077,7 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost {
                 val names = extras.getStringArray(PlaybackService.NAMES)
                 val codecs = extras.getStringArray(PlaybackService.CODECS)
                 val bitrates = extras.getStringArray(PlaybackService.BITRATES)
+                val frameRates = extras.getStringArray(PlaybackService.FRAME_RATES)
                 val urls = extras.getStringArray(PlaybackService.URLS)
                 val list = if (names != null && codecs != null && bitrates != null && urls != null) {
                     names.mapIndexed { index, name ->
@@ -2083,6 +2086,7 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost {
                             codecs.getOrNull(index).takeIf { it != "null" },
                             bitrates.getOrNull(index).takeIf { it != "null" }?.toIntOrNull(),
                             urls.getOrNull(index),
+                            frameRates?.getOrNull(index).takeIf { it != "null" }?.toFloatOrNull(),
                         )
                     }
                 } else {

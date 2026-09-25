@@ -350,7 +350,13 @@ class ExoPlayerService : BasePlaybackService() {
                             val name = variant.format.label?.takeIf { it.isNotBlank() }
                                 ?: playlist.videos.find { it.groupId == variant.videoGroupId }?.name?.takeIf { it.isNotBlank() }
                             if (name != null) {
-                                VideoQuality(name, variant.format.codecs, variant.format.bitrate, variant.url.toString())
+                                VideoQuality(
+                                    name,
+                                    variant.format.codecs,
+                                    variant.format.bitrate,
+                                    variant.url.toString(),
+                                    variant.format.frameRate.takeIf { it > 0f },
+                                )
                             } else null
                         }
                         if (!list.isNullOrEmpty()) {
