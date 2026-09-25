@@ -35,17 +35,18 @@ class PlaybackVideoDiagnosticsStore {
 
     fun recordVideoInputFormat(format: androidx.media3.common.Format) {
         if (format.width <= 0 || format.height <= 0) return
-        val frameRate = format.frameRate.takeIf { it > 0f && it.isFinite() }?.roundToInt()
+        val frameRate = format.frameRate.takeIf { it > 0f && it.isFinite() }
         val qualityName = buildString {
             append(format.height)
             append('p')
-            frameRate?.takeIf { it > 30 }?.let(::append)
+            frameRate?.roundToInt()?.takeIf { it > 30 }?.let(::append)
         }
         lastConfirmedVideoQuality.set(
             VideoQuality(
                 name = qualityName,
                 codecs = format.codecs,
                 bitrate = format.bitrate.takeIf { it > 0 },
+                frameRate = frameRate,
             ),
         )
         update { current ->
@@ -173,16 +174,17 @@ class PlaybackVideoDiagnosticsStore {
             }
             .firstOrNull { it.width > 0 && it.height > 0 }
             ?.let { format ->
-                val frameRate = format.frameRate.takeIf { it > 0f && it.isFinite() }?.roundToInt()
+                val frameRate = format.frameRate.takeIf { it > 0f && it.isFinite() }
                 val name = buildString {
                     append(format.height)
                     append('p')
-                    frameRate?.takeIf { it > 30 }?.let(::append)
+                    frameRate?.roundToInt()?.takeIf { it > 30 }?.let(::append)
                 }
                 VideoQuality(
                     name = name,
                     codecs = format.codecs,
                     bitrate = format.bitrate.takeIf { it > 0 },
+                    frameRate = frameRate,
                 )
             }
 

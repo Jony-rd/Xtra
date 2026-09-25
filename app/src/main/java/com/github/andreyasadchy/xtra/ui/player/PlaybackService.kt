@@ -287,6 +287,7 @@ class PlaybackService : MediaSessionService() {
                         putString(VIDEO_QUALITY_NAME, quality.name)
                         putString(VIDEO_QUALITY_CODECS, quality.codecs)
                         quality.bitrate?.let { putInt(VIDEO_QUALITY_BITRATE, it) }
+                        quality.frameRate?.let { putFloat(VIDEO_QUALITY_FRAME_RATE, it) }
                     },
                 )
             }
@@ -805,13 +806,20 @@ class PlaybackService : MediaSessionService() {
                                     val name = variant.format.label?.takeIf { it.isNotBlank() }
                                         ?: playlist.videos.find { it.groupId == variant.videoGroupId }?.name?.takeIf { it.isNotBlank() }
                                     if (name != null) {
-                                        VideoQuality(name, variant.format.codecs, variant.format.bitrate, variant.url.toString())
+                                        VideoQuality(
+                                            name,
+                                            variant.format.codecs,
+                                            variant.format.bitrate,
+                                            variant.url.toString(),
+                                            variant.format.frameRate.takeIf { it > 0f },
+                                        )
                                     } else null
                                 }
                                 Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS, Bundle().apply {
                                     putStringArray(NAMES, list?.map { it.name.toString() }?.toTypedArray())
                                     putStringArray(CODECS, list?.map { it.codecs.toString() }?.toTypedArray())
                                     putStringArray(BITRATES, list?.map { it.bitrate.toString() }?.toTypedArray())
+                                    putStringArray(FRAME_RATES, list?.map { it.frameRate.toString() }?.toTypedArray())
                                     putStringArray(URLS, list?.map { it.url.toString() }?.toTypedArray())
                                 }))
                             }
@@ -1606,6 +1614,7 @@ class PlaybackService : MediaSessionService() {
         const val VIDEO_QUALITY_URI = "videoQualityUri"
         const val VIDEO_QUALITY_CODECS = "videoQualityCodecs"
         const val VIDEO_QUALITY_BITRATE = "videoQualityBitrate"
+        const val VIDEO_QUALITY_FRAME_RATE = "videoQualityFrameRate"
 
         const val RESULT = "result"
         const val URI = "uri"
@@ -1635,6 +1644,7 @@ class PlaybackService : MediaSessionService() {
         const val NAMES = "names"
         const val CODECS = "codecs"
         const val BITRATES = "bitrates"
+        const val FRAME_RATES = "frameRates"
         const val URLS = "urls"
 
         const val REQUEST_CODE_RESUME = 2

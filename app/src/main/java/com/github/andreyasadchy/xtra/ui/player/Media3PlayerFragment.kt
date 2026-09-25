@@ -2354,6 +2354,7 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
 
     private fun compactQualityLabel(label: String?): String {
         val compact = label
+            ?.substringBefore(" · ")
             ?.removeSuffix(" H.264")
             ?.removeSuffix(" H.265")
             ?.removeSuffix(" AV1")
@@ -2395,7 +2396,9 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
         val selectedQuality = viewModel.quality
         val activeQuality = selectedQuality?.takeIf {
             it.name == AUDIO_ONLY_QUALITY || it.name == CHAT_ONLY_QUALITY
-        } ?: viewModel.confirmedVideoQuality ?: selectedQuality
+        } ?: viewModel.confirmedVideoQuality?.takeUnless {
+            shouldUseSelectedQualityLabel(selectedQuality, it)
+        } ?: selectedQuality
         val label = qualityLabel(activeQuality)
         if (view != null) {
             val vaftActive = isVaftActive()

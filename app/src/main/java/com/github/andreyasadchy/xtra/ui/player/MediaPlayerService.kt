@@ -803,10 +803,11 @@ class MediaPlayerService : BasePlaybackService() {
                         }
                         val codecs = Regex("CODECS=\"(.+?)\"").findAll(playlist).mapNotNull { it.groups[1]?.value }.toMutableList()
                         val bitrates = Regex("BANDWIDTH=(\\d+)\\b").findAll(playlist).mapNotNull { it.groups[1]?.value?.toIntOrNull() }.toMutableList()
+                        val frameRates = playlist.variantFrameRates()
                         val urls = Regex("https://.*\\.m3u8").findAll(playlist).map(MatchResult::value).toMutableList()
                         val list = names.mapIndexedNotNull { index, name ->
                             urls.getOrNull(index)?.let { url ->
-                                VideoQuality(name, codecs.getOrNull(index), bitrates.getOrNull(index), url)
+                                VideoQuality(name, codecs.getOrNull(index), bitrates.getOrNull(index), url, frameRates.getOrNull(index))
                             }
                         }
                         qualities = list.asSequence()
@@ -1115,6 +1116,7 @@ class MediaPlayerService : BasePlaybackService() {
                         }
                         val codecs = Regex("CODECS=\"(.+?)\"").findAll(playlist).mapNotNull { it.groups[1]?.value }.toMutableList()
                         val bitrates = Regex("BANDWIDTH=(\\d+)\\b").findAll(playlist).mapNotNull { it.groups[1]?.value?.toIntOrNull() }.toMutableList()
+                        val frameRates = playlist.variantFrameRates()
                         val urls = Regex("https://.*\\.m3u8").findAll(playlist).map(MatchResult::value).toMutableList()
                         playlist.lines().filter { it.startsWith("#EXT-X-SESSION-DATA") }.let { list ->
                             if (list.isNotEmpty()) {
@@ -1188,7 +1190,7 @@ class MediaPlayerService : BasePlaybackService() {
                         }
                         val list = names.mapIndexedNotNull { index, name ->
                             urls.getOrNull(index)?.let { url ->
-                                VideoQuality(name, codecs.getOrNull(index), bitrates.getOrNull(index), url)
+                                VideoQuality(name, codecs.getOrNull(index), bitrates.getOrNull(index), url, frameRates.getOrNull(index))
                             }
                         }
                         qualities = list.asSequence()
@@ -2312,4 +2314,26 @@ class MediaPlayerService : BasePlaybackService() {
         private const val INTENT_FAST_FORWARD = "com.github.andreyasadchy.xtra.FAST_FORWARD"
         const val INTENT_START = "com.github.andreyasadchy.xtra.START_PLAYBACK_SERVICE"
     }
+}
+
+private fun String.variantFrameRates(): List<Float?> {
+    val frameRates = mutableListOf<Float?>()
+    var awaitingVariantUri = false
+    var frameRate: Float? = null
+    lineSequence().forEach { rawLine ->
+        val line = rawLine.trim()
+        if (line.startsWith("#EXT-X-STREAM-INF:", ignoreCase = true)) {
+            awaitingVariantUri = true
+            frameRate = Regex("(?:^|,)FRAME-RATE=([\\d.]+)", RegexOption.IGNORE_CASE)
+                .find(line)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toFloatOrNull()
+        } else if (awaitingVariantUri && line.isNotEmpty() && !line.startsWith('#')) {
+            frameRates += frameRate
+            awaitingVariantUri = false
+            frameRate = null
+        }
+    }
+    return frameRates
 }
