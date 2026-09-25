@@ -100,7 +100,12 @@ class ChatWriteWebSocket(
                             "CLEARCHAT" -> listener.onClearChat(ircMessage)
                             "NOTICE" -> listener.onNotice(ircMessage)
                             "ROOMSTATE" -> listener.onRoomState(ircMessage)
-                            "USERSTATE" -> listener.onUserState(ircMessage)
+                            "GLOBALUSERSTATE" -> {
+                                listener.onGlobalUserState(ircMessage)
+                            }
+                            "USERSTATE" -> {
+                                listener.onUserState(ircMessage)
+                            }
                         }
                     }
                 }

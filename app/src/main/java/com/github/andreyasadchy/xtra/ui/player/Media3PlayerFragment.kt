@@ -57,6 +57,7 @@ import androidx.core.view.isVisible
 import androidx.core.view.updateLayoutParams
 import androidx.core.view.updatePadding
 import androidx.fragment.app.viewModels
+import androidx.fragment.app.activityViewModels
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -65,6 +66,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.TimeBar
 import androidx.navigation.fragment.findNavController
 import androidx.recyclerview.widget.RecyclerView
+import com.github.andreyasadchy.xtra.BuildConfig
 import com.github.andreyasadchy.xtra.R
 import com.github.andreyasadchy.xtra.XtraApp
 import com.github.andreyasadchy.xtra.databinding.FragmentPlayerBinding
@@ -147,6 +149,8 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
     private var resizeMode = 0
     private var chatWidthLandscape = 0
     private var phoneChatOverlayGesture: PhoneChatOverlayGestureController? = null
+    private val swipeBrightnessViewModel: PlayerSwipeBrightnessViewModel by activityViewModels()
+    private var swipeGestureController: PlayerSwipeGestureController? = null
 
     private var activePointerId = -1
     private var lastX = 0f
@@ -636,6 +640,15 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
             val touchSlop = viewConfiguration.scaledTouchSlop
             val touchSlopRange = -touchSlop.toFloat()..touchSlop.toFloat()
             val longPressTimeout = ViewConfiguration.getLongPressTimeout()
+            swipeGestureController?.release(restoreBrightness = true)
+            swipeGestureController = PlayerSwipeGestureController(
+                context = requireContext(),
+                window = requireActivity().window,
+                brightness = swipeBrightnessViewModel,
+                host = playerLayout,
+                getSpeed = { if (videoType == STREAM) null else getCurrentSpeed() },
+                setSpeed = { setPlaybackSpeed(it) },
+            )
             val moveFreely = requireContext().prefs().getBoolean(C.PLAYER_MOVE_FREELY, false)
             val chatDoubleTapEnabled = requireContext().prefs().getBoolean(C.PLAYER_DOUBLE_TAP, true) &&
                 requireContext().prefs().isChatEnabled()
@@ -884,8 +897,61 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                 }
             }
 
+            fun isSwipeInPictureInPicture(): Boolean = when {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> requireActivity().isInPictureInPictureMode
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O -> !useController && isMaximized
+                else -> false
+            }
+
+            fun cancelTouchForSwipe(event: MotionEvent) {
+                liveTapSeekDoubleTapState.clearCandidate()
+                isTap = false
+                controlTouchActive = false
+                val cancel = MotionEvent.obtain(event).apply { action = MotionEvent.ACTION_CANCEL }
+                playerControls.root.dispatchTouchEvent(cancel)
+                controllerTapDetector.onTouchEvent(cancel)
+                cancel.recycle()
+            }
+
+            fun handleSwipeTouch(event: MotionEvent): Boolean {
+                val swipeController = swipeGestureController ?: return false
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_MOVE -> when (swipeController.onMove(event, touchSlop)) {
+                        SwipeMoveResult.PENDING -> return true
+                        SwipeMoveResult.STARTED -> {
+                            cancelTouchForSwipe(event)
+                            lockedTouchActive = false
+                            return true
+                        }
+                        SwipeMoveResult.ACTIVE, SwipeMoveResult.CONSUMED -> return true
+                        SwipeMoveResult.NONE, SwipeMoveResult.REJECTED -> Unit
+                    }
+                    MotionEvent.ACTION_POINTER_DOWN -> if (swipeController.onPointerDown()) {
+                        cancelTouchForSwipe(event)
+                        lockedTouchActive = false
+                        return true
+                    }
+                    MotionEvent.ACTION_UP -> if (swipeController.onUp(event)) {
+                        activePointerId = -1
+                        lockedTouchActive = false
+                        return true
+                    }
+                    MotionEvent.ACTION_CANCEL -> if (swipeController.onCancel()) {
+                        cancelTouchForSwipe(event)
+                        activePointerId = -1
+                        lockedTouchActive = false
+                        return true
+                    }
+                }
+                if (swipeController.shouldConsumeCurrentSequence) return true
+                return false
+            }
+
             dragView.setOnTouchListener { _, event ->
                 if (!isAnimating) {
+                    if (handleSwipeTouch(event)) {
+                        return@setOnTouchListener true
+                    }
                     if (isInteractionLocked && !playerControls.root.isVisible) {
                         liveTapSeekDoubleTapState.clearCandidate()
                         when (event.actionMasked) {
@@ -893,6 +959,12 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                                 lockedTouchActive = true
                                 lockedTouchX = event.x
                                 lockedTouchY = event.y
+                                swipeGestureController?.begin(
+                                    event,
+                                    canHandle = isMaximized && !requireContext().isTelevision() &&
+                                        !isSwipeInPictureInPicture() && (isPortrait || event.y > 100f),
+                                    interactionLocked = true,
+                                )
                             }
                             MotionEvent.ACTION_MOVE -> {
                                 if (abs(event.x - lockedTouchX) > touchSlop ||
@@ -923,6 +995,13 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                             lastY = y * slidingLayout.scaleY
                             statusBarSwipe = !isPortrait && y <= 100
                             downAction(event)
+                            swipeGestureController?.begin(
+                                event,
+                                canHandle = isMaximized && !requireContext().isTelevision() &&
+                                    !isSwipeInPictureInPicture() && !statusBarSwipe &&
+                                    !controlTouchActive && !playerControls.progressBar.isPressed,
+                                interactionLocked = isInteractionLocked,
+                            )
                         }
                         MotionEvent.ACTION_POINTER_DOWN -> {
                             liveTapSeekDoubleTapState.clearCandidate()
@@ -2033,31 +2112,14 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
     fun getQualities(): List<Pair<String, VideoQuality>>? {
         val qualities = viewModel.qualities
         return if (!qualities.isNullOrEmpty()) {
-            val hideCodecs = qualities.all {
-                val codec = it.codecs?.substringBefore('.')
-                codec == "avc1" || codec == "mp4a" || codec.isNullOrBlank()
-            }
-            qualities.map { quality ->
-                when (quality.name) {
-                    "auto" -> getString(R.string.auto)
-                    "source" -> getString(R.string.source)
-                    "audio_only" -> getString(R.string.audio_only)
-                    "chat_only" -> getString(R.string.chat_only)
-                    else -> {
-                        if (hideCodecs) {
-                            quality.name.toString()
-                        } else {
-                            val codec = quality.codecs?.substringBefore('.')
-                            val codecName = when {
-                                codec == "av01" -> "AV1"
-                                codec == "hev1" || codec == "hvc1" -> "H.265"
-                                codec == "avc1" || codec.isNullOrBlank() -> "H.264"
-                                else -> codec
-                            }
-                            "${quality.name} $codecName"
-                        }
-                    }
-                } to quality
+            videoQualityDisplayNames(qualities) { name ->
+                when (name) {
+                    AUTO_QUALITY -> getString(R.string.auto)
+                    SOURCE_QUALITY -> getString(R.string.source)
+                    AUDIO_ONLY_QUALITY -> getString(R.string.audio_only)
+                    CHAT_ONLY_QUALITY -> getString(R.string.chat_only)
+                    else -> null
+                }
             }
         } else null
     }
@@ -2312,8 +2374,29 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                 (viewModel.playingAds || viewModel.usingAlternateStream || viewModel.hidden)
     }
 
+    private fun qualityLabel(quality: VideoQuality?): String? {
+        quality ?: return null
+        return getQualities()
+            ?.firstOrNull { (_, candidate) ->
+                candidate.name == quality.name && candidate.url == quality.url
+            }
+            ?.first
+            ?: when (quality.name) {
+                AUTO_QUALITY -> getString(R.string.auto)
+                SOURCE_QUALITY -> getString(R.string.source)
+                AUDIO_ONLY_QUALITY -> getString(R.string.audio_only)
+                CHAT_ONLY_QUALITY -> getString(R.string.chat_only)
+                else -> quality.name
+            }
+    }
+
     fun setQualityText() {
-        val label = getQualities()?.find { it.second == viewModel.quality }?.first
+        val selectedLabel = qualityLabel(viewModel.quality)
+        val selectedQuality = viewModel.quality
+        val activeQuality = selectedQuality?.takeIf {
+            it.name == AUDIO_ONLY_QUALITY || it.name == CHAT_ONLY_QUALITY
+        } ?: viewModel.confirmedVideoQuality ?: selectedQuality
+        val label = qualityLabel(activeQuality)
         if (view != null) {
             val vaftActive = isVaftActive()
             binding.playerControls.quality.apply {
@@ -2329,7 +2412,7 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                 }
             }
         }
-        (childFragmentManager.findFragmentByTag("closeOnPip") as? PlayerSettingsDialog?)?.setQuality(label)
+        (childFragmentManager.findFragmentByTag("closeOnPip") as? PlayerSettingsDialog?)?.setQuality(selectedLabel)
     }
 
     fun updateViewerCount(viewerCount: Int?) {
@@ -2460,9 +2543,21 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
     fun restartPlayer() {
         if (videoType == STREAM && isLiveRewindActiveOrSwitching()) return
         if (viewModel.quality?.name != CHAT_ONLY_QUALITY) {
+            if (videoType == STREAM) {
+                onStreamQualityReset()
+                viewModel.quality = null
+                viewModel.previousQuality = null
+                viewModel.qualities = null
+                viewModel.updateQualities = true
+                viewModel.playlistUrl = null
+                viewModel.streamResult.value = null
+                setQualityText()
+            }
             loadStream()
         }
     }
+
+    protected open fun onStreamQualityReset() = Unit
 
     fun openViewerList() {
         requireArguments().getString(KEY_CHANNEL_LOGIN)?.let { login ->
@@ -2755,6 +2850,14 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
     }
 
     private fun toggleController() {
+        if (BuildConfig.DEBUG && !requireContext().isTelevision()) {
+            if (hudVisibility.toggle()) {
+                updateProgress()
+            } else {
+                hideController()
+            }
+            return
+        }
         if (requireContext().isTelevision() || !controllerHideOnTouch) {
             hudVisibility.show(force = true)
             showController(force = true)
@@ -3915,6 +4018,9 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
     }
 
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean) {
+        if (isInPictureInPictureMode) {
+            swipeGestureController?.endSession(restoreBrightness = true)
+        }
         with(binding) {
             if (isInPictureInPictureMode) {
                 if (!isMaximized) {
@@ -3950,6 +4056,9 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
     }
 
     override fun onStop() {
+        if (activity?.isChangingConfigurations != true) {
+            swipeGestureController?.endSession(restoreBrightness = true)
+        }
         super.onStop()
         _binding?.let {
             hudVisibility.onScrubStop()
@@ -3984,6 +4093,7 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
             (activity as? MainActivity)?.closePlayer() ?: close()
             return
         }
+        swipeGestureController?.endSession(restoreBrightness = true)
         with(binding) {
             val wasMaximized = isMaximized
             isMaximized = false
@@ -4300,6 +4410,8 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
     }
 
     override fun onDestroyView() {
+        swipeGestureController?.release(restoreBrightness = activity?.isChangingConfigurations != true)
+        swipeGestureController = null
         interactionLockBackCallback?.remove()
         interactionLockBackCallback = null
         _binding?.playerLayout?.interactionLocked = false

@@ -77,6 +77,7 @@ import com.github.andreyasadchy.xtra.repository.ChatIdentityCampaignRepository
 import com.github.andreyasadchy.xtra.repository.HelixRepository
 import com.github.andreyasadchy.xtra.repository.PlayerRepository
 import com.github.andreyasadchy.xtra.repository.loadChatIdentity
+import com.github.andreyasadchy.xtra.repository.loadChatViewerRole
 import com.github.andreyasadchy.xtra.repository.setChannelChatBadge
 import com.github.andreyasadchy.xtra.repository.setGlobalChatBadge
 import com.github.andreyasadchy.xtra.repository.setChatNameColor
@@ -182,6 +183,7 @@ import kotlin.coroutines.coroutineContext
 import kotlin.time.Instant
 
 private const val MODERATOR_ROLE_MAX_AGE_MS = 60_000L
+private const val MODERATOR_ROLE_PROBE_RETRY_DELAY_MS = 5_000L
 private const val MODERATOR_REASON_MAX_LENGTH = 500
 private val MODERATOR_TIMEOUT_DURATIONS = setOf("10s", "1m", "10m", "1h", "1d")
 
@@ -364,7 +366,7 @@ class ChatViewModel(
                 if (key == C.USER_ID) {
                     emoteUsageViewerId.value = currentEmoteUsageViewerId()
                 }
-                _viewerRoleInChannel.value = ChatViewerRoleSnapshot()
+                resetViewerRoleForSessionChange()
                 if (BuildConfig.MODERATOR_TOOLS_ENABLED && started) startChatUserPresenceRefresh()
             }
         }
@@ -569,6 +571,14 @@ class ChatViewModel(
         val campaignsLoaded: Boolean,
     )
 
+    private data class ModeratorRoleContext(
+        val channelId: String,
+        val channelLogin: String,
+        val viewerId: String,
+        val viewerLogin: String,
+        val generation: Long,
+    )
+
     private data class ChatIdentityCampaignLoadKey(
         val viewerId: String,
         val channelId: String,
@@ -732,6 +742,12 @@ class ChatViewModel(
     val slowModeState: StateFlow<SlowModeState> = _slowModeState
     private val _viewerRoleInChannel = MutableStateFlow(ChatViewerRoleSnapshot())
     val viewerRoleInChannel: StateFlow<ChatViewerRoleSnapshot> = _viewerRoleInChannel
+    private val moderatorRoleProbeMutex = Mutex()
+    private var moderatorRoleProbeJob: Job? = null
+    private var moderatorRoleExpiryJob: Job? = null
+    private var moderatorRoleLastAttemptAtMs = 0L
+    private var moderatorRoleContext: ModeratorRoleContext? = null
+    private var moderatorRoleContextGeneration = 0L
     val raid = MutableStateFlow<Raid?>(null)
     val raidClicked = MutableStateFlow<Raid?>(null)
     var raidClosed = false
@@ -1222,7 +1238,7 @@ class ChatViewModel(
     }
 
     fun startReplay(channelId: String?, channelLogin: String?, chatUrl: String? = null, videoId: String? = null, createdAt: String?, startTime: Int = 0, getCurrentPosition: () -> Long?, getCurrentSpeed: () -> Float?) {
-        _viewerRoleInChannel.value = ChatViewerRoleSnapshot()
+        resetViewerRoleForSessionChange()
         if (!videoId.isNullOrBlank()) {
             activeChatMode = ActiveChatMode.VideoReplay(videoId, createdAt)
         }
@@ -2076,7 +2092,7 @@ class ChatViewModel(
     }
 
     fun invalidateViewerRoleInChannel(channelId: String) {
-        if (activeChannelId == channelId) _viewerRoleInChannel.value = ChatViewerRoleSnapshot()
+        if (activeChannelId == channelId) resetViewerRoleForSessionChange()
     }
 
     private fun updateSlowModeApplicabilityFromBadges(badges: List<Badge>?) {
@@ -2221,38 +2237,13 @@ class ChatViewModel(
         chatUserPresenceRefreshJob?.cancel()
         chatUserPresenceRefreshJob = null
         val autocompleteNeedsPresence = chatUsernameRecommendationsEnabled && chatUserPresenceAutocompleteActive
-        val loadModeratorRole = BuildConfig.MODERATOR_TOOLS_ENABLED && !liveChatReadOnly
-        if (!autocompleteNeedsPresence && !loadModeratorRole) return
+        if (!autocompleteNeedsPresence) return
         val expectedChannelId = activeChannelId ?: return
         val expectedChannelLogin = activeChannelLogin?.takeIf(String::isNotBlank) ?: return
-        val expectedViewerId = applicationContext.tokenPrefs().getString(C.USER_ID, null)
-        val expectedViewerLogin = applicationContext.tokenPrefs().getString(C.USERNAME, null)
-        val expectedSessionGeneration = predictionSessionToken
-        val presenceLoadStillCurrent = {
-            if (loadModeratorRole) {
-                chatPresenceSessionStillCurrent(
-                    expectedChannelId,
-                    expectedChannelLogin,
-                    expectedViewerId,
-                    expectedViewerLogin,
-                    expectedSessionGeneration,
-                )
-            } else {
-                chatUserPresenceLoadStillCurrent(expectedChannelId, expectedChannelLogin)
-            }
-        }
-        if (loadModeratorRole && expectedViewerId == expectedChannelId) {
-            publishModeratorRoleFromPresence(
-                presence = null,
-                channelId = expectedChannelId,
-                viewerId = expectedViewerId,
-                viewerLogin = expectedViewerLogin,
-                sessionGeneration = expectedSessionGeneration,
-            )
-        }
+        val presenceLoadStillCurrent = { chatUserPresenceLoadStillCurrent(expectedChannelId, expectedChannelLogin) }
         val networkLibrary = applicationContext.prefs().getString(C.NETWORK_LIBRARY, C.OKHTTP)
         val cacheAge = System.currentTimeMillis() - chatUserPresenceLoadedAtMillis
-        val initialDelay = if (!BuildConfig.MODERATOR_TOOLS_ENABLED && chatUserPresenceLoadedAtMillis > 0L &&
+        val initialDelay = if (chatUserPresenceLoadedAtMillis > 0L &&
             cacheAge < CHAT_USER_PRESENCE_CACHE_TTL_MILLIS
         ) {
             CHAT_USER_PRESENCE_CACHE_TTL_MILLIS - cacheAge
@@ -2264,26 +2255,15 @@ class ChatViewModel(
             try {
                 if (initialDelay > 0L) delay(initialDelay)
                 while (isActive && presenceLoadStillCurrent() &&
-                    (loadModeratorRole || chatUsernameRecommendationsEnabled && chatUserPresenceAutocompleteActive)
+                    chatUsernameRecommendationsEnabled && chatUserPresenceAutocompleteActive
                 ) {
                     val presence = loadChatUserPresence(networkLibrary, expectedChannelLogin)
                     if (presenceLoadStillCurrent()) {
-                        if (loadModeratorRole) {
-                            publishModeratorRoleFromPresence(
-                                presence = presence,
-                                channelId = expectedChannelId,
-                                viewerId = expectedViewerId,
-                                viewerLogin = expectedViewerLogin,
-                                sessionGeneration = expectedSessionGeneration,
-                            )
-                        }
                         if (presence != null && chatUsernameRecommendationsEnabled && chatUserPresenceAutocompleteActive) {
                             applyChatUserPresence(presence)
                         }
                     }
-                    delay(if (loadModeratorRole) {
-                        CHAT_USER_PRESENCE_REFRESH_INTERVAL_MILLIS
-                    } else if (chatUserPresenceLoadedAtMillis > 0L) {
+                    delay(if (chatUserPresenceLoadedAtMillis > 0L) {
                             CHAT_USER_PRESENCE_CACHE_TTL_MILLIS
                         } else CHAT_USER_PRESENCE_REFRESH_INTERVAL_MILLIS)
                 }
@@ -2386,63 +2366,220 @@ class ChatViewModel(
         if (changed) scheduleChatUserAvatarLoad()
     }
 
-    private fun publishModeratorRoleFromPresence(
-        presence: ChatUserPresenceSnapshot?,
-        channelId: String,
-        viewerId: String?,
-        viewerLogin: String?,
-        sessionGeneration: Long,
+    fun requestCurrentChatViewerRoleVerification(
+        channelId: String?,
+        channelLogin: String?,
+        moderationAllowed: Boolean,
+        force: Boolean = false,
     ) {
-        if (!BuildConfig.MODERATOR_TOOLS_ENABLED) return
-        val authenticatedUserId = authSessionStore.readPrivateGqlCredential()?.userId
-        if (authenticatedUserId.isNullOrBlank() || authenticatedUserId != viewerId) {
-            _viewerRoleInChannel.value = ChatViewerRoleSnapshot()
-            return
-        }
-        val normalizedLogin = viewerLogin?.trim()?.lowercase(Locale.ROOT)
-        val role = when {
-            !viewerId.isNullOrBlank() && channelId == viewerId -> ChatViewerRole.BROADCASTER
-            presence != null && !normalizedLogin.isNullOrBlank() && normalizedLogin in presence.moderators ->
-                ChatViewerRole.MODERATOR
-            else -> ChatViewerRole.UNKNOWN
-        }
-        _viewerRoleInChannel.value = ChatViewerRoleSnapshot(
-            channelId = channelId,
-            viewerId = viewerId,
-            viewerLogin = normalizedLogin,
-            role = role,
+        val context = resolveModeratorRoleContext(channelId, channelLogin, moderationAllowed) ?: return
+        val snapshot = _viewerRoleInChannel.value
+        val age = System.currentTimeMillis() - snapshot.observedAtMs
+        val isFresh = snapshot.channelId == context.channelId &&
+            snapshot.channelLogin == context.channelLogin && snapshot.viewerId == context.viewerId &&
+            snapshot.viewerLogin == context.viewerLogin && snapshot.sessionGeneration == context.generation &&
+            age in 0..MODERATOR_ROLE_MAX_AGE_MS && snapshot.role != ChatViewerRole.UNKNOWN
+        if (!force && isFresh) return
+        if (moderatorRoleProbeJob?.isActive == true) return
+        if (!force && System.currentTimeMillis() - moderatorRoleLastAttemptAtMs < MODERATOR_ROLE_PROBE_RETRY_DELAY_MS) return
+        _viewerRoleInChannel.value = _viewerRoleInChannel.value.copy(
             observedAtMs = System.currentTimeMillis(),
-            sessionGeneration = sessionGeneration,
+            verificationInProgress = true,
+            verificationFailed = false,
         )
+        moderatorRoleProbeJob = viewModelScope.launch {
+            verifyCurrentChatViewerRole(context, force)
+        }
     }
 
-    fun hasCurrentModeratorRole(): Boolean = currentModeratorChannelId() != null
-
-    private fun currentModeratorChannelId(): String? {
-        if (!BuildConfig.MODERATOR_TOOLS_ENABLED || !started || liveChatReadOnly ||
+    private fun resolveModeratorRoleContext(
+        channelId: String?,
+        channelLogin: String?,
+        moderationAllowed: Boolean,
+    ): ModeratorRoleContext? {
+        if (!BuildConfig.MODERATOR_TOOLS_ENABLED || !moderationAllowed || liveChatReadOnly ||
             activeChatMode !is ActiveChatMode.Live
-        ) return null
-        val channelId = activeChannelId?.takeIf(String::isNotBlank) ?: return null
+        ) {
+            if (moderatorRoleContext != null) resetViewerRoleForSessionChange()
+            return null
+        }
+        val expectedChannelId = channelId?.takeIf(String::isNotBlank) ?: return null
+        val expectedChannelLogin = channelLogin?.trim()?.takeIf(String::isNotBlank) ?: return null
         val viewerId = applicationContext.tokenPrefs().getString(C.USER_ID, null)
             ?.takeIf(String::isNotBlank) ?: return null
         val viewerLogin = applicationContext.tokenPrefs().getString(C.USERNAME, null)
             ?.trim()?.lowercase(Locale.ROOT)?.takeIf(String::isNotBlank) ?: return null
-        val authenticatedUserId = authSessionStore.readPrivateGqlCredential()?.userId
-        if (authenticatedUserId != viewerId) return null
-        if (TwitchApiHelper.getGQLHeaders(applicationContext, includeToken = true)[C.HEADER_TOKEN].isNullOrBlank()) {
-            return null
-        }
-        val role = _viewerRoleInChannel.value
-        val age = System.currentTimeMillis() - role.observedAtMs
-        if (role.channelId != channelId || role.viewerId != viewerId || role.viewerLogin != viewerLogin ||
-            role.sessionGeneration != predictionSessionToken || age !in 0..MODERATOR_ROLE_MAX_AGE_MS ||
-            role.role !in setOf(ChatViewerRole.MODERATOR, ChatViewerRole.BROADCASTER)
+        if (authSessionStore.readPrivateGqlCredential()?.userId != viewerId ||
+            TwitchApiHelper.getWebGQLHeaders(applicationContext, includeToken = true)[C.HEADER_TOKEN].isNullOrBlank()
         ) return null
-        return channelId
+
+        val current = moderatorRoleContext
+        if (current != null && current.channelId == expectedChannelId &&
+            current.channelLogin.equals(expectedChannelLogin, ignoreCase = true) &&
+            current.viewerId == viewerId && current.viewerLogin == viewerLogin
+        ) return current
+
+        moderatorRoleProbeJob?.cancel()
+        moderatorRoleProbeJob = null
+        moderatorRoleExpiryJob?.cancel()
+        moderatorRoleExpiryJob = null
+        moderatorRoleLastAttemptAtMs = 0L
+        val context = ModeratorRoleContext(
+            channelId = expectedChannelId,
+            channelLogin = expectedChannelLogin,
+            viewerId = viewerId,
+            viewerLogin = viewerLogin,
+            generation = ++moderatorRoleContextGeneration,
+        )
+        moderatorRoleContext = context
+        _viewerRoleInChannel.value = ChatViewerRoleSnapshot(
+            channelId = context.channelId,
+            channelLogin = context.channelLogin,
+            viewerId = context.viewerId,
+            viewerLogin = context.viewerLogin,
+            sessionGeneration = context.generation,
+            verificationInProgress = false,
+        )
+        return context
     }
 
-    suspend fun performModeratorAction(request: ChatModeratorActionRequest): ChatModeratorActionResult {
-        val channelId = currentModeratorChannelId()
+    private suspend fun verifyCurrentChatViewerRole(
+        context: ModeratorRoleContext,
+        force: Boolean,
+    ): ChatViewerRole? = moderatorRoleProbeMutex.withLock {
+        if (!moderatorRoleContextStillCurrent(context)) return@withLock null
+        val previous = _viewerRoleInChannel.value
+        val previousAge = System.currentTimeMillis() - previous.observedAtMs
+        val previousIsFresh = previous.channelId == context.channelId &&
+            previous.channelLogin == context.channelLogin && previous.viewerId == context.viewerId &&
+            previous.viewerLogin == context.viewerLogin && previous.sessionGeneration == context.generation &&
+            previousAge in 0..MODERATOR_ROLE_MAX_AGE_MS && previous.role != ChatViewerRole.UNKNOWN
+        if (!force && previousIsFresh) return@withLock previous.role
+
+        moderatorRoleLastAttemptAtMs = System.currentTimeMillis()
+        try {
+            val roleData = graphQLRepository.loadChatViewerRole(
+                networkLibrary = applicationContext.prefs().getString(C.NETWORK_LIBRARY, C.OKHTTP),
+                headers = TwitchApiHelper.getWebGQLHeaders(applicationContext, includeToken = true),
+                viewerId = context.viewerId,
+                channelId = context.channelId,
+                channelLogin = context.channelLogin,
+            )
+            if (!moderatorRoleContextStillCurrent(context)) return@withLock null
+            val role = when {
+                roleData.isBroadcaster -> ChatViewerRole.BROADCASTER
+                roleData.isModerator -> ChatViewerRole.MODERATOR
+                else -> ChatViewerRole.VIEWER
+            }
+            if (BuildConfig.DEBUG) Log.d("ModeratorRole", "Channel role verified: $role")
+            publishVerifiedViewerRole(context, role)
+            role
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            markViewerRoleVerificationFailed(context)
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (error: Exception) {
+            Log.w("ModeratorRole", "Channel role lookup failed (${error.javaClass.simpleName})")
+            markViewerRoleVerificationFailed(context)
+            null
+        }
+    }
+
+    private fun moderatorRoleContextStillCurrent(context: ModeratorRoleContext): Boolean =
+        BuildConfig.MODERATOR_TOOLS_ENABLED && !liveChatReadOnly &&
+            activeChatMode is ActiveChatMode.Live && moderatorRoleContext == context &&
+            applicationContext.tokenPrefs().getString(C.USER_ID, null) == context.viewerId &&
+            applicationContext.tokenPrefs().getString(C.USERNAME, null)?.trim()
+                ?.equals(context.viewerLogin, ignoreCase = true) == true &&
+            authSessionStore.readPrivateGqlCredential()?.userId == context.viewerId &&
+            !TwitchApiHelper.getWebGQLHeaders(applicationContext, includeToken = true)[C.HEADER_TOKEN].isNullOrBlank()
+
+    private fun publishVerifiedViewerRole(context: ModeratorRoleContext, role: ChatViewerRole) {
+        val snapshot = ChatViewerRoleSnapshot(
+            channelId = context.channelId,
+            channelLogin = context.channelLogin,
+            viewerId = context.viewerId,
+            viewerLogin = context.viewerLogin,
+            role = role,
+            observedAtMs = System.currentTimeMillis(),
+            sessionGeneration = context.generation,
+        )
+        _viewerRoleInChannel.value = snapshot
+        moderatorRoleExpiryJob?.cancel()
+        moderatorRoleExpiryJob = viewModelScope.launch {
+            delay(MODERATOR_ROLE_MAX_AGE_MS)
+            if (_viewerRoleInChannel.value == snapshot) clearViewerRole()
+        }
+    }
+
+    private fun markViewerRoleVerificationFailed(context: ModeratorRoleContext) {
+        if (!moderatorRoleContextStillCurrent(context)) return
+        moderatorRoleExpiryJob?.cancel()
+        moderatorRoleExpiryJob = null
+        _viewerRoleInChannel.value = ChatViewerRoleSnapshot(
+            channelId = context.channelId,
+            channelLogin = context.channelLogin,
+            viewerId = context.viewerId,
+            viewerLogin = context.viewerLogin,
+            observedAtMs = System.currentTimeMillis(),
+            sessionGeneration = context.generation,
+            verificationInProgress = false,
+            verificationFailed = true,
+        )
+    }
+
+    private fun clearViewerRole() {
+        moderatorRoleExpiryJob?.cancel()
+        moderatorRoleExpiryJob = null
+        _viewerRoleInChannel.value = ChatViewerRoleSnapshot()
+    }
+
+    private fun resetViewerRoleForSessionChange() {
+        moderatorRoleProbeJob?.cancel()
+        moderatorRoleProbeJob = null
+        moderatorRoleLastAttemptAtMs = 0L
+        moderatorRoleContext = null
+        moderatorRoleContextGeneration++
+        clearViewerRole()
+    }
+
+    fun hasCurrentModeratorRole(channelId: String?, channelLogin: String?, moderationAllowed: Boolean): Boolean {
+        val context = resolveModeratorRoleContext(channelId, channelLogin, moderationAllowed) ?: return false
+        val channel = currentModeratorChannelId(context)
+        if (channel == null) requestCurrentChatViewerRoleVerification(channelId, channelLogin, moderationAllowed)
+        return channel != null
+    }
+
+    private fun currentModeratorChannelId(context: ModeratorRoleContext): String? {
+        if (!moderatorRoleContextStillCurrent(context)) return null
+        val role = _viewerRoleInChannel.value
+        val age = System.currentTimeMillis() - role.observedAtMs
+        if (role.channelId != context.channelId || role.channelLogin != context.channelLogin ||
+            role.viewerId != context.viewerId || role.viewerLogin != context.viewerLogin ||
+            role.sessionGeneration != context.generation || age !in 0..MODERATOR_ROLE_MAX_AGE_MS ||
+            role.role !in setOf(ChatViewerRole.MODERATOR, ChatViewerRole.BROADCASTER)
+        ) return null
+        return context.channelId
+    }
+
+    suspend fun performModeratorAction(
+        request: ChatModeratorActionRequest,
+        channelId: String?,
+        channelLogin: String?,
+        moderationAllowed: Boolean,
+    ): ChatModeratorActionResult {
+        val context = resolveModeratorRoleContext(channelId, channelLogin, moderationAllowed)
+            ?: return ChatModeratorActionResult.Failure(
+                applicationContext.getString(R.string.chat_command_moderator_required),
+            )
+        val verifiedRole = verifyCurrentChatViewerRole(context, force = true)
+        if (verifiedRole !in setOf(ChatViewerRole.MODERATOR, ChatViewerRole.BROADCASTER)) {
+            return ChatModeratorActionResult.Failure(
+                applicationContext.getString(R.string.chat_command_moderator_required),
+            )
+        }
+        val verifiedChannelId = currentModeratorChannelId(context)
             ?: return ChatModeratorActionResult.Failure(
                 applicationContext.getString(R.string.chat_command_moderator_required),
             )
@@ -2458,12 +2595,12 @@ class ChatViewModel(
         if (reason != null && reason.length > MODERATOR_REASON_MAX_LENGTH) {
             return ChatModeratorActionResult.Failure("Reason must be 500 characters or fewer.")
         }
-        if (currentModeratorChannelId() != channelId) {
+        if (currentModeratorChannelId(context) != verifiedChannelId) {
             return ChatModeratorActionResult.Failure(
                 applicationContext.getString(R.string.chat_command_moderator_required),
             )
         }
-        val headers = TwitchApiHelper.getGQLHeaders(applicationContext, includeToken = true)
+        val headers = TwitchApiHelper.getWebGQLHeaders(applicationContext, includeToken = true)
         if (headers[C.HEADER_TOKEN].isNullOrBlank()) {
             return ChatModeratorActionResult.Failure("Sign in to Twitch in Xtra before using moderator tools.")
         }
@@ -2472,14 +2609,14 @@ class ChatViewModel(
                 ChatModeratorAction.BAN -> graphQLRepository.banUser(
                     applicationContext.prefs().getString(C.NETWORK_LIBRARY, C.OKHTTP),
                     headers,
-                    channelId,
+                    verifiedChannelId,
                     targetLogin,
                     reason = reason,
                 )
                 ChatModeratorAction.TIMEOUT -> graphQLRepository.banUser(
                     applicationContext.prefs().getString(C.NETWORK_LIBRARY, C.OKHTTP),
                     headers,
-                    channelId,
+                    verifiedChannelId,
                     targetLogin,
                     duration = duration,
                     reason = reason,
@@ -2487,7 +2624,7 @@ class ChatViewModel(
                 ChatModeratorAction.REMOVE -> graphQLRepository.unbanUser(
                     applicationContext.prefs().getString(C.NETWORK_LIBRARY, C.OKHTTP),
                     headers,
-                    channelId,
+                    verifiedChannelId,
                     targetLogin,
                 )
             }
@@ -2509,18 +2646,6 @@ class ChatViewModel(
             ChatModeratorActionResult.Failure("Twitch could not complete the moderator action. Try again.")
         }
     }
-
-    private fun chatPresenceSessionStillCurrent(
-        channelId: String,
-        channelLogin: String,
-        viewerId: String?,
-        viewerLogin: String?,
-        sessionGeneration: Long,
-    ): Boolean = started &&
-            activeChannelId == channelId && activeChannelLogin.equals(channelLogin, ignoreCase = true) &&
-            predictionSessionToken == sessionGeneration &&
-            applicationContext.tokenPrefs().getString(C.USER_ID, null) == viewerId &&
-            applicationContext.tokenPrefs().getString(C.USERNAME, null).equals(viewerLogin, ignoreCase = true)
 
     private fun chatUserPresenceLoadStillCurrent(
         expectedChannelId: String,
@@ -3965,7 +4090,7 @@ class ChatViewModel(
                 !activeChannelLogin.equals(channelLogin, ignoreCase = true)
         stopLiveChat()
         if (channelChanged) {
-            _viewerRoleInChannel.value = ChatViewerRoleSnapshot()
+            resetViewerRoleForSessionChange()
             clearChatUserSuggestions()
             synchronized(userEmotes) { userEmotes.clear() }
             loadedUserEmotes = false
@@ -4679,7 +4804,7 @@ class ChatViewModel(
         predictionSnapshotJob?.cancel()
         predictionSnapshotJob = null
         resetSlowModeState()
-        _viewerRoleInChannel.value = ChatViewerRoleSnapshot()
+        resetViewerRoleForSessionChange()
         _connectionState.value = ConnectionState.IDLE
         watchStreakSession++
         lastWatchStreakReconciliationElapsedRealtime = null

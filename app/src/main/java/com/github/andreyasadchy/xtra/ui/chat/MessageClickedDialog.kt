@@ -63,6 +63,7 @@ class MessageClickedDialog : BottomSheetDialogFragment() {
         fun onTranslateMessageClicked(chatMessage: ChatMessage, languageTag: String?)
         fun onWhisperClicked(userLogin: String)
         fun onCurrentChatViewerRole(): kotlinx.coroutines.flow.StateFlow<ChatViewerRoleSnapshot>? = null
+        fun onRequestCurrentChatViewerRoleVerification(force: Boolean = false) {}
         suspend fun onModeratorAction(request: ChatModeratorActionRequest): ChatModeratorActionResult =
             ChatModeratorActionResult.Failure("Moderator actions are unavailable in this chat.")
     }
@@ -276,6 +277,7 @@ class MessageClickedDialog : BottomSheetDialogFragment() {
                     }
                 }
             }
+            listener.onRequestCurrentChatViewerRoleVerification()
         }
         viewLifecycleOwner.lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -534,6 +536,27 @@ class MessageClickedDialog : BottomSheetDialogFragment() {
 
         moderatorToolsButton.isVisible = canShowModeratorTools(user)
         moderatorToolsButton.setText(R.string.user_card_moderator_tools)
+        val roleContextMatches = currentChatViewerRole.channelId == requireArguments().getString(KEY_CHANNEL_ID) &&
+            currentChatViewerRole.channelLogin.equals(requireArguments().getString(KEY_CHANNEL_LOGIN), ignoreCase = true) &&
+            currentChatViewerRole.viewerId == requireContext().tokenPrefs().getString(C.USER_ID, null) &&
+            currentChatViewerRole.viewerLogin == requireContext().tokenPrefs().getString(C.USERNAME, null)
+                ?.trim()?.lowercase(Locale.ROOT) && currentChatViewerRole.sessionGeneration > 0L
+        moderatorToolsStatus.isVisible = BuildConfig.MODERATOR_TOOLS_ENABLED &&
+            requireArguments().getBoolean(KEY_MESSAGING) &&
+            user.id?.isNotBlank() == true && user.login?.isNotBlank() == true && roleContextMatches &&
+            currentChatViewerRole.role == ChatViewerRole.UNKNOWN &&
+            (currentChatViewerRole.verificationInProgress || currentChatViewerRole.verificationFailed)
+        moderatorToolsStatus.setText(
+            if (currentChatViewerRole.verificationFailed) R.string.moderator_role_retry
+            else R.string.moderator_role_checking,
+        )
+        moderatorToolsStatus.isClickable = currentChatViewerRole.verificationFailed
+        moderatorToolsStatus.isFocusable = currentChatViewerRole.verificationFailed
+        moderatorToolsStatus.setOnClickListener {
+            if (currentChatViewerRole.verificationFailed) {
+                listener.onRequestCurrentChatViewerRoleVerification(force = true)
+            }
+        }
         moderatorToolsButton.setOnClickListener {
             if (!canShowModeratorTools(user)) {
                 moderatorToolsButton.isVisible = false
@@ -544,14 +567,19 @@ class MessageClickedDialog : BottomSheetDialogFragment() {
     }
 
     private fun canShowModeratorTools(user: User): Boolean {
-        if (!BuildConfig.MODERATOR_TOOLS_ENABLED || user.id.isNullOrBlank() || user.login.isNullOrBlank()) return false
+        if (!BuildConfig.MODERATOR_TOOLS_ENABLED || !requireArguments().getBoolean(KEY_MESSAGING) ||
+            user.id.isNullOrBlank() || user.login.isNullOrBlank()
+        ) return false
         val channelId = requireArguments().getString(KEY_CHANNEL_ID)?.takeIf(String::isNotBlank) ?: return false
+        val channelLogin = requireArguments().getString(KEY_CHANNEL_LOGIN)?.takeIf(String::isNotBlank) ?: return false
         val viewerId = requireContext().tokenPrefs().getString(C.USER_ID, null)?.takeIf(String::isNotBlank) ?: return false
         val viewerLogin = requireContext().tokenPrefs().getString(C.USERNAME, null)
             ?.trim()?.lowercase(Locale.ROOT)?.takeIf(String::isNotBlank) ?: return false
-        if (TwitchApiHelper.getGQLHeaders(requireContext(), true)[C.HEADER_TOKEN].isNullOrBlank()) return false
+        if (TwitchApiHelper.getWebGQLHeaders(requireContext(), true)[C.HEADER_TOKEN].isNullOrBlank()) return false
         val observedAgeMs = System.currentTimeMillis() - currentChatViewerRole.observedAtMs
-        return currentChatViewerRole.channelId == channelId && currentChatViewerRole.viewerId == viewerId &&
+        return currentChatViewerRole.channelId == channelId &&
+            currentChatViewerRole.channelLogin.equals(channelLogin, ignoreCase = true) &&
+            currentChatViewerRole.viewerId == viewerId &&
             currentChatViewerRole.viewerLogin == viewerLogin && currentChatViewerRole.sessionGeneration > 0L &&
             observedAgeMs in 0..MODERATOR_ROLE_MAX_AGE_MS &&
             currentChatViewerRole.role in setOf(ChatViewerRole.MODERATOR, ChatViewerRole.BROADCASTER)
@@ -566,7 +594,7 @@ class MessageClickedDialog : BottomSheetDialogFragment() {
         requireContext().getAlertDialogBuilder()
             .setTitle(R.string.moderator_tools_title)
             .setItems(actions) { _, which ->
-                if (!canShowModeratorTools(user)) {
+                if (userCardUser?.id != user.id) {
                     showModeratorVerificationError()
                     return@setItems
                 }
@@ -585,7 +613,7 @@ class MessageClickedDialog : BottomSheetDialogFragment() {
         requireContext().getAlertDialogBuilder()
             .setTitle(R.string.moderator_action_timeout_title)
             .setItems(durations) { _, index ->
-                if (canShowModeratorTools(user)) {
+                if (userCardUser?.id == user.id) {
                     showModeratorActionConfirmation(user, ChatModeratorAction.TIMEOUT, durations[index])
                 } else {
                     showModeratorVerificationError()
@@ -646,7 +674,7 @@ class MessageClickedDialog : BottomSheetDialogFragment() {
     }
 
     private fun dispatchModeratorAction(user: User, request: ChatModeratorActionRequest) {
-        if (moderatorActionInFlight || userCardUser?.id != request.targetId || !canShowModeratorTools(user)) {
+        if (moderatorActionInFlight || userCardUser?.id != request.targetId || user.id != request.targetId) {
             showModeratorVerificationError()
             return
         }
@@ -654,7 +682,7 @@ class MessageClickedDialog : BottomSheetDialogFragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val currentUser = userCardUser
-                if (currentUser == null || currentUser.id != request.targetId || !canShowModeratorTools(currentUser)) {
+                if (currentUser == null || currentUser.id != request.targetId) {
                     showModeratorVerificationError()
                     return@launch
                 }

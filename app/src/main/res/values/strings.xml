@@ -492,6 +492,34 @@
     <string name="settings_preview_empty">Nothing here</string>
     <string name="settings_seek_controls">Seek controls</string>
     <string name="settings_gestures">Gestures</string>
+    <string name="settings_player_swipe_controls">Swipe controls</string>
+    <string name="settings_player_swipe_controls_summary">Adjust brightness and volume with vertical swipes in the fullscreen player</string>
+    <string name="settings_player_swipe_enabled_summary">Use the left and right edges of the fullscreen player</string>
+    <string name="settings_player_swipe_left_gesture">Left swipe gesture</string>
+    <string name="settings_player_swipe_right_gesture">Right swipe gesture</string>
+    <string name="settings_player_swipe_top_gesture">Top swipe gesture</string>
+    <string name="settings_player_swipe_off">Off</string>
+    <string name="settings_player_swipe_brightness">Brightness</string>
+    <string name="settings_player_swipe_volume">Volume</string>
+    <string name="settings_player_swipe_speed">Playback speed</string>
+    <string name="settings_native">Native</string>
+    <string name="settings_player_swipe_edge_width">Left/right zone width</string>
+    <string name="settings_player_swipe_edge_width_summary">Percentage of each screen edge reserved for left and right swipe gestures (5–50)</string>
+    <string name="settings_player_swipe_speed_height">Speed zone height</string>
+    <string name="settings_player_swipe_speed_height_summary">Height of the top speed gesture zone as a percentage of the player (5–75)</string>
+    <string name="settings_player_swipe_preview">Swipe zones</string>
+    <string name="settings_player_swipe_preview_summary">Preview of the left, center, right, and top swipe zones</string>
+    <string name="settings_player_swipe_brightness_sensitivity">Brightness swipe sensitivity</string>
+    <string name="settings_player_swipe_brightness_sensitivity_summary">Higher values require more swiping per brightness step</string>
+    <string name="settings_player_swipe_volume_sensitivity">Volume swipe sensitivity</string>
+    <string name="settings_player_swipe_volume_sensitivity_summary">Higher values increase the volume change per swipe</string>
+    <string name="settings_player_swipe_speed_sensitivity">Speed swipe sensitivity</string>
+    <string name="settings_player_swipe_speed_sensitivity_summary">Higher values require more swiping per speed step</string>
+    <string name="settings_player_swipe_speed_step">Speed step</string>
+    <string name="settings_player_swipe_ignore_locked">Ignore swipes when locked</string>
+    <string name="settings_player_swipe_zones_content_description">Left %1$s zone %2$d percent, center native zone %3$d percent, right %4$s zone %5$d percent, top %6$s zone %7$d percent</string>
+    <string name="settings_player_swipe_zone_value">%1$s\n%2$d%%</string>
+    <string name="settings_player_swipe_zone_value_single">%1$s</string>
     <string name="settings_clip_capture">Local clips</string>
     <string name="settings_clip_capture_summary">Choose how much live video the clip editor keeps available.</string>
     <string name="settings_clip_max_duration">Maximum clip length</string>
@@ -996,6 +1024,8 @@ Metadata text</string>
     <string name="moderator_action_rejected">Twitch rejected the moderator action.</string>
     <string name="moderator_action_failed">Could not apply moderator action: %1$s</string>
     <string name="moderator_action_could_not_verify">Couldn’t verify your moderator access for this live chat.</string>
+    <string name="moderator_role_checking">Checking moderator access…</string>
+    <string name="moderator_role_retry">Couldn’t verify moderator access. Tap to retry.</string>
     <string-array name="moderator_timeout_durations" translatable="false">
         <item>10s</item>
         <item>1m</item>

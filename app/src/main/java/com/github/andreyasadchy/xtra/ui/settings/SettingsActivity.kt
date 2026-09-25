@@ -1208,6 +1208,7 @@ class SettingsActivity : AppCompatActivity() {
                     SCREEN_CLIP -> R.xml.clip_preferences
                     SCREEN_PLAYER_SEEK -> R.xml.player_seek_preferences
                     SCREEN_PLAYER_GESTURES -> R.xml.player_gestures_preferences
+                    SCREEN_PLAYER_SWIPE_CONTROLS -> R.xml.player_swipe_controls_preferences
                     SCREEN_PLAYER_INFORMATION -> R.xml.player_information_preferences
                     SCREEN_CHAT_APPEARANCE -> R.xml.chat_appearance_preferences
                     SCREEN_CHAT_USERNAME -> R.xml.chat_username_preferences
@@ -1326,6 +1327,15 @@ class SettingsActivity : AppCompatActivity() {
                 BuildConfig.BUILD_TYPE,
             )
             findPreference<Preference>("about_package")?.summary = BuildConfig.APPLICATION_ID
+            if (settingsScreen == SCREEN_PLAYER_GESTURES) {
+                findPreference<Preference>("player_swipe_controls")?.setOnPreferenceClickListener {
+                    findNavController().navigate(R.id.playerSwipeControlsFragment)
+                    true
+                }
+            }
+            if (settingsScreen == SCREEN_PLAYER_SWIPE_CONTROLS) {
+                configurePlayerSwipeControlsPreferences()
+            }
             if (settingsScreen == SCREEN_ACCOUNT) configureAccountPreferences()
             configureRedesignedPreferences()
         }
@@ -1348,6 +1358,50 @@ class SettingsActivity : AppCompatActivity() {
                     true
                 }
             }
+        }
+
+        private fun configurePlayerSwipeControlsPreferences() {
+            val preferences = requireContext().prefs()
+            val master = findPreference<SwitchPreferenceCompat>(C.PLAYER_SWIPE_CONTROLS_ENABLED)
+            val left = findPreference<ListPreference>(C.PLAYER_SWIPE_LEFT_GESTURE)
+            val right = findPreference<ListPreference>(C.PLAYER_SWIPE_RIGHT_GESTURE)
+            val top = findPreference<ListPreference>(C.PLAYER_SWIPE_TOP_GESTURE)
+            val preview = findPreference<PlayerSwipeControlsPreviewPreference>("player_swipe_zones_preview")
+            val edgeWidth = findPreference<SeekBarPreference>(C.PLAYER_SWIPE_EDGE_WIDTH_PERCENT)
+            val speedHeight = findPreference<SeekBarPreference>(C.PLAYER_SWIPE_SPEED_ZONE_HEIGHT_PERCENT)
+            val brightnessSensitivity = findPreference<SeekBarPreference>(C.PLAYER_SWIPE_BRIGHTNESS_SENSITIVITY)
+            val volumeSensitivity = findPreference<SeekBarPreference>(C.PLAYER_SWIPE_VOLUME_SENSITIVITY)
+            val speedSensitivity = findPreference<SeekBarPreference>(C.PLAYER_SWIPE_SPEED_SENSITIVITY)
+            val speedStep = findPreference<ListPreference>(C.PLAYER_SWIPE_SPEED_STEP)
+            val ignoreWhenLocked = findPreference<SwitchPreferenceCompat>(C.PLAYER_SWIPE_IGNORE_WHEN_LOCKED)
+
+            fun refresh() {
+                val leftGesture = preferences.getString(C.PLAYER_SWIPE_LEFT_GESTURE, "brightness")
+                val rightGesture = preferences.getString(C.PLAYER_SWIPE_RIGHT_GESTURE, "volume")
+                val topGesture = preferences.getString(C.PLAYER_SWIPE_TOP_GESTURE, "off")
+                val edgeGesturesEnabled = leftGesture != "off" || rightGesture != "off"
+                val speedEnabled = topGesture == "speed"
+
+                edgeWidth?.isEnabled = edgeGesturesEnabled
+                brightnessSensitivity?.isEnabled =
+                    (leftGesture == "brightness" || rightGesture == "brightness")
+                volumeSensitivity?.isEnabled =
+                    (leftGesture == "volume" || rightGesture == "volume")
+                speedHeight?.isEnabled = speedEnabled
+                speedSensitivity?.isEnabled = speedEnabled
+                speedStep?.isEnabled = speedEnabled
+                ignoreWhenLocked?.isEnabled = true
+                preview?.refreshPreview()
+            }
+
+            listOf(master, left, right, top, edgeWidth, speedHeight, brightnessSensitivity,
+                volumeSensitivity, speedSensitivity, speedStep, ignoreWhenLocked).forEach { preference ->
+                preference?.setOnPreferenceChangeListener { _, _ ->
+                    listView.post(::refresh)
+                    true
+                }
+            }
+            refresh()
         }
 
         private fun createProxyPreferenceDataStore(): PreferenceDataStore {
@@ -1476,6 +1530,7 @@ class SettingsActivity : AppCompatActivity() {
                         context.tokenPrefs().edit {
                             remove(C.UPDATE_LAST_CHECKED)
                             remove(C.UPDATE_LAST_ATTEMPTED)
+                            remove(C.UPDATE_RATE_LIMITED_UNTIL)
                             remove(C.UPDATE_IGNORED_VERSION)
                         }
                         AppCompatDelegate.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
@@ -2090,6 +2145,7 @@ class SettingsActivity : AppCompatActivity() {
             const val SCREEN_CLIP = "clip"
             const val SCREEN_PLAYER_SEEK = "player_seek"
             const val SCREEN_PLAYER_GESTURES = "player_gestures"
+            const val SCREEN_PLAYER_SWIPE_CONTROLS = "player_swipe_controls"
             const val SCREEN_PLAYER_INFORMATION = "player_information"
             const val SCREEN_CHAT_APPEARANCE = "chat_appearance"
             const val SCREEN_CHAT_USERNAME = "chat_username"
@@ -3820,6 +3876,7 @@ class SettingsActivity : AppCompatActivity() {
                     Triple(R.xml.clip_preferences, SettingsNavDirections(R.id.clipSettingsFragment), breadcrumb(getString(R.string.settings_home_controls), getString(R.string.settings_clip_capture))),
                     Triple(R.xml.player_seek_preferences, SettingsNavDirections(R.id.playerSeekFragment), breadcrumb(getString(R.string.settings_home_controls), getString(R.string.settings_seek_controls))),
                     Triple(R.xml.player_gestures_preferences, SettingsNavDirections(R.id.playerGesturesFragment), breadcrumb(getString(R.string.settings_home_controls), getString(R.string.settings_gestures))),
+                    Triple(R.xml.player_swipe_controls_preferences, SettingsNavDirections(R.id.playerSwipeControlsFragment), breadcrumb(getString(R.string.settings_home_controls), getString(R.string.settings_gestures), getString(R.string.settings_player_swipe_controls))),
                     Triple(R.xml.player_information_preferences, SettingsNavDirections(R.id.playerInformationFragment), breadcrumb(getString(R.string.settings_home_controls), getString(R.string.settings_player_information))),
                     Triple(R.xml.chat_preferences, SettingsNavGraphDirections.actionGlobalChatSettingsFragment(), getString(R.string.settings_section_chat)),
                     Triple(R.xml.chat_appearance_preferences, SettingsNavDirections(R.id.chatAppearanceFragment), breadcrumb(getString(R.string.settings_section_chat), getString(R.string.settings_chat_appearance_layout))),
