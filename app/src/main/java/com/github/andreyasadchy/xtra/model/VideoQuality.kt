@@ -8,4 +8,5 @@ class VideoQuality(
     val codecs: String? = null,
     val bitrate: Int? = null,
     val url: String? = null,
+    val frameRate: Float? = null,
 )
