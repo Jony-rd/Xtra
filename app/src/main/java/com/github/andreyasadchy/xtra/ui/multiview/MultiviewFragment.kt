@@ -11,7 +11,7 @@ import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
-import android.widget.GridLayout
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.Toast
@@ -23,12 +23,11 @@ import androidx.core.view.doOnLayout
 import androidx.core.view.isVisible
 import androidx.core.view.updatePadding
 import androidx.fragment.app.Fragment
-import androidx.fragment.app.viewModels
+import androidx.fragment.app.activityViewModels
 import androidx.activity.OnBackPressedCallback
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import androidx.media3.ui.AspectRatioFrameLayout
 import com.github.andreyasadchy.xtra.R
 import com.github.andreyasadchy.xtra.databinding.FragmentMultiviewBinding
 import com.github.andreyasadchy.xtra.databinding.PlayerVolumeBinding
@@ -47,11 +46,12 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.slider.Slider
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     private var _binding: FragmentMultiviewBinding? = null
     private val binding get() = _binding!!
-    private val viewModel: MultiviewViewModel by viewModels { MultiviewViewModel.MultiviewViewModelFactory }
+    private val viewModel: MultiviewViewModel by activityViewModels { MultiviewViewModel.MultiviewViewModelFactory }
     private val slotViews = linkedMapOf<String, MultiviewSlotView>()
     private val controlsHandler = Handler(Looper.getMainLooper())
     private val hideControls = Runnable {
@@ -98,6 +98,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         binding.layoutButton.setOnClickListener { showLayoutMenu() }
         binding.moreButton.setOnClickListener { showMoreMenu(binding.moreButton) }
         binding.pipButton.setOnClickListener { (activity as? MainActivity)?.minimizeMultiview() }
+        binding.seekToLiveButton.setOnClickListener { seekAllToLive() }
 
         childFragmentManager.setFragmentResultListener(
             AddMultiviewStreamsSheet.RESULT_KEY,
@@ -113,8 +114,22 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
         val initialStream = requireArguments().parcelable<Stream>(ARG_STREAM)
         viewModel.initialize(initialStream)
+        // The multiview ViewModel is activity-scoped so playback can survive
+        // navigation away from this screen. If multiview is opened again with
+        // a different initial stream, add that stream to the preserved session
+        // instead of losing the new selection.
+        initialStream?.let { stream ->
+            val identity = MultiviewSessionReducer.stableIdentity(stream)
+            if (identity != null && viewModel.state.value.streams.none {
+                    MultiviewSessionReducer.stableIdentity(it).equals(identity, true)
+                }
+            ) {
+                viewModel.addStreams(listOf(stream))
+            }
+        }
         viewModel.startRaidMonitoring()
         updateOrientationLayout()
+        binding.multiviewRoot.doOnLayout { updateOrientationLayout() }
         revealControls()
 
         viewLifecycleOwner.lifecycleScope.launch {
@@ -280,7 +295,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         updateOrientationLayout()
         updateToolbar(state)
         updateChat(state)
-        binding.multiviewContent.doOnLayout { renderTileBounds() }
+        binding.videoGrid.doOnLayout { renderTileBounds() }
     }
 
     private fun createSlotView(identity: String): MultiviewSlotView {
@@ -312,6 +327,11 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         }
     }
 
+    private var latestLayoutPlan: MultiviewLayoutPlan = MultiviewLayoutPlan(
+        placements = emptyList(),
+        portraitHeightWidthRatio = 1f,
+    )
+
     private fun applyLayout(state: MultiviewSessionState) {
         val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         val plan = MultiviewLayoutManager.plan(
@@ -320,45 +340,94 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             mode = state.layoutMode,
             focusedIdentity = state.focusedIdentity,
             landscape = landscape,
+            chatVisible = state.chatVisible,
         )
-        val layoutKey = "${plan.rowCount}:${plan.columnCount}:" + plan.placements.joinToString("|") {
-            "${it.identity}:${it.row},${it.column},${it.rowSpan},${it.columnSpan}"
+        latestLayoutPlan = plan
+
+        val layoutKey = plan.placements.joinToString("|") {
+            "${it.identity}:${it.left},${it.top},${it.right},${it.bottom}"
         }
         if (layoutKey == renderedLayoutKey && binding.videoGrid.childCount == plan.placements.size) {
             renderTileBounds()
             return
         }
+
         renderedLayoutKey = layoutKey
         binding.videoGrid.removeAllViews()
-        binding.videoGrid.rowCount = plan.rowCount.coerceAtLeast(1)
-        binding.videoGrid.columnCount = plan.columnCount.coerceAtLeast(1)
+
         plan.placements.forEach { placement ->
             val slotView = slotViews[placement.identity] ?: return@forEach
-            val params = GridLayout.LayoutParams(
-                // Weight the full span, not just its first cell. This keeps
-                // asymmetric and focused tiles edge-to-edge when they span
-                // more than one row or column.
-                GridLayout.spec(placement.row, placement.rowSpan, placement.rowSpan.toFloat()),
-                GridLayout.spec(placement.column, placement.columnSpan, placement.columnSpan.toFloat()),
-            ).apply {
-                width = 0
-                height = 0
-                setMargins(dp(1), dp(1), dp(1), dp(1))
-            }
-            binding.videoGrid.addView(slotView, params)
+            binding.videoGrid.addView(
+                slotView,
+                FrameLayout.LayoutParams(0, 0),
+            )
             slotView.doOnLayout {
                 viewModel.playbackCoordinator.attach(placement.identity, slotView.playerView)
-                viewModel.playbackCoordinator.updateTileBounds(placement.identity, slotView.width, slotView.height)
+                viewModel.playbackCoordinator.updateTileBounds(
+                    placement.identity,
+                    slotView.width,
+                    slotView.height,
+                )
+            }
+        }
+
+        binding.videoGrid.doOnLayout { renderTileBounds() }
+    }
+
+    private fun renderTileBounds() {
+        val parentWidth = binding.videoGrid.width
+        val parentHeight = binding.videoGrid.height
+        if (parentWidth <= 0 || parentHeight <= 0) return
+
+        latestLayoutPlan.placements.forEach { placement ->
+            val slotView = slotViews[placement.identity] ?: return@forEach
+
+            val left = (placement.left * parentWidth).roundToInt()
+            val top = (placement.top * parentHeight).roundToInt()
+            val right = (placement.right * parentWidth).roundToInt()
+            val bottom = (placement.bottom * parentHeight).roundToInt()
+
+            val width = (right - left).coerceAtLeast(1)
+            val height = (bottom - top).coerceAtLeast(1)
+
+            val current = slotView.layoutParams as? FrameLayout.LayoutParams
+            if (current == null ||
+                current.width != width ||
+                current.height != height ||
+                current.leftMargin != left ||
+                current.topMargin != top
+            ) {
+                slotView.layoutParams = FrameLayout.LayoutParams(width, height).apply {
+                    leftMargin = left
+                    topMargin = top
+                }
+            }
+
+            if (slotView.width > 0 && slotView.height > 0) {
+                viewModel.playbackCoordinator.updateTileBounds(
+                    placement.identity,
+                    slotView.width,
+                    slotView.height,
+                )
             }
         }
     }
 
-    private fun renderTileBounds() {
-        slotViews.forEach { (identity, view) ->
-            if (view.width > 0 && view.height > 0) {
-                viewModel.playbackCoordinator.updateTileBounds(identity, view.width, view.height)
+    private fun isTwoStreamLandscapeChatOff(state: MultiviewSessionState = latestState): Boolean {
+        return resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE &&
+            !state.chatVisible &&
+            state.streams.size == 2
+    }
+
+    private fun seekAllToLive() {
+        latestState.identities.forEach { identity ->
+            viewModel.playbackCoordinator.player(identity)?.let { player ->
+                if (player.isCurrentMediaItemLive || player.isCurrentMediaItemDynamic) {
+                    player.seekToDefaultPosition()
+                }
             }
         }
+        revealControls()
     }
 
     private fun updateToolbar(state: MultiviewSessionState) {
@@ -368,6 +437,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         val audible = state.streams.filter { stream ->
             MultiviewSessionReducer.stableIdentity(stream)?.let(viewModel::audioVolume)?.let { it > 0f } == true
         }
+        val specialTwoStreamChat = isTwoStreamLandscapeChatOff(state)
+
         binding.activeAudio.isVisible = audible.isNotEmpty()
         binding.activeAudio.text = when {
             audible.size == 1 -> getString(R.string.multiview_audio, displayName(audible.first()))
@@ -378,13 +449,17 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         binding.pipButton.isVisible = (activity as? MainActivity)?.canMinimizeMultiview() == true &&
             !(Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && requireActivity().isInPictureInPictureMode)
         binding.chatButton.isVisible = !requireContext().prefs().getBoolean(C.CHAT_DISABLE, false) && active != null
-        binding.chatContainer.isVisible = state.chatVisible
+        binding.seekToLiveButton.isVisible = state.streams.isNotEmpty()
+        binding.chatContainer.isVisible = state.chatVisible || specialTwoStreamChat
         binding.combinedChatButton.isVisible = state.chatVisible && state.streams.size > 1
         binding.chatTitle.text = if (state.combinedChat) {
             getString(R.string.multiview_all_chats)
         } else {
-            state.chatIdentity?.let { identity ->
-                state.streams.firstOrNull { MultiviewSessionReducer.stableIdentity(it).equals(identity, true) }
+            val identity = state.chatIdentity ?: if (specialTwoStreamChat) state.activeIdentity else null
+            identity?.let { chatIdentity ->
+                state.streams.firstOrNull {
+                    MultiviewSessionReducer.stableIdentity(it).equals(chatIdentity, true)
+                }
             }?.let(::displayName) ?: getString(R.string.multiview_chat)
         }
         binding.chatButton.contentDescription = getString(
@@ -396,7 +471,10 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     }
 
     private fun updateChat(state: MultiviewSessionState) {
-        if (!state.chatVisible) {
+        val specialTwoStreamChat = isTwoStreamLandscapeChatOff(state)
+        val showChat = state.chatVisible || specialTwoStreamChat
+
+        if (!showChat) {
             if (renderedChatKey == null && childFragmentManager.fragments.none { it.id == R.id.chatContent }) {
                 return
             }
@@ -411,9 +489,11 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             }.commit()
             return
         }
+
+        val chatIdentity = state.chatIdentity ?: if (specialTwoStreamChat) state.activeIdentity else null
         val singleStream = if (!state.combinedChat) {
             state.streams.firstOrNull {
-                MultiviewSessionReducer.stableIdentity(it).equals(state.chatIdentity, true)
+                MultiviewSessionReducer.stableIdentity(it).equals(chatIdentity, true)
             } ?: run {
                 renderedChatKey = null
                 return
@@ -421,18 +501,20 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         } else {
             null
         }
+
         val key = if (state.combinedChat) {
             "all:${state.identities.joinToString(",")}"
         } else {
-            "single:${state.chatIdentity}"
+            "single:$chatIdentity"
         }
         if (key == renderedChatKey) return
         renderedChatKey = key
+
         val transaction = childFragmentManager.beginTransaction()
         val targetTag = if (state.combinedChat) {
             COMBINED_CHAT_TAG
         } else {
-            "$SINGLE_CHAT_TAG${state.chatIdentity}"
+            "$SINGLE_CHAT_TAG$chatIdentity"
         }
         val existingTarget = childFragmentManager.findFragmentByTag(targetTag)
         childFragmentManager.fragments
@@ -442,6 +524,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 releaseChatFragment(fragment)
                 transaction.remove(fragment)
             }
+
         if (state.combinedChat) {
             val tag = COMBINED_CHAT_TAG
             val fragment = childFragmentManager.findFragmentByTag(tag)
@@ -454,7 +537,12 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             val stream = singleStream ?: return
             val tag = targetTag
             val fragment = existingTarget
-                ?: ChatFragment.newInstance(stream.channelId, stream.channelLogin, displayName(stream), stream.id).also {
+                ?: ChatFragment.newInstance(
+                    stream.channelId,
+                    stream.channelLogin,
+                    displayName(stream),
+                    stream.id,
+                ).also {
                     transaction.add(R.id.chatContent, it, tag)
                 }
             transaction.show(fragment)
@@ -749,20 +837,11 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     private fun setControlsOverlayVisible(visible: Boolean) {
         val binding = _binding ?: return
         binding.controlsOverlay.isVisible = visible
-        if (!visible) {
-            binding.videoGrid.updatePadding(top = 0)
-            binding.multiviewContent.doOnLayout { renderTileBounds() }
-            return
-        }
 
-        // The toolbar is an overlay, while each tile also owns a top info bar.
-        // Reserve the toolbar's measured height so those two rows cannot cover
-        // each other when controls are revealed.
-        binding.controlsOverlay.doOnLayout { controls ->
-            if (_binding == null || !controls.isVisible) return@doOnLayout
-            binding.videoGrid.updatePadding(top = controls.height + dp(16))
-            binding.multiviewContent.doOnLayout { renderTileBounds() }
-        }
+        // The toolbar is an overlay. Do not reserve vertical space for it:
+        // the compact layouts are intentionally edge-to-edge.
+        binding.videoGrid.updatePadding(0, 0, 0, 0)
+        binding.multiviewContent.doOnLayout { renderTileBounds() }
     }
 
     private fun lockControls() {
@@ -778,28 +857,181 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     private fun updateOrientationLayout() {
         val binding = _binding ?: return
         val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        binding.multiviewRoot.orientation = if (landscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
-        (binding.multiviewContent.layoutParams as? LinearLayout.LayoutParams)?.apply {
-            if (landscape) {
-                width = 0
-                height = ViewGroup.LayoutParams.MATCH_PARENT
+        val specialTwoStreamChat = isTwoStreamLandscapeChatOff(latestState)
+
+        fun moveChatToRoot() {
+            if (binding.chatContainer.parent === binding.multiviewRoot) return
+            (binding.chatContainer.parent as? ViewGroup)?.removeView(binding.chatContainer)
+            binding.multiviewRoot.addView(
+                binding.chatContainer,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    0,
+                ),
+            )
+        }
+
+        fun moveChatToSpecialColumn() {
+            if (binding.chatContainer.parent === binding.specialRightColumn) return
+            (binding.chatContainer.parent as? ViewGroup)?.removeView(binding.chatContainer)
+            binding.specialRightColumn.addView(
+                binding.chatContainer,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    0,
+                    Gravity.BOTTOM,
+                ),
+            )
+        }
+
+        if (landscape) {
+            binding.multiviewRoot.orientation = LinearLayout.HORIZONTAL
+
+            if (specialTwoStreamChat) {
+                moveChatToSpecialColumn()
+
+                (binding.multiviewContent.layoutParams as? LinearLayout.LayoutParams)?.apply {
+                    width = ViewGroup.LayoutParams.MATCH_PARENT
+                    height = ViewGroup.LayoutParams.MATCH_PARENT
+                    weight = 0f
+                }?.also { binding.multiviewContent.layoutParams = it }
+
+                binding.chatContainer.isVisible = true
+                binding.specialRightColumn.isVisible = true
+
+                binding.multiviewContent.doOnLayout {
+                    val totalWidth = binding.multiviewContent.width
+                    val totalHeight = binding.multiviewContent.height
+                    if (totalWidth <= 0 || totalHeight <= 0) return@doOnLayout
+
+                    val rightWidth = (totalWidth * LANDSCAPE_SIDE_WEIGHT).roundToInt()
+                    val videoWidth = totalWidth - rightWidth
+
+                    // The video grid still uses the full screen here. Its
+                    // rightmost 20% contains the second stream; the transparent
+                    // special column overlays only the lower half with chat.
+                    binding.videoGrid.layoutParams = FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+
+                    binding.specialRightColumn.layoutParams = FrameLayout.LayoutParams(
+                        rightWidth,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        Gravity.END,
+                    )
+
+                    binding.chatContainer.layoutParams = FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        totalHeight / 2,
+                        Gravity.BOTTOM,
+                    )
+
+                    binding.controlsOverlay.layoutParams = FrameLayout.LayoutParams(
+                        videoWidth,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        Gravity.TOP or Gravity.START,
+                    ).apply {
+                        setMargins(dp(8), dp(8), 0, 0)
+                    }
+
+                    renderTileBounds()
+                }
             } else {
-                width = ViewGroup.LayoutParams.MATCH_PARENT
-                height = 0
+                moveChatToRoot()
+                binding.specialRightColumn.isVisible = false
+
+                (binding.multiviewContent.layoutParams as? LinearLayout.LayoutParams)?.apply {
+                    if (latestState.chatVisible) {
+                        width = 0
+                        height = ViewGroup.LayoutParams.MATCH_PARENT
+                        weight = 1f
+                    } else {
+                        width = ViewGroup.LayoutParams.MATCH_PARENT
+                        height = ViewGroup.LayoutParams.MATCH_PARENT
+                        weight = 0f
+                    }
+                }?.also { binding.multiviewContent.layoutParams = it }
+
+                (binding.chatContainer.layoutParams as? LinearLayout.LayoutParams)?.apply {
+                    if (latestState.chatVisible) {
+                        width = 0
+                        height = ViewGroup.LayoutParams.MATCH_PARENT
+                        weight = LANDSCAPE_CHAT_WEIGHT
+                    } else {
+                        width = 0
+                        height = 0
+                        weight = 0f
+                    }
+                }?.also { binding.chatContainer.layoutParams = it }
+
+                binding.videoGrid.layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+                binding.controlsOverlay.layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP or Gravity.START,
+                ).apply {
+                    setMargins(dp(8), dp(8), dp(8), 0)
+                }
+                binding.multiviewContent.doOnLayout { renderTileBounds() }
             }
-            weight = 1f
-        }?.also { binding.multiviewContent.layoutParams = it }
-        (binding.chatContainer.layoutParams as? LinearLayout.LayoutParams)?.apply {
-            if (landscape) {
-                width = 0
-                height = ViewGroup.LayoutParams.MATCH_PARENT
-                weight = if (latestState.combinedChat) LANDSCAPE_COMBINED_CHAT_WEIGHT else LANDSCAPE_CHAT_WEIGHT
+        } else {
+            moveChatToRoot()
+            binding.specialRightColumn.isVisible = false
+            binding.multiviewRoot.orientation = LinearLayout.VERTICAL
+
+            if (latestState.chatVisible) {
+                val plan = latestLayoutPlan
+                val rootWidth = binding.multiviewRoot.width.takeIf { it > 0 }
+                    ?: resources.displayMetrics.widthPixels
+                val desiredVideoHeight = (rootWidth * plan.portraitHeightWidthRatio)
+                    .roundToInt()
+                    .coerceAtLeast(dp(1))
+
+                (binding.multiviewContent.layoutParams as? LinearLayout.LayoutParams)?.apply {
+                    width = ViewGroup.LayoutParams.MATCH_PARENT
+                    height = desiredVideoHeight
+                    weight = 0f
+                }?.also { binding.multiviewContent.layoutParams = it }
+
+                (binding.chatContainer.layoutParams as? LinearLayout.LayoutParams)?.apply {
+                    width = ViewGroup.LayoutParams.MATCH_PARENT
+                    height = 0
+                    weight = 1f
+                }?.also { binding.chatContainer.layoutParams = it }
             } else {
-                width = ViewGroup.LayoutParams.MATCH_PARENT
-                height = 0
-                weight = PORTRAIT_CHAT_WEIGHT
+                (binding.multiviewContent.layoutParams as? LinearLayout.LayoutParams)?.apply {
+                    width = ViewGroup.LayoutParams.MATCH_PARENT
+                    height = 0
+                    weight = 1f
+                }?.also { binding.multiviewContent.layoutParams = it }
+
+                (binding.chatContainer.layoutParams as? LinearLayout.LayoutParams)?.apply {
+                    width = ViewGroup.LayoutParams.MATCH_PARENT
+                    height = 0
+                    weight = 0f
+                }?.also { binding.chatContainer.layoutParams = it }
             }
-        }?.also { binding.chatContainer.layoutParams = it }
+
+            binding.videoGrid.layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+            binding.controlsOverlay.layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.START,
+            ).apply {
+                setMargins(dp(8), dp(8), dp(8), 0)
+            }
+
+            binding.multiviewRoot.doOnLayout {
+                binding.videoGrid.doOnLayout { renderTileBounds() }
+            }
+        }
     }
 
     private fun displayName(stream: Stream): String {
@@ -865,9 +1097,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         private const val SINGLE_CHAT_TAG = "multiview_single_chat_"
         private const val MAX_STREAMS = 4
         private const val CONTROLS_TIMEOUT_MS = 4_500L
-        private const val LANDSCAPE_CHAT_WEIGHT = 0.7f
-        private const val LANDSCAPE_COMBINED_CHAT_WEIGHT = 1.2f
-        private const val PORTRAIT_CHAT_WEIGHT = 0.42f
+        private const val LANDSCAPE_CHAT_WEIGHT = 0.25f
+        private const val LANDSCAPE_SIDE_WEIGHT = 0.20f
 
         fun arguments(stream: Stream): Bundle = Bundle().apply { putParcelable(ARG_STREAM, stream) }
     }
