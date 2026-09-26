@@ -1,4 +1,5 @@
 package com.github.andreyasadchy.xtra.ui.multiview
+import com.github.andreyasadchy.xtra.ui.multiview.ui.MultiviewLayoutPlan
 
 import android.content.res.Configuration
 import android.os.Build
