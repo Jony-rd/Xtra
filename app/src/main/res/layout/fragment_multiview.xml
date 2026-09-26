@@ -15,20 +15,29 @@
         android:layout_height="0dp"
         android:layout_weight="1">
 
-        <android.widget.GridLayout
+        <FrameLayout
             android:id="@+id/videoGrid"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:clipToPadding="false"
-            android:columnCount="2"
-            android:rowCount="2"
-            android:useDefaultMargins="false" />
+            android:background="@android:color/black"
+            android:clipToPadding="false" />
+
+        <!-- Used only for the special two-stream landscape + chat-off layout.
+             The second stream occupies the top half; functional chat is placed
+             into the bottom half at runtime. -->
+        <FrameLayout
+            android:id="@+id/specialRightColumn"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_gravity="end"
+            android:background="@android:color/transparent"
+            android:visibility="gone" />
 
         <LinearLayout
             android:id="@+id/controlsOverlay"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_gravity="top"
+            android:layout_gravity="top|start"
             android:layout_margin="8dp"
             android:background="@drawable/bg_stream_overlay"
             android:gravity="center_vertical"
@@ -89,6 +98,16 @@
                 android:contentDescription="@string/multiview_chat"
                 android:padding="12dp"
                 android:src="@drawable/ic_settings_chat"
+                app:tint="@android:color/white" />
+
+            <ImageButton
+                android:id="@+id/seekToLiveButton"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Seek to live"
+                android:padding="12dp"
+                android:src="@drawable/ic_seek_to_live"
                 app:tint="@android:color/white" />
 
             <ImageButton
