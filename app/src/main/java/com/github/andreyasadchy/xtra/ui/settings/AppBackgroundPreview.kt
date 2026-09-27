@@ -88,9 +88,14 @@ class AppBackgroundPreviewView @JvmOverloads constructor(
         if (configuration.canRender && uri != null) {
             image.isVisible = true
             image.alpha = configuration.visibility / 100f
-            scrim.isVisible = true
             val surface = MaterialColors.getColor(this, com.google.android.material.R.attr.colorSurface)
-            scrim.setBackgroundColor(ColorUtils.setAlphaComponent(surface, 0xB8))
+            val scrimAlpha = (0xB8 * (100 - configuration.visibility) / 100).coerceIn(0, 0xB8)
+            if (scrimAlpha == 0) {
+                scrim.isGone = true
+            } else {
+                scrim.isVisible = true
+                scrim.setBackgroundColor(ColorUtils.setAlphaComponent(surface, scrimAlpha))
+            }
             imageRequest = context.imageLoader.enqueue(
                 ImageRequest.Builder(context)
                     .data(uri)
