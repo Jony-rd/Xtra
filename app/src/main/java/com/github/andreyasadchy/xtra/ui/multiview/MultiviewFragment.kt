@@ -16,6 +16,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.Toast
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -95,7 +96,6 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         binding.backButton.setOnClickListener { requireActivity().onBackPressedDispatcher.onBackPressed() }
         binding.addStreamButton.setOnClickListener { showAddStreamSheet() }
         binding.chatButton.setOnClickListener { toggleChat() }
-        binding.combinedChatButton.setOnClickListener { toggleCombinedChat() }
         binding.layoutButton.setOnClickListener { showLayoutMenu() }
         binding.moreButton.setOnClickListener { showMoreMenu(binding.moreButton) }
         binding.pipButton.setOnClickListener { (activity as? MainActivity)?.minimizeMultiview() }
@@ -435,39 +435,23 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         val active = state.streams.firstOrNull { stream ->
             MultiviewSessionReducer.stableIdentity(stream).equals(state.activeIdentity, true)
         }
-        val audible = state.streams.filter { stream ->
-            MultiviewSessionReducer.stableIdentity(stream)?.let(viewModel::audioVolume)?.let { it > 0f } == true
-        }
         val specialTwoStreamChat = isTwoStreamLandscapeChatOff(state)
 
-        binding.activeAudio.isVisible = audible.isNotEmpty()
-        binding.activeAudio.text = when {
-            audible.size == 1 -> getString(R.string.multiview_audio, displayName(audible.first()))
-            audible.size > 1 -> getString(R.string.multiview_audio_multiple, audible.size)
-            else -> null
-        }
         binding.addStreamButton.isVisible = state.streams.size < MAX_STREAMS
         binding.pipButton.isVisible = (activity as? MainActivity)?.canMinimizeMultiview() == true &&
             !(Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && requireActivity().isInPictureInPictureMode)
         binding.chatButton.isVisible = !requireContext().prefs().getBoolean(C.CHAT_DISABLE, false) && active != null
         binding.seekToLiveButton.isVisible = state.streams.isNotEmpty()
         binding.chatContainer.isVisible = state.chatVisible || specialTwoStreamChat
-        binding.combinedChatButton.isVisible = state.chatVisible && state.streams.size > 1
-        binding.chatTitle.text = if (state.combinedChat) {
-            getString(R.string.multiview_all_chats)
-        } else {
-            val identity = state.chatIdentity ?: if (specialTwoStreamChat) state.activeIdentity else null
+        val identity = state.chatIdentity ?: state.activeIdentity
+        binding.chatTitle.text =
             identity?.let { chatIdentity ->
                 state.streams.firstOrNull {
                     MultiviewSessionReducer.stableIdentity(it).equals(chatIdentity, true)
                 }
             }?.let(::displayName) ?: getString(R.string.multiview_chat)
-        }
         binding.chatButton.contentDescription = getString(
             if (state.chatVisible) R.string.multiview_hide_chat else R.string.multiview_chat,
-        )
-        binding.combinedChatButton.contentDescription = getString(
-            if (state.combinedChat) R.string.multiview_channel_chat else R.string.multiview_all_chats,
         )
     }
 
@@ -491,32 +475,20 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             return
         }
 
-        val chatIdentity = state.chatIdentity ?: if (specialTwoStreamChat) state.activeIdentity else null
-        val singleStream = if (!state.combinedChat) {
-            state.streams.firstOrNull {
-                MultiviewSessionReducer.stableIdentity(it).equals(chatIdentity, true)
-            } ?: run {
-                renderedChatKey = null
-                return
-            }
-        } else {
-            null
+        val chatIdentity = state.chatIdentity ?: state.activeIdentity
+        val singleStream = state.streams.firstOrNull {
+            MultiviewSessionReducer.stableIdentity(it).equals(chatIdentity, true)
+        } ?: run {
+            renderedChatKey = null
+            return
         }
 
-        val key = if (state.combinedChat) {
-            "all:${state.identities.joinToString(",")}"
-        } else {
-            "single:$chatIdentity"
-        }
+        val key = "single:$chatIdentity"
         if (key == renderedChatKey) return
         renderedChatKey = key
 
         val transaction = childFragmentManager.beginTransaction()
-        val targetTag = if (state.combinedChat) {
-            COMBINED_CHAT_TAG
-        } else {
-            "$SINGLE_CHAT_TAG$chatIdentity"
-        }
+        val targetTag = "$SINGLE_CHAT_TAG$chatIdentity"
         val existingTarget = childFragmentManager.findFragmentByTag(targetTag)
         childFragmentManager.fragments
             .filter { it.id == R.id.chatContent }
@@ -526,28 +498,17 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 transaction.remove(fragment)
             }
 
-        if (state.combinedChat) {
-            val tag = COMBINED_CHAT_TAG
-            val fragment = childFragmentManager.findFragmentByTag(tag)
-            if (fragment is CombinedChatFragment) fragment.updateStreams(state.streams)
-            val target = fragment ?: CombinedChatFragment.newInstance(state.streams).also {
+        val tag = targetTag
+        val fragment = existingTarget
+            ?: ChatFragment.newInstance(
+                singleStream.channelId,
+                singleStream.channelLogin,
+                displayName(singleStream),
+                singleStream.id,
+            ).also {
                 transaction.add(R.id.chatContent, it, tag)
             }
-            transaction.show(target)
-        } else {
-            val stream = singleStream ?: return
-            val tag = targetTag
-            val fragment = existingTarget
-                ?: ChatFragment.newInstance(
-                    stream.channelId,
-                    stream.channelLogin,
-                    displayName(stream),
-                    stream.id,
-                ).also {
-                    transaction.add(R.id.chatContent, it, tag)
-                }
-            transaction.show(fragment)
-        }
+        transaction.show(fragment)
         transaction.commit()
     }
 
@@ -568,15 +529,6 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             viewModel.setChat(true, combined = false, identity = identity)
         }
         revealControls()
-    }
-
-    private fun toggleCombinedChat() {
-        if (latestState.combinedChat) {
-            val identity = latestState.activeIdentity ?: latestState.identities.firstOrNull() ?: return
-            viewModel.setChat(true, combined = false, identity = identity)
-        } else if (latestState.streams.size > 1) {
-            viewModel.setChat(true, combined = true, identity = null)
-        }
     }
 
     private fun showAddStreamSheet() {
@@ -837,7 +789,11 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
     private fun setControlsOverlayVisible(visible: Boolean) {
         val binding = _binding ?: return
-        binding.controlsOverlay.isVisible = visible
+        if (binding.controlsOverlay.parent === binding.chatHeader) {
+            binding.controlsOverlay.isVisible = true
+        } else {
+            binding.controlsOverlay.isVisible = visible
+        }
 
         // The toolbar is an overlay. Do not reserve vertical space for it:
         // the compact layouts are intentionally edge-to-edge.
