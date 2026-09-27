@@ -588,7 +588,11 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                     windowInsets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime() or WindowInsetsCompat.Type.displayCutout())
                 }
                 if (isPortrait) {
-                    slidingLayout.updatePadding(left = 0, top = insets.top, right = 0)
+                    slidingLayout.updatePadding(
+                        left = 0,
+                        top = if (isMaximized) 0 else insets.top,
+                        right = 0,
+                    )
                 } else {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && cornerPadding) {
                         val rootWindowInsets = view.rootView.rootWindowInsets
@@ -1787,7 +1791,11 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
         with(binding) {
             if (isPortrait) {
                 requireActivity().window.decorView.setOnSystemUiVisibilityChangeListener(null)
-                showStatusBar()
+                if (isMaximized) {
+                    hideStatusBar()
+                } else {
+                    showStatusBar()
+                }
                 phoneChatOverlayGesture?.setActive(false)
                 resetPhoneChatOverlayPresentation(chatLayout, phoneChatOverlayHandle)
                 resetPhoneChatOverlayLayout(
@@ -4152,6 +4160,7 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                 }
             }
             if (isPortrait) {
+                showStatusBar()
                 setChatLayoutVisibility(View.GONE)
                 slidingLayout.doOnLayout {
                     animate()
@@ -4191,6 +4200,7 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
             }
             refreshPlayerHudLayout()
             if (isPortrait) {
+                hideStatusBar()
                 setChatLayoutVisibility(View.VISIBLE)
             } else {
                 hideStatusBar()
