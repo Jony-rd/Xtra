@@ -1793,6 +1793,11 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                 requireActivity().window.decorView.setOnSystemUiVisibilityChangeListener(null)
                 if (isMaximized) {
                     hideStatusBar()
+                    requireView().post {
+                        if (isAdded && isMaximized && isPortrait) {
+                            hideStatusBar()
+                        }
+                    }
                 } else {
                     showStatusBar()
                 }
