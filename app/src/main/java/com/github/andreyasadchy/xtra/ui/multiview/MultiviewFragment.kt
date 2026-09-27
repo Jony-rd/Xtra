@@ -1045,10 +1045,10 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     }
 
     private fun applyPortraitVideoHeight() {
-        val width = binding.multiviewContent.width
-        if (width <= 0) return
+        val contentWidth = binding.multiviewContent.width
+        if (contentWidth <= 0) return
 
-        val desiredHeight = (width * latestLayoutPlan.portraitHeightWidthRatio)
+        val desiredHeight = (contentWidth * latestLayoutPlan.portraitHeightWidthRatio)
             .roundToInt()
             .coerceAtLeast(1)
 
