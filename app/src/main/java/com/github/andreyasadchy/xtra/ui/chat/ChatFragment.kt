@@ -629,9 +629,13 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
             isVisible = true
             alpha = appearance.backgroundVisibility / 100f
         }
+        val scrimAlpha = (0xB8 * (100 - appearance.backgroundVisibility) / 100).coerceIn(0, 0xB8)
         currentBinding.chatBackgroundScrim.apply {
-            isVisible = true
-            setBackgroundColor(ColorUtils.setAlphaComponent(surface, 0xB8))
+            isGone = scrimAlpha == 0
+            if (scrimAlpha > 0) {
+                isVisible = true
+                setBackgroundColor(ColorUtils.setAlphaComponent(surface, scrimAlpha))
+            }
         }
         chatBackgroundRequest = requireContext().imageLoader.enqueue(
             ImageRequest.Builder(requireContext())
