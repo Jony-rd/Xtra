@@ -14,12 +14,22 @@
         android:layout_height="0dp"
         android:layout_weight="1">
 
-        <FrameLayout
-            android:id="@+id/videoGrid"
+        <ScrollView
+            android:id="@+id/videoScroll"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:background="@android:color/black"
-            android:clipToPadding="false" />
+            android:fillViewport="false"
+            android:overScrollMode="never"
+            android:scrollbars="none">
+
+            <FrameLayout
+                android:id="@+id/videoGrid"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@android:color/black"
+                android:clipToPadding="false" />
+        </ScrollView>
 
         <!-- Used only for the special two-stream landscape + chat-off layout.
              The second stream occupies the top half; functional chat is placed
@@ -132,14 +142,14 @@
             android:id="@+id/chatHeader"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="@drawable/bg_multiview_toolbar"
+            android:background="@drawable/bg_multiview_chat_header"
             android:gravity="center_vertical"
-            android:minHeight="44dp"
+            android:minHeight="40dp"
             android:orientation="horizontal"
             android:paddingStart="12dp"
-            android:paddingTop="2dp"
+            android:paddingTop="0dp"
             android:paddingEnd="0dp"
-            android:paddingBottom="2dp">
+            android:paddingBottom="0dp">
 
             <TextView
                 android:id="@+id/chatTitle"
