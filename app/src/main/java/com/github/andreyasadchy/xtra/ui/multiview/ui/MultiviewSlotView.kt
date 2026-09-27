@@ -6,7 +6,9 @@ import android.view.GestureDetector
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import androidx.annotation.OptIn
 import androidx.core.view.ViewCompat
 import androidx.core.view.isVisible
@@ -87,6 +89,7 @@ class MultiviewSlotView(context: Context) : FrameLayout(context) {
         audioVolume: Float,
         focused: Boolean,
         fillVideo: Boolean,
+        mainStream: Boolean,
     ) {
         this.identity = identity
         this.stream = stream
@@ -95,6 +98,7 @@ class MultiviewSlotView(context: Context) : FrameLayout(context) {
 
         binding.channelName.text = name
         binding.qualityBadge.text = snapshot?.qualityLabel.orEmpty()
+        updateInfoBarLayout(mainStream)
         qualityLabelAvailable = !snapshot?.qualityLabel.isNullOrBlank()
         updateResponsiveControls()
 
@@ -154,6 +158,27 @@ class MultiviewSlotView(context: Context) : FrameLayout(context) {
                 android.graphics.Typeface.NORMAL,
             )
         }
+    }
+
+
+    private fun updateInfoBarLayout(mainStream: Boolean) {
+        val infoParams = binding.infoBar.layoutParams
+        infoParams.width = if (mainStream) {
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        } else {
+            ViewGroup.LayoutParams.MATCH_PARENT
+        }
+        binding.infoBar.layoutParams = infoParams
+
+        val nameParams = binding.channelName.layoutParams as LinearLayout.LayoutParams
+        nameParams.width = if (mainStream) {
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        } else {
+            0
+        }
+        nameParams.weight = if (mainStream) 0f else 1f
+        binding.channelName.layoutParams = nameParams
+        binding.channelName.maxWidth = if (mainStream) dp(180) else Int.MAX_VALUE
     }
 
     fun setControlsVisible(visible: Boolean) {

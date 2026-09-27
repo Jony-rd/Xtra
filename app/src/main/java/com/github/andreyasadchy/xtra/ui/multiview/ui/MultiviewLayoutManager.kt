@@ -47,6 +47,11 @@ object MultiviewLayoutManager {
                 primary = primary,
                 chatVisible = chatVisible,
             )
+        } else if (!chatVisible && ids.size > 1) {
+            // With portrait chat hidden, keep every stream in one full-width
+            // vertical stack. The ScrollView in MultiviewFragment lets the
+            // natural 16:9 stack extend beyond a 20:9 viewport when needed.
+            stackedPortrait(ids)
         } else {
             when (mode) {
                 MultiviewLayoutMode.FOCUS -> focusPortrait(ids, primary)
@@ -69,8 +74,8 @@ object MultiviewLayoutManager {
      *   other-stream stack is 20%.
      *
      * Special case: exactly two streams with chat OFF. The second stream
-     * occupies only the top half of the 20% right column. The Fragment
-     * places functional chat underneath it in the separate right column.
+     * is anchored to the top of the 20% right column; the Fragment sizes
+     * it to its natural 16:9 height and puts functional chat underneath it.
      */
     private fun landscape(
         ids: List<String>,
