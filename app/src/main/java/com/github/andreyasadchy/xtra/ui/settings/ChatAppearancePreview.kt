@@ -92,8 +92,13 @@ class ChatAppearancePreviewView @JvmOverloads constructor(
         if (shouldRenderChatBackground(appearance)) {
             image.visibility = View.VISIBLE
             image.alpha = appearance.backgroundVisibility / 100f
-            scrim.visibility = View.VISIBLE
-            scrim.setBackgroundColor(ColorUtils.setAlphaComponent(surface, 0xB8))
+            val scrimAlpha = (0xB8 * (100 - appearance.backgroundVisibility) / 100).coerceIn(0, 0xB8)
+            if (scrimAlpha == 0) {
+                scrim.visibility = View.GONE
+            } else {
+                scrim.visibility = View.VISIBLE
+                scrim.setBackgroundColor(ColorUtils.setAlphaComponent(surface, scrimAlpha))
+            }
             imageRequest = context.imageLoader.enqueue(
                 ImageRequest.Builder(context)
                     .data(appearance.backgroundUri)
