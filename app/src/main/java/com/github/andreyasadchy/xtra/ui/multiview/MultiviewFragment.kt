@@ -293,6 +293,10 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 audioVolume = viewModel.audioVolume(identity),
                 focused = identity.equals(state.focusedIdentity, true),
                 fillVideo = state.fillVideo,
+                mainStream = identity.equals(
+                    state.focusedIdentity ?: state.activeIdentity ?: state.identities.firstOrNull(),
+                    true,
+                ),
             )
         }
 
