@@ -51,6 +51,7 @@ import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentManager
 import androidx.fragment.app.FragmentTransaction
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.withStarted
@@ -92,6 +93,7 @@ import com.github.andreyasadchy.xtra.ui.player.Media3Fragment
 import com.github.andreyasadchy.xtra.ui.player.Media3PlayerFragment
 import com.github.andreyasadchy.xtra.ui.player.MediaPlayerService
 import com.github.andreyasadchy.xtra.ui.multiview.MultiviewFragment
+import com.github.andreyasadchy.xtra.ui.multiview.MultiviewViewModel
 import com.github.andreyasadchy.xtra.ui.player.MediaPlayerFragment
 import com.github.andreyasadchy.xtra.ui.player.PlayerFragment
 import com.github.andreyasadchy.xtra.ui.player.PlaybackService
@@ -1520,6 +1522,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startPlayer(fragment: Fragment) {
+        stopMultiviewAudioForForegroundPlayer()
         val backend = backendForPlayerFragment(fragment)
         if (BuildConfig.DEBUG) {
             Log.d(
@@ -1620,6 +1623,17 @@ class MainActivity : AppCompatActivity() {
             ?.childFragmentManager
             ?.fragments
             ?.firstOrNull { it is MultiviewFragment } as? MultiviewFragment
+    }
+
+    private fun stopMultiviewAudioForForegroundPlayer() {
+        val fragment = currentMultiviewFragment()
+        if (fragment != null) {
+            fragment.pauseForExternalPlayer()
+            return
+        }
+        if (prefs.getString(C.MULTIVIEW_SESSION, null).isNullOrBlank()) return
+        ViewModelProvider(this, MultiviewViewModel.MultiviewViewModelFactory)[MultiviewViewModel::class.java]
+            .onStop(allowBackground = false)
     }
 
     private fun restorePlayerFragment() {
