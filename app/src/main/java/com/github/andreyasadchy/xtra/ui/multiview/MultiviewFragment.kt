@@ -811,6 +811,68 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         if (controlsLockCount == 0) revealControls(slot)
     }
 
+    private fun moveControlsToChatHeader() {
+        if (binding.controlsOverlay.parent !== binding.chatHeader) {
+            (binding.controlsOverlay.parent as? ViewGroup)?.removeView(binding.controlsOverlay)
+            binding.chatHeader.addView(
+                binding.controlsOverlay,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    dp(44),
+                ).apply {
+                    gravity = Gravity.CENTER_VERTICAL
+                },
+            )
+        }
+
+        binding.controlsOverlay.background = null
+        binding.controlsOverlay.minimumHeight = dp(44)
+        setToolbarButtonSize(40)
+        binding.controlsOverlay.isVisible = true
+    }
+
+    private fun moveControlsToVideo() {
+        if (binding.controlsOverlay.parent !== binding.multiviewContent) {
+            (binding.controlsOverlay.parent as? ViewGroup)?.removeView(binding.controlsOverlay)
+            binding.multiviewContent.addView(
+                binding.controlsOverlay,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    dp(56),
+                    Gravity.BOTTOM or Gravity.START,
+                ),
+            )
+        }
+
+        binding.controlsOverlay.background =
+            ContextCompat.getDrawable(requireContext(), R.drawable.bg_multiview_toolbar)
+        binding.controlsOverlay.minimumHeight = dp(56)
+        setToolbarButtonSize(56)
+        positionVideoToolbar()
+    }
+
+    private fun positionVideoToolbar() {
+        binding.controlsOverlay.layoutParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            dp(56),
+            Gravity.BOTTOM or Gravity.START,
+        ).apply {
+            setMargins(dp(8), 0, 0, dp(8))
+        }
+    }
+
+    private fun setToolbarButtonSize(sizeDp: Int) {
+        for (index in 0 until binding.controlsOverlay.childCount) {
+            val child = binding.controlsOverlay.getChildAt(index)
+            child.layoutParams = child.layoutParams.apply {
+                width = dp(sizeDp)
+                height = dp(sizeDp)
+            }
+            val padding = dp(if (sizeDp >= 56) 14 else 10)
+            child.setPadding(padding, padding, padding, padding)
+        }
+    }
+
     private fun updateOrientationLayout() {
         val binding = _binding ?: return
         val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
@@ -855,6 +917,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
                 binding.chatContainer.isVisible = true
                 binding.specialRightColumn.isVisible = true
+                moveControlsToVideo()
 
                 binding.multiviewContent.doOnLayout {
                     val totalWidth = binding.multiviewContent.width
@@ -862,7 +925,6 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     if (totalWidth <= 0 || totalHeight <= 0) return@doOnLayout
 
                     val rightWidth = (totalWidth * LANDSCAPE_SIDE_WEIGHT).roundToInt()
-                    val videoWidth = totalWidth - rightWidth
 
                     // The video grid still uses the full screen here. Its
                     // rightmost 20% contains the second stream; the transparent
@@ -884,14 +946,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                         Gravity.BOTTOM,
                     )
 
-                    binding.controlsOverlay.layoutParams = FrameLayout.LayoutParams(
-                        videoWidth,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        Gravity.TOP or Gravity.START,
-                    ).apply {
-                        setMargins(dp(8), dp(8), 0, 0)
-                    }
-
+                    positionVideoToolbar()
                     renderTileBounds()
                 }
             } else {
@@ -926,13 +981,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT,
                 )
-                binding.controlsOverlay.layoutParams = FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    Gravity.TOP or Gravity.START,
-                ).apply {
-                    setMargins(dp(8), dp(8), dp(8), 0)
-                }
+                moveControlsToVideo()
                 binding.multiviewContent.doOnLayout { renderTileBounds() }
             }
         } else {
@@ -941,24 +990,19 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             binding.multiviewRoot.orientation = LinearLayout.VERTICAL
 
             if (latestState.chatVisible) {
-                val plan = latestLayoutPlan
-                val rootWidth = binding.multiviewRoot.width.takeIf { it > 0 }
-                    ?: resources.displayMetrics.widthPixels
-                val desiredVideoHeight = (rootWidth * plan.portraitHeightWidthRatio)
-                    .roundToInt()
-                    .coerceAtLeast(dp(1))
-
                 (binding.multiviewContent.layoutParams as? LinearLayout.LayoutParams)?.apply {
                     width = ViewGroup.LayoutParams.MATCH_PARENT
-                    height = desiredVideoHeight
-                    weight = 0f
+                    height = 0
+                    weight = 1f
                 }?.also { binding.multiviewContent.layoutParams = it }
 
                 (binding.chatContainer.layoutParams as? LinearLayout.LayoutParams)?.apply {
                     width = ViewGroup.LayoutParams.MATCH_PARENT
                     height = 0
-                    weight = 1f
+                    weight = PORTRAIT_CHAT_WEIGHT
                 }?.also { binding.chatContainer.layoutParams = it }
+
+                moveControlsToChatHeader()
             } else {
                 (binding.multiviewContent.layoutParams as? LinearLayout.LayoutParams)?.apply {
                     width = ViewGroup.LayoutParams.MATCH_PARENT
@@ -971,19 +1015,14 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     height = 0
                     weight = 0f
                 }?.also { binding.chatContainer.layoutParams = it }
+
+                moveControlsToVideo()
             }
 
             binding.videoGrid.layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
             )
-            binding.controlsOverlay.layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP or Gravity.START,
-            ).apply {
-                setMargins(dp(8), dp(8), dp(8), 0)
-            }
 
             binding.multiviewRoot.doOnLayout {
                 binding.videoGrid.doOnLayout { renderTileBounds() }
