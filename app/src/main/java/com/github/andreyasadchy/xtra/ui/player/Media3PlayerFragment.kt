@@ -535,16 +535,6 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
         ).systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     }
 
-    override fun onResume() {
-        super.onResume()
-        if (isPortrait && isMaximized) {
-            view?.post {
-                hideStatusBar()
-                binding.slidingLayout.updatePadding(top = 0)
-            }
-        }
-    }
-
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         _binding = FragmentPlayerBinding.inflate(inflater, container, false)
         return binding.root
@@ -3097,6 +3087,12 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
 
     override fun onResume() {
         super.onResume()
+        if (isPortrait && isMaximized) {
+            view?.post {
+                hideStatusBar()
+                binding.slidingLayout.updatePadding(top = 0)
+            }
+        }
         binding.playerControls.root.reloadProfile()
         if (requireContext().isTelevision() && !isPortrait) {
             applyTvChatPresentation(binding.chatLayout, binding.playerLayout, binding.slidingLayout, isChatOpen)
