@@ -14,22 +14,12 @@
         android:layout_height="0dp"
         android:layout_weight="1">
 
-        <ScrollView
-            android:id="@+id/videoScroll"
+        <FrameLayout
+            android:id="@+id/videoGrid"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:background="@android:color/black"
-            android:fillViewport="false"
-            android:overScrollMode="never"
-            android:scrollbars="none">
-
-            <FrameLayout
-                android:id="@+id/videoGrid"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:background="@android:color/black"
-                android:clipToPadding="false" />
-        </ScrollView>
+            android:clipToPadding="false" />
 
         <!-- Used only for the special two-stream landscape + chat-off layout.
              The second stream occupies the top half; functional chat is placed
@@ -129,45 +119,41 @@
         </LinearLayout>
     </FrameLayout>
 
-    <LinearLayout
+    <FrameLayout
         android:id="@+id/chatContainer"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="0.42"
-        android:background="?android:colorBackground"
-        android:orientation="vertical"
+        android:background="@android:color/transparent"
         android:visibility="gone">
 
-        <LinearLayout
+        <FrameLayout
+            android:id="@+id/chatContent"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@android:color/transparent" />
+
+        <FrameLayout
             android:id="@+id/chatHeader"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="40dp"
+            android:layout_gravity="top"
             android:background="@drawable/bg_multiview_chat_header"
+            android:elevation="2dp"
             android:gravity="center_vertical"
-            android:minHeight="40dp"
-            android:orientation="horizontal"
             android:paddingStart="12dp"
-            android:paddingTop="0dp"
-            android:paddingEnd="0dp"
-            android:paddingBottom="0dp">
+            android:paddingEnd="0dp">
 
             <TextView
                 android:id="@+id/chatTitle"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center_vertical"
                 android:ellipsize="end"
                 android:maxLines="1"
                 android:text="@string/multiview_chat"
                 android:textAppearance="?attr/textAppearanceTitleSmall"
                 android:textColor="@android:color/white" />
-        </LinearLayout>
-
-        <FrameLayout
-            android:id="@+id/chatContent"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
-            android:background="?android:colorBackground" />
-    </LinearLayout>
+        </FrameLayout>
+    </FrameLayout>
 </LinearLayout>
