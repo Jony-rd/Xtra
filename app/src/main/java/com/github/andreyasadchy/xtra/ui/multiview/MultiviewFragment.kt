@@ -1058,9 +1058,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
     fun pauseForExternalPlayer() {
         suppressBackgroundOnNextStop = true
-        if (_binding != null) viewModel.onStop(allowBackground = false)
+        viewModel.onStop(allowBackground = false)
     }
-
     fun resumeAfterExternalPlayer() {
         suppressBackgroundOnNextStop = false
         if (_binding != null) {
@@ -1089,12 +1088,12 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
     companion object {
         const val ARG_STREAM = "multiview_stream"
-        private const val COMBINED_CHAT_TAG = "multiview_combined_chat"
         private const val SINGLE_CHAT_TAG = "multiview_single_chat_"
         private const val MAX_STREAMS = 4
         private const val CONTROLS_TIMEOUT_MS = 4_500L
         private const val LANDSCAPE_CHAT_WEIGHT = 0.25f
         private const val LANDSCAPE_SIDE_WEIGHT = 0.20f
+        private const val PORTRAIT_CHAT_WEIGHT = 0.42f
 
         fun arguments(stream: Stream): Bundle = Bundle().apply { putParcelable(ARG_STREAM, stream) }
     }
