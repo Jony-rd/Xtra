@@ -1333,7 +1333,7 @@ class MainActivity : AppCompatActivity() {
 //Navigation listeners
 
     fun startStream(stream: Stream, openChat: Boolean = false, audioOnly: Boolean = false) {
-        val tapElapsedMs = SystemClock.elapsedRealtime()
+    val tapElapsedMs = SystemClock.elapsedRealtime()
         (application as XtraApp).xtraModule.streamPreloadCoordinator.onStreamSelected(stream)
         onPlayerEnteredPlayback(isLive = true, channelLogin = stream.channelLogin)
         (application as XtraApp).xtraModule.streamPreloadCoordinator.onPlaybackEntered()
