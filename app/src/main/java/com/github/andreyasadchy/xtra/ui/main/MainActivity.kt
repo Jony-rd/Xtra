@@ -1595,7 +1595,14 @@ class MainActivity : AppCompatActivity() {
         }
         viewModel.sleepTimer?.cancel()
         viewModel.sleepTimerEndTime = 0L
-        currentMultiviewFragment()?.resumeAfterExternalPlayer()
+        val multiviewBehindPlayer = currentMultiviewFragment()
+        if (multiviewBehindPlayer != null) {
+            multiviewBehindPlayer.resumeAfterExternalPlayer()
+        } else {
+            // A maximized player can leave the system bars hidden; bring them back.
+            androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+                .show(WindowInsetsCompat.Type.systemBars())
+        }
         if (isTv) {
             binding.root.post { restoreTvRootFocusIfNeeded() }
         }
