@@ -700,7 +700,8 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                     windowInsets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime() or WindowInsetsCompat.Type.displayCutout())
                 }
                 if (isPortrait) {
-                    slidingLayout.updatePadding(left = 0, top = insets.top, right = 0)
+                    // maximized portrait: video goes to the real top edge, no status bar strip
+                    slidingLayout.updatePadding(left = 0, top = if (isMaximized) 0 else insets.top, right = 0)
                 } else {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && cornerPadding) {
                         val rootWindowInsets = view.rootView.rootWindowInsets
@@ -2756,7 +2757,12 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
         with(binding) {
             if (isPortrait) {
                 requireActivity().window.decorView.setOnSystemUiVisibilityChangeListener(null)
-                showStatusBar()
+                if (isMaximized) {
+                    hideTopStatusBarOnly()
+                } else {
+                    showStatusBar()
+                }
+                requireActivity().window.decorView.requestApplyInsets()
                 phoneChatOverlayGesture?.setActive(false)
                 resetPhoneChatOverlayPresentation(chatLayout, phoneChatOverlayHandle)
                 resetPhoneChatOverlayLayout(
@@ -3875,6 +3881,15 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
         ).hide(WindowInsetsCompat.Type.systemBars())
     }
 
+    /** Portrait only: hides just the status bar so the video reaches the top edge. */
+    private fun hideTopStatusBarOnly() {
+        val window = requireActivity().window
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        // set again on purpose: some phone ROMs bring the bar back if this is not repeated
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.statusBars())
+    }
+
     private fun enableBackground() {
         backgroundVisible = true
         binding.playerBackground.setBackgroundColor(
@@ -4226,6 +4241,8 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 }
             }
             if (isPortrait) {
+                showStatusBar()
+                requireActivity().window.decorView.requestApplyInsets()
                 setChatLayoutVisibility(View.GONE)
                 slidingLayout.doOnLayout {
                     animate()
@@ -4268,6 +4285,8 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
             }
             refreshPlayerHudLayout()
             if (isPortrait) {
+                hideTopStatusBarOnly()
+                requireActivity().window.decorView.requestApplyInsets()
                 setChatLayoutVisibility(View.VISIBLE)
             } else {
                 hideStatusBar()
