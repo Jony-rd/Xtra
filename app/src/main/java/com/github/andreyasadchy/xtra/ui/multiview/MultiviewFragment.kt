@@ -69,6 +69,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     private var controlsLockCount = 0
     private var suppressBackgroundOnNextStop = false
     private var previousCutoutMode: Int? = null
+    private var lastImeBottom = 0
+    private var lastRootWidth = 0
+    private var lastRootHeight = 0
 
     private val bindingOrNull: FragmentMultiviewBinding?
         get() = _binding
@@ -88,7 +91,23 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         ViewCompat.setOnApplyWindowInsetsListener(binding.multiviewRoot) { root, insets ->
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
             root.updatePadding(top = 0, bottom = ime.bottom, left = 0, right = 0)
+            if (ime.bottom != lastImeBottom) {
+                lastImeBottom = ime.bottom
+                root.post { if (_binding != null) updateOrientationLayout() }
+            }
             insets
+        }
+
+        // Portrait heights depend on the real screen width/height, so redo the
+        // sizing whenever the root actually changes size (rotation, split screen).
+        binding.multiviewRoot.addOnLayoutChangeListener { v, left, top, right, bottom, _, _, _, _ ->
+            val width = right - left
+            val height = bottom - top
+            if (width != lastRootWidth || height != lastRootHeight) {
+                lastRootWidth = width
+                lastRootHeight = height
+                v.post { if (_binding != null) updateOrientationLayout() }
+            }
         }
 
                 enterImmersiveMode()
@@ -330,7 +349,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
     private var latestLayoutPlan: MultiviewLayoutPlan = MultiviewLayoutPlan(
         placements = emptyList(),
-        portraitHeightWidthRatio = 1f,
+        portraitHeightWidthRatio = 9f / 16f,
     )
 
     private fun applyLayout(state: MultiviewSessionState) {
@@ -380,13 +399,21 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         val parentHeight = binding.videoGrid.height
         if (parentWidth <= 0 || parentHeight <= 0) return
 
+        val specialTwoStream = isTwoStreamLandscapeChatOff()
+        val firstIdentity = latestLayoutPlan.placements.firstOrNull()?.identity
+
         latestLayoutPlan.placements.forEach { placement ->
             val slotView = slotViews[placement.identity] ?: return@forEach
 
             val left = (placement.left * parentWidth).roundToInt()
             val top = (placement.top * parentHeight).roundToInt()
             val right = (placement.right * parentWidth).roundToInt()
-            val bottom = (placement.bottom * parentHeight).roundToInt()
+            var bottom = (placement.bottom * parentHeight).roundToInt()
+            if (specialTwoStream && placement.identity != firstIdentity) {
+                // 2 streams, landscape, chat off: the small stream is exactly as tall
+                // as 16:9 needs, flush top-right. Chat takes everything under it.
+                bottom = top + specialSecondTileHeight(right - left, parentHeight)
+            }
 
             val width = (right - left).coerceAtLeast(1)
             val height = (bottom - top).coerceAtLeast(1)
@@ -940,9 +967,13 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                         Gravity.END,
                     )
 
+                    val secondTileHeight = specialSecondTileHeight(
+                        totalWidth - (LANDSCAPE_MAIN_FRACTION * totalWidth).roundToInt(),
+                        totalHeight,
+                    )
                     binding.chatContainer.layoutParams = FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
-                        totalHeight / 2,
+                        totalHeight - secondTileHeight,
                         Gravity.BOTTOM,
                     )
 
@@ -989,44 +1020,65 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             binding.specialRightColumn.isVisible = false
             binding.multiviewRoot.orientation = LinearLayout.VERTICAL
 
-            if (latestState.chatVisible) {
-                (binding.multiviewContent.layoutParams as? LinearLayout.LayoutParams)?.apply {
-                    width = ViewGroup.LayoutParams.MATCH_PARENT
-                    height = 0
-                    weight = 1f
-                }?.also { binding.multiviewContent.layoutParams = it }
+            // Compact portrait: the video area is only as tall as the streams need
+            // (16:9 tiles, no letterbox). Everything left over goes to chat.
+            val root = binding.multiviewRoot
+            val availableHeight = root.height - root.paddingTop - root.paddingBottom
+            val chatOn = latestState.chatVisible
+            val videoHeight = portraitVideoHeight(root.width, availableHeight, chatOn)
 
-                (binding.chatContainer.layoutParams as? LinearLayout.LayoutParams)?.apply {
-                    width = ViewGroup.LayoutParams.MATCH_PARENT
-                    height = 0
-                    weight = PORTRAIT_CHAT_WEIGHT
-                }?.also { binding.chatContainer.layoutParams = it }
-
+            if (chatOn) {
+                setLinearParams(binding.multiviewContent, ViewGroup.LayoutParams.MATCH_PARENT, videoHeight, 0f)
+                setLinearParams(binding.chatContainer, ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+                setFrameParams(binding.videoGrid, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                 moveControlsToChatHeader()
             } else {
-                (binding.multiviewContent.layoutParams as? LinearLayout.LayoutParams)?.apply {
-                    width = ViewGroup.LayoutParams.MATCH_PARENT
-                    height = 0
-                    weight = 1f
-                }?.also { binding.multiviewContent.layoutParams = it }
-
-                (binding.chatContainer.layoutParams as? LinearLayout.LayoutParams)?.apply {
-                    width = ViewGroup.LayoutParams.MATCH_PARENT
-                    height = 0
-                    weight = 0f
-                }?.also { binding.chatContainer.layoutParams = it }
-
+                setLinearParams(binding.multiviewContent, ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+                setLinearParams(binding.chatContainer, ViewGroup.LayoutParams.MATCH_PARENT, 0, 0f)
+                // streams stuck to the very top, nothing above them
+                setFrameParams(binding.videoGrid, ViewGroup.LayoutParams.MATCH_PARENT, videoHeight)
                 moveControlsToVideo()
             }
-
-            binding.videoGrid.layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT,
-            )
 
             binding.multiviewRoot.doOnLayout {
                 binding.videoGrid.doOnLayout { renderTileBounds() }
             }
+        }
+    }
+
+    /** Height (px) the portrait video area needs so every tile is a true 16:9. */
+    private fun portraitVideoHeight(width: Int, availableHeight: Int, chatOn: Boolean): Int {
+        if (width <= 0 || availableHeight <= 0) return ViewGroup.LayoutParams.MATCH_PARENT
+        val wanted = (width * latestLayoutPlan.portraitHeightWidthRatio).roundToInt()
+        val maxHeight = if (chatOn) {
+            (availableHeight - dp(PORTRAIT_MIN_CHAT_DP)).coerceAtLeast(availableHeight / 3)
+        } else {
+            availableHeight
+        }
+        return wanted.coerceIn(1, maxHeight.coerceAtLeast(1))
+    }
+
+    /** Height (px) of the small stream in the 2-stream landscape chat-off layout. */
+    private fun specialSecondTileHeight(tileWidth: Int, totalHeight: Int): Int {
+        val wanted = (tileWidth * 9f / 16f).roundToInt()
+        return wanted.coerceIn(1, (totalHeight * 0.6f).roundToInt().coerceAtLeast(1))
+    }
+
+    private fun setLinearParams(view: View, width: Int, height: Int, weight: Float) {
+        val params = view.layoutParams as? LinearLayout.LayoutParams ?: return
+        if (params.width != width || params.height != height || params.weight != weight) {
+            params.width = width
+            params.height = height
+            params.weight = weight
+            view.layoutParams = params
+        }
+    }
+
+    private fun setFrameParams(view: View, width: Int, height: Int) {
+        val gravity = Gravity.TOP or Gravity.START
+        val params = view.layoutParams as? FrameLayout.LayoutParams
+        if (params == null || params.width != width || params.height != height || params.gravity != gravity) {
+            view.layoutParams = FrameLayout.LayoutParams(width, height, gravity)
         }
     }
 
@@ -1093,7 +1145,10 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         private const val CONTROLS_TIMEOUT_MS = 4_500L
         private const val LANDSCAPE_CHAT_WEIGHT = 0.25f
         private const val LANDSCAPE_SIDE_WEIGHT = 0.20f
-        private const val PORTRAIT_CHAT_WEIGHT = 0.42f
+        // Keeps at least this much chat visible in portrait (e.g. with the keyboard open).
+        private const val PORTRAIT_MIN_CHAT_DP = 160
+        // Must match mainRight in MultiviewLayoutManager for 2 streams with chat off.
+        private const val LANDSCAPE_MAIN_FRACTION = 0.80f
 
         fun arguments(stream: Stream): Bundle = Bundle().apply { putParcelable(ARG_STREAM, stream) }
     }
