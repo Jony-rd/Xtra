@@ -42,6 +42,8 @@ import com.github.andreyasadchy.xtra.ui.multiview.ui.AddMultiviewStreamsSheet
 import com.github.andreyasadchy.xtra.ui.multiview.ui.MultiviewLayoutManager
 import com.github.andreyasadchy.xtra.ui.multiview.ui.MultiviewLayoutMode
 import com.github.andreyasadchy.xtra.ui.multiview.ui.MultiviewSlotView
+import com.github.andreyasadchy.xtra.ui.player.PlayerSwipeBrightnessViewModel
+import com.github.andreyasadchy.xtra.ui.player.PlayerSwipeGestureController
 import com.github.andreyasadchy.xtra.util.C
 import com.github.andreyasadchy.xtra.util.prefs
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -72,6 +74,12 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     private var lastImeBottom = 0
     private var lastRootWidth = 0
     private var lastRootHeight = 0
+
+    // Brightness/volume swipe, main stream only. Same shared settings and
+    // brightness state as the single-stream player (activityViewModels).
+    private val swipeBrightnessViewModel: PlayerSwipeBrightnessViewModel by activityViewModels()
+    private var swipeGestureController: PlayerSwipeGestureController? = null
+    private var swipeControllerIdentity: String? = null
 
     private val bindingOrNull: FragmentMultiviewBinding?
         get() = _binding
@@ -119,6 +127,10 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         binding.moreButton.setOnClickListener { showMoreMenu(binding.moreButton) }
         binding.pipButton.setOnClickListener { (activity as? MainActivity)?.minimizeMultiview() }
         binding.seekToLiveButton.setOnClickListener { seekAllToLive() }
+        binding.chatHeader.apply {
+            minimumHeight = dp(CHAT_HEADER_DP)
+            updatePadding(top = 0, bottom = 0)
+        }
 
         childFragmentManager.setFragmentResultListener(
             AddMultiviewStreamsSheet.RESULT_KEY,
@@ -257,6 +269,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
     override fun onDestroyView() {
         viewModel.stopRaidMonitoring()
+        swipeGestureController?.release(restoreBrightness = true)
+        swipeGestureController = null
+        swipeControllerIdentity = null
         controlsHandler.removeCallbacks(hideControls)
         controlsLockCount = 0
         slotViews.forEach { (identity, slotView) ->
@@ -302,6 +317,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 fillVideo = state.fillVideo,
             )
         }
+        updateMainStreamSwipeControls(state)
 
         viewModel.playbackCoordinator.sync(
             streams = state.streams,
@@ -318,17 +334,54 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         binding.videoGrid.doOnLayout { renderTileBounds() }
     }
 
+    /**
+     * Attaches brightness/volume swipe to whichever stream currently counts as
+     * "main" (focused, else audio-active, else the first stream) and detaches
+     * it from anywhere else. Skips the work entirely when the main stream
+     * hasn't changed, so this is safe to call on every render().
+     */
+    private fun updateMainStreamSwipeControls(state: MultiviewSessionState) {
+        val primary = (state.focusedIdentity ?: state.activeIdentity ?: state.identities.firstOrNull())
+            ?.takeIf(state.identities::contains)
+            ?: state.identities.firstOrNull()
+
+        if (primary == swipeControllerIdentity && slotViews[primary]?.swipeController === swipeGestureController) {
+            return
+        }
+
+        swipeControllerIdentity?.let { previous -> slotViews[previous]?.swipeController = null }
+        swipeGestureController?.release(restoreBrightness = true)
+        swipeGestureController = null
+        swipeControllerIdentity = null
+
+        val targetSlot = primary?.let(slotViews::get) ?: return
+        val controller = PlayerSwipeGestureController(
+            context = requireContext(),
+            window = requireActivity().window,
+            brightness = swipeBrightnessViewModel,
+            host = targetSlot,
+            getSpeed = { null },
+            setSpeed = { },
+        )
+        targetSlot.swipeController = controller
+        swipeGestureController = controller
+        swipeControllerIdentity = primary
+    }
+
     private fun createSlotView(identity: String): MultiviewSlotView {
         return MultiviewSlotView(requireContext()).apply {
             onTap = {
                 viewModel.setActive(identity)
-                if (latestState.chatVisible && !latestState.combinedChat) {
-                    viewModel.setChat(true, combined = false, identity = identity)
+                if (!latestState.combinedChat && (latestState.chatVisible || isTwoStreamLandscapeChatOff())) {
+                    // keep the toggle as it is (on or off), only switch whose chat is shown
+                    viewModel.setChat(latestState.chatVisible, combined = false, identity = identity)
                 }
                 revealControls(this)
             }
             onDoubleTap = {
-                viewModel.setFocus(if (latestState.focusedIdentity.equals(identity, true)) null else identity)
+                val unfocus = latestState.focusedIdentity.equals(identity, true)
+                viewModel.setFocus(if (unfocus) null else identity)
+                if (!unfocus) followChatInTwoStreamLandscape(identity)
                 revealControls(this)
             }
             onLongPress = {
@@ -445,6 +498,13 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         return resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE &&
             !state.chatVisible &&
             state.streams.size == 2
+    }
+
+    /** 2 streams, landscape, chat toggle off: chat still shows, so keep it on the stream the user picked. */
+    private fun followChatInTwoStreamLandscape(identity: String) {
+        if (isTwoStreamLandscapeChatOff() && !latestState.combinedChat) {
+            viewModel.setChat(false, combined = false, identity = identity)
+        }
     }
 
     private fun seekAllToLive() {
@@ -599,7 +659,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 true
             }
             menu.add(if (latestState.fillVideo) R.string.multiview_fit else R.string.multiview_fill).setOnMenuItemClickListener {
-                showAspectMenu()
+                viewModel.setFillVideo(!latestState.fillVideo)
                 true
             }
             menu.add(R.string.multiview_reorder).setOnMenuItemClickListener {
@@ -623,20 +683,6 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             .setTitle(R.string.multiview_quality_mode)
             .setSingleChoiceItems(labels, modes.indexOf(latestState.qualityMode)) { dialog, which ->
                 viewModel.setQualityMode(modes[which])
-                dialog.dismiss()
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .setOnDismissListener { unlockControls() }
-            .show()
-    }
-
-    private fun showAspectMenu() {
-        lockControls()
-        val options = arrayOf(getString(R.string.multiview_fit), getString(R.string.multiview_fill))
-        MaterialAlertDialogBuilder(requireContext())
-            .setTitle(R.string.multiview_aspect)
-            .setSingleChoiceItems(options, if (latestState.fillVideo) 1 else 0) { dialog, which ->
-                viewModel.setFillVideo(which == 1)
                 dialog.dismiss()
             }
             .setNegativeButton(android.R.string.cancel, null)
@@ -698,7 +744,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 if (latestState.focusedIdentity.equals(identity, true)) R.string.multiview_unfocus
                 else R.string.multiview_focus,
             ).setOnMenuItemClickListener {
-                viewModel.setFocus(if (latestState.focusedIdentity.equals(identity, true)) null else identity)
+                val unfocus = latestState.focusedIdentity.equals(identity, true)
+                viewModel.setFocus(if (unfocus) null else identity)
+                if (!unfocus) followChatInTwoStreamLandscape(identity)
                 true
             }
             menu.add(R.string.multiview_open_player).setOnMenuItemClickListener {
@@ -845,7 +893,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 binding.controlsOverlay,
                 LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
-                    dp(44),
+                    dp(CHAT_HEADER_DP),
                 ).apply {
                     gravity = Gravity.CENTER_VERTICAL
                 },
@@ -853,8 +901,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         }
 
         binding.controlsOverlay.background = null
-        binding.controlsOverlay.minimumHeight = dp(44)
-        setToolbarButtonSize(40)
+        binding.controlsOverlay.minimumHeight = dp(CHAT_HEADER_DP)
+        setToolbarButtonSize(CHAT_HEADER_DP)
         binding.controlsOverlay.isVisible = true
     }
 
@@ -895,7 +943,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 width = dp(sizeDp)
                 height = dp(sizeDp)
             }
-            val padding = dp(if (sizeDp >= 56) 14 else 10)
+            val padding = dp(if (sizeDp >= 56) 14 else if (sizeDp >= 40) 10 else 8)
             child.setPadding(padding, padding, padding, padding)
         }
     }
@@ -1145,6 +1193,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         private const val CONTROLS_TIMEOUT_MS = 4_500L
         private const val LANDSCAPE_CHAT_WEIGHT = 0.25f
         private const val LANDSCAPE_SIDE_WEIGHT = 0.20f
+        // Height of the chat header (streamer name, and the toolbar icons in portrait).
+        private const val CHAT_HEADER_DP = 34
         // Keeps at least this much chat visible in portrait (e.g. with the keyboard open).
         private const val PORTRAIT_MIN_CHAT_DP = 160
         // Must match mainRight in MultiviewLayoutManager for 2 streams with chat off.
