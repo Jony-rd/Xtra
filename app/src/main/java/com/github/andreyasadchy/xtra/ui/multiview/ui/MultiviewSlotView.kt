@@ -6,6 +6,7 @@ import android.view.GestureDetector
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.widget.FrameLayout
 import androidx.annotation.OptIn
 import androidx.core.view.ViewCompat
@@ -18,6 +19,8 @@ import com.github.andreyasadchy.xtra.databinding.MultiviewSlotBinding
 import com.github.andreyasadchy.xtra.model.ui.Stream
 import com.github.andreyasadchy.xtra.ui.multiview.playback.MultiviewPlaybackSnapshot
 import com.github.andreyasadchy.xtra.ui.multiview.playback.MultiviewSlotStatus
+import com.github.andreyasadchy.xtra.ui.player.PlayerSwipeGestureController
+import com.github.andreyasadchy.xtra.ui.player.SwipeMoveResult
 
 /** A stable tile shell. The coordinator owns the player; this view only owns presentation and gestures. */
 @OptIn(UnstableApi::class)
@@ -61,6 +64,14 @@ class MultiviewSlotView(context: Context) : FrameLayout(context) {
     var onAudioClick: (() -> Unit)? = null
     var onRetry: (() -> Unit)? = null
 
+    /**
+     * Brightness/volume swipe support for this tile. Only the fragment's
+     * chosen "main" stream ever has one attached; every other tile stays
+     * null and behaves exactly as before (unchanged tap/double-tap/long-press).
+     */
+    var swipeController: PlayerSwipeGestureController? = null
+    private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+
     init {
         isClickable = true
         isFocusable = true
@@ -75,6 +86,29 @@ class MultiviewSlotView(context: Context) : FrameLayout(context) {
     @SuppressLint("ClickableViewAccessibility") // GestureDetector forwards confirmed clicks to the outer slot.
     private fun installPlayerTouchListener() {
         binding.playerView.setOnTouchListener { _, event ->
+            val swipe = swipeController
+            if (swipe != null) {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> swipe.begin(event, canHandle = true, interactionLocked = false)
+                    MotionEvent.ACTION_MOVE -> when (swipe.onMove(event, touchSlop)) {
+                        SwipeMoveResult.STARTED -> {
+                            // A vertical swipe just won the gesture — cancel the pending
+                            // tap/double-tap/long-press so it doesn't also fire.
+                            val cancel = MotionEvent.obtain(event).apply { action = MotionEvent.ACTION_CANCEL }
+                            gestureDetector.onTouchEvent(cancel)
+                            cancel.recycle()
+                            return@setOnTouchListener true
+                        }
+                        SwipeMoveResult.PENDING, SwipeMoveResult.ACTIVE, SwipeMoveResult.CONSUMED -> {
+                            return@setOnTouchListener true
+                        }
+                        SwipeMoveResult.NONE, SwipeMoveResult.REJECTED -> Unit
+                    }
+                    MotionEvent.ACTION_UP -> if (swipe.onUp(event)) return@setOnTouchListener true
+                    MotionEvent.ACTION_CANCEL -> if (swipe.onCancel()) return@setOnTouchListener true
+                }
+                if (swipe.shouldConsumeCurrentSequence) return@setOnTouchListener true
+            }
             gestureDetector.onTouchEvent(event)
             true
         }
