@@ -69,7 +69,7 @@ class MultiviewSlotView(context: Context) : FrameLayout(context) {
      * chosen "main" stream ever has one attached; every other tile stays
      * null and behaves exactly as before (unchanged tap/double-tap/long-press).
      */
-    var swipeController: PlayerSwipeGestureController? = null
+    internal var swipeController: PlayerSwipeGestureController? = null
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
 
     init {
