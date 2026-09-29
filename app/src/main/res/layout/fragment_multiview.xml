@@ -78,14 +78,13 @@
                 app:tint="@android:color/white" />
 
             <ImageButton
-                android:id="@+id/seekToLiveButton"
-                android:layout_width="56dp"
-                android:layout_height="56dp"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:contentDescription="Seek to live"
-                android:padding="14dp"
-                android:src="@drawable/ic_seek_to_live"
-                app:tint="@android:color/white" />
+    android:id="@+id/seekToLiveButton"
+    android:layout_width="56dp"
+    android:layout_height="56dp"
+    android:background="?attr/selectableItemBackgroundBorderless"
+    android:contentDescription="Seek to live"
+    android:padding="14dp"
+    android:src="@drawable/ic_seek_to_live" />
 
             <ImageButton
                 android:id="@+id/addStreamButton"
