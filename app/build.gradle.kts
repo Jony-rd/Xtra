@@ -88,7 +88,7 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.xtra.terrestrial.XTv3"
+        applicationId = "com.xtra.terrestrial"
         // GeckoView 150's AAR manifest requires API 26.
         minSdk = 26
         targetSdk = 37
