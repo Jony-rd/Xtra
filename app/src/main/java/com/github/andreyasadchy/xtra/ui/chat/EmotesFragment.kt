@@ -544,12 +544,6 @@ class EmotesFragment : Fragment() {
             setFavoriteEditMode(false, adapter)
         }
         binding.editFavorites.isVisible = visible
-        binding.emotesRecyclerView.setPadding(
-            binding.emotesRecyclerView.paddingLeft,
-            binding.emotesRecyclerView.paddingTop,
-            binding.emotesRecyclerView.paddingRight,
-            if (visible) resources.getDimensionPixelSize(R.dimen.emote_picker_edit_control_space) else 0,
-        )
     }
 
     private fun updateEmptyState(
