@@ -536,7 +536,7 @@ class EmotesFragment : Fragment() {
         )
     }
 
-    private fun updateFavoriteEditControls(
+        private fun updateFavoriteEditControls(
         visible: Boolean,
         adapter: FavoritePickerAdapter,
     ) {
