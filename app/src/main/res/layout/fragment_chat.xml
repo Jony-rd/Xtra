@@ -275,8 +275,8 @@
                 android:layout_height="match_parent"
                 android:background="?android:selectableItemBackgroundBorderless"
                 android:contentDescription="@string/chat_identity"
-                android:minWidth="48dp"
-                android:minHeight="48dp"
+                android:minWidth="43dp"
+                android:minHeight="43dp"
                 android:padding="0dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_chat_identity"
@@ -348,11 +348,12 @@
                     android:orientation="horizontal">
 
                     <ImageView
-                        android:id="@+id/channelPointsIcon"
-                        android:layout_width="18dp"
-                        android:layout_height="18dp"
-                        android:importantForAccessibility="no"
-                        android:src="@drawable/ic_channel_points_default" />
+    android:id="@+id/channelPointsIcon"
+    android:layout_width="43dp"
+    android:layout_height="43dp"
+    android:importantForAccessibility="no"
+    android:scaleType="fitCenter"
+    android:src="@drawable/ic_channel_points_default" />
 
                     <TextView
                         android:id="@+id/channelPointsText"
