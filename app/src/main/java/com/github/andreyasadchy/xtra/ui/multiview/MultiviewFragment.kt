@@ -81,6 +81,10 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     private var swipeGestureController: PlayerSwipeGestureController? = null
     private var swipeControllerIdentity: String? = null
 
+    // Toolbar buttons meant to hold your own artwork: full button = full
+    // image, no padding. Add a button's id here to make it swap-only too.
+    private val CUSTOM_ICON_BUTTON_IDS = setOf(R.id.seekToLiveButton)
+
     private val bindingOrNull: FragmentMultiviewBinding?
         get() = _binding
 
@@ -943,8 +947,13 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 width = dp(sizeDp)
                 height = dp(sizeDp)
             }
-            val padding = dp(if (sizeDp >= 56) 14 else if (sizeDp >= 40) 10 else 8)
-            child.setPadding(padding, padding, padding, padding)
+            if (child.id in CUSTOM_ICON_BUTTON_IDS) {
+                // your own artwork: no inset, the whole button is the image
+                child.setPadding(0, 0, 0, 0)
+            } else {
+                val padding = dp(if (sizeDp >= 56) 14 else if (sizeDp >= 40) 10 else 8)
+                child.setPadding(padding, padding, padding, padding)
+            }
         }
     }
 
