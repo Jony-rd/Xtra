@@ -4372,16 +4372,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
 
     private fun updateChannelPointsIconTint() {
         val icon = _binding?.channelPointsIcon ?: return
-        icon.imageTintList = if (channelPointsIconLoaded) {
-            null
-        } else if (channelPointsIconUrl.isNullOrBlank()) {
-            ColorStateList.valueOf(requireContext().getColor(R.color.channel_points_default))
-        } else {
-            ColorStateList.valueOf(
-                channelPointsIconForeground
-                    ?: MaterialColors.getColor(icon, androidx.appcompat.R.attr.colorControlNormal),
-            )
-        }
+        icon.imageTintList = null
     }
 
     override fun onDestroy() {
