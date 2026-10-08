@@ -1,6 +1,7 @@
 package com.github.andreyasadchy.xtra.ui.multiview
 import com.github.andreyasadchy.xtra.ui.multiview.ui.MultiviewLayoutPlan
 
+import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
@@ -83,7 +84,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
     // Toolbar buttons meant to hold your own artwork: full button = full
     // image, no padding. Add a button's id here to make it swap-only too.
-    private val CUSTOM_ICON_BUTTON_IDS = setOf(R.id.seekToLiveButton)
+    private val CUSTOM_ICON_BUTTON_IDS = setOf(R.id.seekToLiveButton, R.id.orientationButton)
+    private var previousRequestedOrientation: Int? = null
 
     private val bindingOrNull: FragmentMultiviewBinding?
         get() = _binding
@@ -125,6 +127,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 enterImmersiveMode()
 
         binding.backButton.setOnClickListener { requireActivity().onBackPressedDispatcher.onBackPressed() }
+        binding.orientationButton.setOnClickListener { toggleMultiviewOrientation() }
         binding.addStreamButton.setOnClickListener { showAddStreamSheet() }
         binding.chatButton.setOnClickListener { toggleChat() }
         binding.layoutButton.setOnClickListener { showLayoutMenu() }
@@ -276,6 +279,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         swipeGestureController?.release(restoreBrightness = true)
         swipeGestureController = null
         swipeControllerIdentity = null
+        previousRequestedOrientation?.let { requireActivity().requestedOrientation = it }
+        previousRequestedOrientation = null
         controlsHandler.removeCallbacks(hideControls)
         controlsLockCount = 0
         slotViews.forEach { (identity, slotView) ->
@@ -370,6 +375,27 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         targetSlot.swipeController = controller
         swipeGestureController = controller
         swipeControllerIdentity = primary
+    }
+
+    /**
+     * Forces multiview into whichever orientation it isn't currently in, ignoring
+     * the phone's own rotation-lock setting (same thing video apps do). Uses the
+     * "sensor" variants so the phone can still flip between the two landscape
+     * directions (or upright/upside-down portrait) once forced into that plane.
+     * Whatever the orientation was before the first tap is restored when you leave
+     * multiview, so the rest of the app goes back to normal.
+     */
+    private fun toggleMultiviewOrientation() {
+        val activity = requireActivity()
+        if (previousRequestedOrientation == null) {
+            previousRequestedOrientation = activity.requestedOrientation
+        }
+        val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        activity.requestedOrientation = if (landscape) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        }
     }
 
     private fun createSlotView(identity: String): MultiviewSlotView {
