@@ -333,7 +333,8 @@ class FollowedStreamsPageLoader(
         if (cursor != null) {
             // The persisted cursor is authoritative. This also works after a
             // process restart or when another loader refreshed the feed.
-            return loadFromCursor(cursor).withHelixBroadcasterTypes(networkLibrary, helixHeaders(), helixRepository)
+            return confirmCurrentLiveStreams(loadFromCursor(cursor))
+                .withHelixBroadcasterTypes(networkLibrary, helixHeaders(), helixRepository)
         }
         api = null
 
@@ -360,8 +361,41 @@ class FollowedStreamsPageLoader(
             null
         }
         val merged = merge(localItems, remotePage?.items.orEmpty())
-        return StreamFeedPage(merged, remotePage?.nextCursor)
+        return confirmCurrentLiveStreams(StreamFeedPage(merged, remotePage?.nextCursor))
             .withHelixBroadcasterTypes(networkLibrary, helixHeaders(), helixRepository)
+    }
+
+    /**
+     * Twitch's followed-stream GraphQL result can briefly outlive a stream.
+     * Helix returns only broadcasters that are live now. If that confirmation
+     * request fails, keep the GraphQL snapshot because offline status is unknown.
+     */
+    private suspend fun confirmCurrentLiveStreams(page: StreamFeedPage): StreamFeedPage {
+        val headers = helixHeaders()
+        if (headers[C.HEADER_TOKEN].isNullOrBlank()) return page
+
+        val channelIds = page.items.mapNotNull { stream ->
+            stream.channelId?.takeIf { it.isNotBlank() }
+        }.distinct()
+        if (channelIds.isEmpty()) return page
+
+        return try {
+            val liveStreamIds = channelIds.chunked(100).flatMap { ids ->
+                helixRepository.getStreams(
+                    networkLibrary = networkLibrary,
+                    headers = headers,
+                    ids = ids,
+                    limit = ids.size,
+                ).data.mapNotNull { it.id }
+            }.toSet()
+            page.copy(items = page.items.filter { stream ->
+                stream.channelId.isNullOrBlank() || stream.id?.let(liveStreamIds::contains) == true
+            })
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            page
+        }
     }
 
     private suspend fun loadFirstPageWithFallback(): StreamFeedPage {
@@ -423,20 +457,25 @@ class FollowedStreamsPageLoader(
         return StreamFeedPage(
             items = edges.mapNotNull { edge ->
                 edge?.node?.let { node ->
+                    // `followedLiveUsers` can still contain an edge while its
+                    // stream field is null. The Following Live adapter treats
+                    // every row as live, so don't turn an offline user into a
+                    // stream card.
+                    val stream = node.stream ?: return@let null
                     Stream(
-                        id = node.stream?.id,
+                        id = stream.id,
                         channelId = node.id,
                         channelLogin = node.login,
                         channelName = node.displayName,
                         channelImageURL = node.profileImageURL,
-                        gameId = node.stream?.game?.id,
-                        gameSlug = node.stream?.game?.slug,
-                        gameName = node.stream?.game?.displayName,
-                        title = node.stream?.broadcaster?.broadcastSettings?.title,
-                        thumbnailURL = node.stream?.previewImageURL,
-                        createdAt = node.stream?.createdAt?.toString(),
-                        viewerCount = node.stream?.viewersCount,
-                        tags = node.stream?.freeformTags?.mapNotNull { tag -> tag.name },
+                        gameId = stream.game?.id,
+                        gameSlug = stream.game?.slug,
+                        gameName = stream.game?.displayName,
+                        title = stream.broadcaster?.broadcastSettings?.title,
+                        thumbnailURL = stream.previewImageURL,
+                        createdAt = stream.createdAt?.toString(),
+                        viewerCount = stream.viewersCount,
+                        tags = stream.freeformTags?.mapNotNull { tag -> tag.name },
                     )
                 }
             },
@@ -455,22 +494,23 @@ class FollowedStreamsPageLoader(
             ?: throw persistedStreamDataError("FollowedStreams persisted query", response.errors)
         val edges = data.edges
         return StreamFeedPage(
-            items = edges.map { edge ->
+            items = edges.mapNotNull { edge ->
                 edge.node.let { node ->
+                    val stream = node.stream ?: return@let null
                     Stream(
-                        id = node.stream?.id,
+                        id = stream.id,
                         channelId = node.id,
                         channelLogin = node.login,
                         channelName = node.displayName,
                         channelImageURL = node.profileImageURL,
-                        gameId = node.stream?.game?.id,
-                        gameSlug = node.stream?.game?.slug,
-                        gameName = node.stream?.game?.displayName,
-                        title = node.stream?.title,
-                        thumbnailURL = node.stream?.previewImageURL,
-                        createdAt = node.stream?.createdAt,
-                        viewerCount = node.stream?.viewersCount,
-                        tags = node.stream?.freeformTags?.mapNotNull { tag -> tag.name },
+                        gameId = stream.game?.id,
+                        gameSlug = stream.game?.slug,
+                        gameName = stream.game?.displayName,
+                        title = stream.title,
+                        thumbnailURL = stream.previewImageURL,
+                        createdAt = stream.createdAt,
+                        viewerCount = stream.viewersCount,
+                        tags = stream.freeformTags?.mapNotNull { tag -> tag.name },
                     )
                 }
             },
@@ -517,7 +557,7 @@ class FollowedStreamsPageLoader(
             response.data!!.users!!
         }.flatMap { it }
         return items.mapNotNull { item ->
-            item?.takeIf { it.stream?.viewersCount != null }?.let {
+            item?.takeIf { it.stream?.id != null && it.stream.viewersCount != null }?.let {
                 Stream(
                     id = it.stream?.id,
                     channelId = it.id,
