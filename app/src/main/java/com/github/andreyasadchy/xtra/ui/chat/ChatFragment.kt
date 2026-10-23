@@ -949,9 +949,9 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                                 super.onScrollStateChanged(recyclerView, newState)
                                 if (newState == RecyclerView.SCROLL_STATE_DRAGGING) {
                                     userGestureActive = true
-                                    chatV2Renderer?.onUserScroll()
+                                    chatV2Renderer?.onUserScrollStarted()
                                 } else if (newState == RecyclerView.SCROLL_STATE_IDLE && userGestureActive) {
-                                    chatV2Renderer?.onUserScroll()
+                                    chatV2Renderer?.onUserScrollEnded()
                                     userGestureActive = false
                                 }
                             }
