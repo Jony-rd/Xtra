@@ -155,11 +155,6 @@ class ChatV2RendererController(
     private val latestMessages = ArrayDeque<ChatMessage>()
     private val latestRows = ArrayList<ChatRowUiModel>()
     private var deferredRows = false
-    private val pendingRowsScrollListener = object : RecyclerView.OnScrollListener() {
-        override fun onScrollStateChanged(rv: RecyclerView, newState: Int) {
-            if (newState != RecyclerView.SCROLL_STATE_IDLE) flushDeferredRows()
-        }
-    }
     private var latestPublication: PresentationPublication? = null
     private var committedPublication: PresentationPublication? = null
     private val reuseIndex = ChatPresentationReuseIndex()
@@ -180,7 +175,6 @@ class ChatV2RendererController(
             stackFromEnd = true
         }
         recyclerView.adapter = adapter
-        recyclerView.addOnScrollListener(pendingRowsScrollListener)
     }
 
     val state: ChatViewportState
@@ -314,7 +308,6 @@ class ChatV2RendererController(
 
     fun detach() {
         deferredRows = false
-        recyclerView.removeOnScrollListener(pendingRowsScrollListener)
         collectionJob?.cancel()
         collectionJob = null
         styleRefreshJob?.cancel()
@@ -340,9 +333,17 @@ class ChatV2RendererController(
         externalTimelineDelta = ChatTimelineDelta.Full
     }
 
-    fun onUserScroll() {
-        flushDeferredRows()
-        viewport.onUserScroll()
+    fun onUserScrollEnded() {
+        viewport.onUserScrollEnded()
+        if (deferredRows) {
+            flushDeferredRows()
+        } else {
+            onStateChanged(viewport.state)
+        }
+    }
+
+    fun onUserScrollStarted() {
+        viewport.onUserScrollStarted()
         onStateChanged(viewport.state)
     }
 
@@ -570,11 +571,9 @@ class ChatV2RendererController(
             )
             if (uiChanged) {
                 onPublicationChanged(latestMessages, latestRows, delta?.evictedCount, delta?.messages?.size)
-                // Keep canonical ingestion/compilation current, but do not invalidate an idle
-                // viewport for append-only changes outside it. Any full edit/presentation
-                // change, expired anchor, gesture or accessibility scroll flushes the adapter.
+                // Keep canonical ingestion/compilation current, but defer stable append-only rows
+                // while the user controls the viewport. Gesture-end and jump actions flush them.
                 if (delta != null && viewport.state.followMode == FollowMode.USER_SCROLLED_UP &&
-                    recyclerView.scrollState == RecyclerView.SCROLL_STATE_IDLE &&
                     !recyclerView.hasPendingAdapterUpdates() &&
                     previousAnchor != null && previousAnchor.messageId in previousIds
                 ) {

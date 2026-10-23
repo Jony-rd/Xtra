@@ -40,12 +40,17 @@ class ChatViewportController(
         }
     }
 
-    fun onUserScroll() {
+    fun onUserScrollEnded() {
         if (!recyclerView.canScrollVertically(1)) {
             state = state.copy(followMode = FollowMode.FOLLOWING_BOTTOM, newMessageCount = 0)
         } else {
             state = state.copy(followMode = FollowMode.USER_SCROLLED_UP)
         }
+    }
+
+    /** A drag takes ownership of the viewport until its final position is known. */
+    fun onUserScrollStarted() {
+        state = state.copy(followMode = FollowMode.USER_SCROLLED_UP)
     }
 
     fun onSnapshotDeferred(anchor: ChatViewportAnchor, appendedCount: Int) {
