@@ -1540,4 +1540,5 @@
     <string name="search_tags_prompt">输入标签名称以搜索。</string>
     <string name="forget_tab_choices">清除为此标签页保存的选项</string>
     <string name="all_languages">所有语言</string>
+    <string name="player_qualities_load_failed">无法加载视频画质选项。</string>
 </resources>

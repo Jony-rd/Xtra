@@ -154,7 +154,6 @@ class ChatV2RendererController(
     private var previousTailId: ChatMessageId? = null
     private val latestMessages = ArrayDeque<ChatMessage>()
     private val latestRows = ArrayList<ChatRowUiModel>()
-    private var deferredRows = false
     private var latestPublication: PresentationPublication? = null
     private var committedPublication: PresentationPublication? = null
     private val reuseIndex = ChatPresentationReuseIndex()
@@ -307,7 +306,6 @@ class ChatV2RendererController(
     }
 
     fun detach() {
-        deferredRows = false
         collectionJob?.cancel()
         collectionJob = null
         styleRefreshJob?.cancel()
@@ -335,11 +333,7 @@ class ChatV2RendererController(
 
     fun onUserScrollEnded() {
         viewport.onUserScrollEnded()
-        if (deferredRows) {
-            flushDeferredRows()
-        } else {
-            onStateChanged(viewport.state)
-        }
+        onStateChanged(viewport.state)
     }
 
     fun onUserScrollStarted() {
@@ -350,7 +344,6 @@ class ChatV2RendererController(
     internal fun refreshStyle(style: ChatRenderStyle) {
         val nextHighlightSettings = resolveChatHighlightSettings(recyclerView.context)
         if (style == renderStyle && nextHighlightSettings == highlightSettings) return
-        flushDeferredRows()
         val edgePaddingChanged = style.edgePaddingDp != renderStyle.edgePaddingDp
         renderStyle = style
         highlightSettings = nextHighlightSettings
@@ -405,14 +398,10 @@ class ChatV2RendererController(
                 )
                 if (uiChanged) {
                     onPublicationChanged(currentMessages, rows, null, null)
-                    val anchor = if (deferredRows) viewport.captureAnchor(adapter) else null
-                    val hadDeferredRows = deferredRows
-                    deferredRows = false
+                    val anchor = viewport.captureAnchor(adapter)
                     adapter.replaceAll(rows)
-                    if (hadDeferredRows) {
-                        viewport.onSnapshotCommitted(anchor, rows, 0)
-                        onStateChanged(viewport.state)
-                    }
+                    viewport.onSnapshotCommitted(anchor, rows, 0)
+                    onStateChanged(viewport.state)
                 }
             }
         }
@@ -423,7 +412,6 @@ class ChatV2RendererController(
             recyclerView.post { jumpToNewest() }
             return
         }
-        flushDeferredRows()
         viewport.jumpToNewest(latestRows)
         onStateChanged(viewport.state)
     }
@@ -571,22 +559,9 @@ class ChatV2RendererController(
             )
             if (uiChanged) {
                 onPublicationChanged(latestMessages, latestRows, delta?.evictedCount, delta?.messages?.size)
-                // Keep canonical ingestion/compilation current, but defer stable append-only rows
-                // while the user controls the viewport. Gesture-end and jump actions flush them.
-                if (delta != null && viewport.state.followMode == FollowMode.USER_SCROLLED_UP &&
-                    !recyclerView.hasPendingAdapterUpdates() &&
-                    previousAnchor != null && previousAnchor.messageId in previousIds
-                ) {
-                    deferredRows = true
-                    viewport.onSnapshotDeferred(previousAnchor, appendedCount)
-                    onStateChanged(viewport.state)
-                    return@withContext
-                }
-                val hadDeferredRows = deferredRows
-                deferredRows = false
-                val appliedIncrementally = if (hadDeferredRows) {
-                    false
-                } else if (delta != null) {
+                // Apply incoming rows during drags and flings too. The viewport owns
+                // auto-follow; range notifications preserve the user's visible rows.
+                val appliedIncrementally = if (delta != null) {
                     adapter.appendDelta(
                         appendedRows = rows,
                         evictedHeadCount = delta.evictedCount,
@@ -611,20 +586,6 @@ class ChatV2RendererController(
                     }
                 }
             }
-        }
-    }
-
-    private fun flushDeferredRows() {
-        if (!deferredRows) return
-        if (recyclerView.isComputingLayout) {
-            recyclerView.post { flushDeferredRows() }
-            return
-        }
-        val anchor = viewport.captureAnchor(adapter)
-        deferredRows = false
-        adapter.replaceAll(latestRows) {
-            viewport.onSnapshotCommitted(anchor, latestRows, 0)
-            onStateChanged(viewport.state)
         }
     }
 

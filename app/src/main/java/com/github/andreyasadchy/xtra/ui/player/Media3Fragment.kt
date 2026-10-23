@@ -5194,6 +5194,7 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost, ClipEditor
 
     override fun ensureQualities(onReady: () -> Unit) {
         if (getQualities().isNullOrEmpty()) {
+            qualityRetryAttempts = 0
             requestQualities(onReady)
         } else {
             onReady()
@@ -5438,9 +5439,8 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost, ClipEditor
                 }
             }
             // The service can answer before the HLS multivariant playlist is
-            // available. Keep callbacks pending; onTracksChanged/onTimelineChanged
-            // will retry and only a non-empty list may open the dialog.
-            val hasQualities = !viewModel.qualities.isNullOrEmpty()
+            // available. A cached list for an old source is not a ready catalog.
+            val hasQualities = !getQualities().isNullOrEmpty()
             if (hasQualities) {
                 val callbacks = pendingQualityCallbacks.toList()
                 pendingQualityCallbacks.clear()
@@ -5476,7 +5476,11 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost, ClipEditor
     }
 
     private fun scheduleQualityRequestRetry(shouldRetry: () -> Boolean = { true }) {
-        if (qualityRetryAttempts >= MAX_QUALITY_RETRY_ATTEMPTS || !isAdded || view == null) return
+        if (!isAdded || view == null) return
+        if (qualityRetryAttempts >= MAX_QUALITY_RETRY_ATTEMPTS) {
+            if (getQualities().isNullOrEmpty()) showQualityCatalogError()
+            return
+        }
         qualityRetryAttempts++
         qualityRetryJob?.cancel()
         qualityRetryJob = viewLifecycleOwner.lifecycleScope.launch {

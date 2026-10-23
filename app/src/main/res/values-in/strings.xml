@@ -1541,4 +1541,5 @@
     <string name="search_tags_prompt">Masukkan nama tag untuk mencari.</string>
     <string name="forget_tab_choices">Lupakan pilihan tersimpan untuk tab ini</string>
     <string name="all_languages">Semua bahasa</string>
+    <string name="player_qualities_load_failed">Opsi kualitas video tidak dapat dimuat.</string>
 </resources>

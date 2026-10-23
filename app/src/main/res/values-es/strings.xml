@@ -1545,4 +1545,5 @@
     <string name="search_tags_prompt">Introduce el nombre de una etiqueta para buscar.</string>
     <string name="forget_tab_choices">Olvidar las opciones guardadas para esta pestaña</string>
     <string name="all_languages">Todos los idiomas</string>
+    <string name="player_qualities_load_failed">No se pudieron cargar las opciones de calidad del video.</string>
 </resources>

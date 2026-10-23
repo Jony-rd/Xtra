@@ -148,7 +148,7 @@ import kotlin.time.Instant
  * subclass and adds the screen-specific behaviour (video info, clip editing).
  */
 @OptIn(UnstableApi::class)
-abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment.OnSortOptionChanged, RadioButtonDialogFragment.HeaderProvider, TvRemoteKeyHandler {
+abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment.OnSortOptionChanged, RadioButtonDialogFragment.HeaderProvider, RadioButtonDialogFragment.OnRetryOptions, TvRemoteKeyHandler {
 
     private var _binding: FragmentPlayerBinding? = null
     private var qualityLabelSingleLine: Boolean? = null
@@ -2372,24 +2372,34 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
     }
 
     open fun showQualityDialog() {
-        ensureQualities {
-            if (!isAdded || childFragmentManager.isStateSaved) return@ensureQualities
-            val qualities = getQualities()
-            if (qualities.isNullOrEmpty()) return@ensureQualities
-            val selectedIndex = qualityPickerSelectedIndex(qualities)
-            val existing = childFragmentManager.findFragmentByTag("closeOnPip") as? RadioButtonDialogFragment
-            if (existing?.updateOptions(REQUEST_CODE_QUALITY, qualities.map { it.first },
-                    qualities.map { it.second.name.toString() }.toTypedArray(),
-                    qualities.map { it.second.url.toString() }.toTypedArray(),
-                    selectedIndex) == true) return@ensureQualities
-            RadioButtonDialogFragment.newInstance(
-                REQUEST_CODE_QUALITY,
-                qualities.map { it.first },
+        if (!isAdded || childFragmentManager.isStateSaved) return
+        val qualities = getQualities().orEmpty()
+        val selectedIndex = qualityPickerSelectedIndex(qualities)
+        val existing = childFragmentManager.findFragmentByTag("closeOnPip") as? RadioButtonDialogFragment
+        val dialog = existing?.takeIf {
+            it.updateOptions(REQUEST_CODE_QUALITY, qualities.map { it.first },
                 qualities.map { it.second.name.toString() }.toTypedArray(),
                 qualities.map { it.second.url.toString() }.toTypedArray(),
-                selectedIndex
-            ).show(childFragmentManager, "closeOnPip")
+                selectedIndex)
+        } ?: RadioButtonDialogFragment.newInstance(
+            REQUEST_CODE_QUALITY,
+            qualities.map { it.first },
+            qualities.map { it.second.name.toString() }.toTypedArray(),
+            qualities.map { it.second.url.toString() }.toTypedArray(),
+            selectedIndex
+        ).also { it.show(childFragmentManager, "closeOnPip") }
+        if (qualities.isEmpty()) {
+            dialog.showOptionsLoading(REQUEST_CODE_QUALITY)
+            ensureQualities {
+                // Update this sheet without reopening it if the user dismissed it
+                // while the current source's quality catalog was being fetched.
+                refreshQualityDialog(dialog)
+            }
         }
+    }
+
+    final override fun onRetryOptions(requestCode: Int) {
+        if (requestCode == REQUEST_CODE_QUALITY) showQualityDialog()
     }
 
     final override suspend fun optionHeader(requestCode: Int): RadioButtonDialogFragment.Header? =
@@ -2850,6 +2860,10 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
     protected open fun refreshOpenQualityDialog(loading: Boolean = false) {
         if (!isAdded) return
         val dialog = childFragmentManager.findFragmentByTag("closeOnPip") as? RadioButtonDialogFragment ?: return
+        refreshQualityDialog(dialog, loading)
+    }
+
+    private fun refreshQualityDialog(dialog: RadioButtonDialogFragment, loading: Boolean = false) {
         val qualities = if (loading) null else getQualities()
         if (qualities.isNullOrEmpty()) {
             dialog.showOptionsRefreshing(REQUEST_CODE_QUALITY)
@@ -2860,6 +2874,12 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                 qualities.map { it.second.url.toString() }.toTypedArray(),
                 selectedIndex)
         }
+    }
+
+    protected fun showQualityCatalogError() {
+        if (!isAdded) return
+        (childFragmentManager.findFragmentByTag("closeOnPip") as? RadioButtonDialogFragment)
+            ?.showOptionsError(REQUEST_CODE_QUALITY, getString(R.string.player_qualities_load_failed))
     }
 
     protected open fun onStreamBecameLive(eventSequence: Long?) {

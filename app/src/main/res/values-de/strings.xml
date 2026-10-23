@@ -1540,4 +1540,5 @@
     <string name="search_tags_prompt">Gib einen Tag-Namen zum Suchen ein.</string>
     <string name="forget_tab_choices">Gespeicherte Auswahl für diesen Tab vergessen</string>
     <string name="all_languages">Alle Sprachen</string>
+    <string name="player_qualities_load_failed">Videoqualitätsoptionen konnten nicht geladen werden.</string>
 </resources>

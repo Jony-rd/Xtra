@@ -35,7 +35,10 @@ class ChatViewportController(
         val position = layout.findFirstVisibleItemPosition()
         if (position == RecyclerView.NO_POSITION) return null
         val view = layout.findViewByPosition(position) ?: return null
-        return (adapter as? ChatTimelineAdapter)?.currentList?.getOrNull(position)?.id?.let {
+        // Layout positions can still describe the previous snapshot while range
+        // notifications are pending. Resolve the attached row in the current adapter.
+        val adapterPosition = recyclerView.getChildAdapterPosition(view)
+        return (adapter as? ChatTimelineAdapter)?.currentList?.getOrNull(adapterPosition)?.id?.let {
             ChatViewportAnchor(it, view.top)
         }
     }
@@ -51,10 +54,6 @@ class ChatViewportController(
     /** A drag takes ownership of the viewport until its final position is known. */
     fun onUserScrollStarted() {
         state = state.copy(followMode = FollowMode.USER_SCROLLED_UP)
-    }
-
-    fun onSnapshotDeferred(anchor: ChatViewportAnchor, appendedCount: Int) {
-        state = state.copy(anchor = anchor, newMessageCount = state.newMessageCount + appendedCount)
     }
 
     fun onSnapshotCommitted(
