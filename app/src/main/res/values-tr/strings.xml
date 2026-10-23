@@ -1541,4 +1541,5 @@
     <string name="search_tags_prompt">Aramak için bir etiket adı girin.</string>
     <string name="forget_tab_choices">Bu sekme için kaydedilen seçimleri unut</string>
     <string name="all_languages">Tüm diller</string>
+    <string name="player_qualities_load_failed">Video kalite seçenekleri yüklenemedi.</string>
 </resources>

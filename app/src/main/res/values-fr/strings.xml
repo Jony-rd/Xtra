@@ -1540,4 +1540,5 @@
     <string name="search_tags_prompt">Saisissez un nom de tag pour rechercher.</string>
     <string name="forget_tab_choices">Effacer les choix enregistrés pour cet onglet</string>
     <string name="all_languages">Toutes les langues</string>
+    <string name="player_qualities_load_failed">Impossible de charger les options de qualité vidéo.</string>
 </resources>

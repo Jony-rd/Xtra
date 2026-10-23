@@ -24,6 +24,7 @@ import androidx.core.widget.NestedScrollView
 import com.github.andreyasadchy.xtra.R
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
+import com.google.android.material.button.MaterialButton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -42,6 +43,10 @@ class RadioButtonDialogFragment : BottomSheetDialogFragment() {
         fun onChange(requestCode: Int, index: Int, text: CharSequence, tag: String?, tag2: String?)
     }
 
+    interface OnRetryOptions {
+        fun onRetryOptions(requestCode: Int)
+    }
+
     companion object {
 
         private const val REQUEST_CODE = "requestCode"
@@ -51,6 +56,7 @@ class RadioButtonDialogFragment : BottomSheetDialogFragment() {
         private const val CHECKED = "checked"
         private const val LOADING = "loading"
         private const val REFRESHING = "refreshing"
+        private const val ERROR_MESSAGE = "errorMessage"
 
         fun newInstance(requestCode: Int, labels: Collection<CharSequence>, tags: Array<String>? = null, tags2: Array<String>? = null, checkedIndex: Int): RadioButtonDialogFragment {
             return RadioButtonDialogFragment().apply {
@@ -80,6 +86,7 @@ class RadioButtonDialogFragment : BottomSheetDialogFragment() {
         arguments.putInt(CHECKED, checkedIndex)
         arguments.putBoolean(LOADING, false)
         arguments.putBoolean(REFRESHING, false)
+        arguments.remove(ERROR_MESSAGE)
         renderOptions()
         return true
     }
@@ -88,6 +95,7 @@ class RadioButtonDialogFragment : BottomSheetDialogFragment() {
         if (requireArguments().getInt(REQUEST_CODE) != requestCode) return
         requireArguments().putBoolean(LOADING, true)
         requireArguments().putBoolean(REFRESHING, false)
+        requireArguments().remove(ERROR_MESSAGE)
         renderOptions()
     }
 
@@ -96,6 +104,16 @@ class RadioButtonDialogFragment : BottomSheetDialogFragment() {
         if (arguments.getInt(REQUEST_CODE) != requestCode) return
         arguments.putBoolean(LOADING, true)
         arguments.putBoolean(REFRESHING, true)
+        arguments.remove(ERROR_MESSAGE)
+        renderOptions()
+    }
+
+    fun showOptionsError(requestCode: Int, message: CharSequence) {
+        val arguments = requireArguments()
+        if (arguments.getInt(REQUEST_CODE) != requestCode) return
+        arguments.putBoolean(LOADING, false)
+        arguments.putBoolean(REFRESHING, false)
+        arguments.putCharSequence(ERROR_MESSAGE, message)
         renderOptions()
     }
 
@@ -131,6 +149,16 @@ class RadioButtonDialogFragment : BottomSheetDialogFragment() {
         val generation = ++optionsGeneration
         radioGroup.clearCheck()
         radioGroup.removeAllViews()
+        arguments.getCharSequence(ERROR_MESSAGE)?.let { message ->
+            radioGroup.addView(TextView(context).apply { text = message })
+            radioGroup.addView(MaterialButton(context).apply {
+                setText(R.string.retry)
+                setOnClickListener {
+                    (parentFragment as? OnRetryOptions)?.onRetryOptions(arguments.getInt(REQUEST_CODE))
+                }
+            }, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
+            return
+        }
         val labels = arguments.getCharSequenceArrayList(LABELS)
         val refreshing = arguments.getBoolean(LOADING) && arguments.getBoolean(REFRESHING) && !labels.isNullOrEmpty()
         if (arguments.getBoolean(LOADING) && !refreshing) {

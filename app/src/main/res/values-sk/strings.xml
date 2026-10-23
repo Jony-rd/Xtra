@@ -1563,4 +1563,5 @@
     <string name="search_tags_prompt">Zadajte názov značky na vyhľadanie.</string>
     <string name="forget_tab_choices">Zrušiť zapamätané voľby pre túto kartu</string>
     <string name="all_languages">Všetky jazyky</string>
+    <string name="player_qualities_load_failed">Nepodarilo sa načítať možnosti kvality videa.</string>
 </resources>

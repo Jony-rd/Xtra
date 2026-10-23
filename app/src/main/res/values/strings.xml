@@ -2516,4 +2516,5 @@ Tap to search everywhere</string>
     <string name="search_tags_prompt">Enter a tag name to search.</string>
     <string name="forget_tab_choices">Forget saved choices for this tab</string>
     <string name="all_languages">All languages</string>
+    <string name="player_qualities_load_failed">Could not load video qualities.</string>
 </resources>
