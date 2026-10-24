@@ -236,7 +236,8 @@ class MainActivity : AppCompatActivity() {
         binding.tvNavigationContainer.isVisible = useNavigationRail && showNavigation
         val compactDropsFilter = dropsFilterKeyboardVisible &&
             configuration.orientation == Configuration.ORIENTATION_LANDSCAPE && configuration.screenHeightDp < 480
-        binding.navBarContainer.isVisible = !useNavigationRail && showNavigation && !compactDropsFilter
+        val inMultiview = currentMultiviewFragment() != null
+        binding.navBarContainer.isVisible = !inMultiview && !useNavigationRail && showNavigation && !compactDropsFilter
         updateBottomSearchVisibility()
         allToolbarViews().forEach(::updateTopSearchVisibility)
         binding.tvSearch.isVisible = isTv
