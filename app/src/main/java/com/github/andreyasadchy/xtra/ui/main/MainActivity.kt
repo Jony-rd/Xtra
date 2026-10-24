@@ -189,8 +189,6 @@ class MainActivity : AppCompatActivity() {
     private var qualityNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private var lastPlaybackNetworkProfile: PlayerQualityNetworkProfile? = null
     private var pipActionReceiver: BroadcastReceiver? = null
-    private var wasInPictureInPictureMode = false
-    private var pendingPictureInPictureClose: Runnable? = null
     private lateinit var prefs: SharedPreferences
     private var appliedUiStyle: String? = null
     var settingsResultLauncher: ActivityResultLauncher<Intent>? = null
@@ -823,39 +821,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
-        pendingPictureInPictureClose?.let { binding.root.removeCallbacks(it) }
-        pendingPictureInPictureClose = null
         prefs.registerOnSharedPreferenceChangeListener(anonymousModeProfilePreferenceListener)
         if (::appBackgroundController.isInitialized) appBackgroundController.start()
-    }
-
-    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean) {
-        val wasInPictureInPicture = wasInPictureInPictureMode
-        wasInPictureInPictureMode = isInPictureInPictureMode
-        super.onPictureInPictureModeChanged(isInPictureInPictureMode)
-
-        // The system close button exits PiP and leaves this activity stopped.
-        // Reopening the app can deliver the callback before lifecycle start,
-        // so defer the check and cancel it from onStart().
-        if (wasInPictureInPicture &&
-            !isInPictureInPictureMode &&
-            !isChangingConfigurations &&
-            playerFragment != null
-        ) {
-            pendingPictureInPictureClose?.let { binding.root.removeCallbacks(it) }
-            pendingPictureInPictureClose = Runnable {
-                pendingPictureInPictureClose = null
-                if (!isInPictureInPictureMode &&
-                    !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) &&
-                    !isChangingConfigurations &&
-                    playerFragment != null &&
-                    !prefs.getBoolean(C.PLAYER_KEEP_PLAYING_AFTER_PIP_CLOSED, false)
-                ) {
-                    closePlayer()
-                }
-            }.also { binding.root.post(it) }
-        }
     }
 
     override fun onStop() {
@@ -1495,6 +1462,7 @@ class MainActivity : AppCompatActivity() {
     private fun backendForPlayerFragment(fragment: Fragment): PlaybackBackend = PlaybackBackend.MEDIA3
 
     private fun startPlayer(fragment: Fragment) {
+        stopMultiviewAudioForForegroundPlayer()
         playbackRestoreGeneration++
         val backend = backendForPlayerFragment(fragment)
         if (BuildConfig.DEBUG) {
@@ -1571,7 +1539,14 @@ class MainActivity : AppCompatActivity() {
         }
         viewModel.sleepTimer?.cancel()
         viewModel.sleepTimerEndTime = 0L
-        currentMultiviewFragment()?.resumeAfterExternalPlayer()
+        val multiviewBehindPlayer = currentMultiviewFragment()
+        if (multiviewBehindPlayer != null) {
+            multiviewBehindPlayer.resumeAfterExternalPlayer()
+        } else {
+            // A maximized player can leave the system bars hidden; bring them back.
+            androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+                .show(WindowInsetsCompat.Type.systemBars())
+        }
         if (isTv) {
             binding.root.post { restoreTvRootFocusIfNeeded() }
         }
@@ -1592,6 +1567,17 @@ class MainActivity : AppCompatActivity() {
         viewModel.isPlayerOpened = true
         (application as XtraApp).xtraModule.streamFeedRefreshCoordinator.playbackChanged(isLive)
         (application as XtraApp).xtraModule.streamPreviewCoordinator.onFullscreenPlaybackStarted()
+    }
+
+    private fun stopMultiviewAudioForForegroundPlayer() {
+        val fragment = currentMultiviewFragment()
+        if (fragment != null) {
+            fragment.pauseForExternalPlayer()
+            return
+        }
+        if (prefs.getString(C.MULTIVIEW_SESSION, null).isNullOrBlank()) return
+        ViewModelProvider(this, MultiviewViewModel.MultiviewViewModelFactory)[MultiviewViewModel::class.java]
+            .onStop(allowBackground = false)
     }
 
     private fun currentMultiviewFragment(): MultiviewFragment? {
