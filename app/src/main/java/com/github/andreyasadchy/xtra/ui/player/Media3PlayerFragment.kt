@@ -168,8 +168,6 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
     var isMaximized = true
     private var isChatOpen = true
     private var pipChatRequested = false
-    private var pipAspectRatio: Rational? = null
-    private var pipSourceRectHint: Rect? = null
     private var pipChatPreferenceListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
     private var isKeyboardShown = false
     private var resizeMode = 0
@@ -780,7 +778,11 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                     windowInsets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime() or WindowInsetsCompat.Type.displayCutout())
                 }
                 if (isPortrait) {
-                    slidingLayout.updatePadding(left = 0, top = insets.top, right = 0)
+                    slidingLayout.updatePadding(
+                        left = 0,
+                        top = if (isMaximized) 0 else insets.top,
+                        right = 0,
+                    )
                 } else {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && cornerPadding) {
                         val rootWindowInsets = view.rootView.rootWindowInsets
@@ -2006,7 +2008,11 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
         with(binding) {
             if (isPortrait) {
                 requireActivity().window.decorView.setOnSystemUiVisibilityChangeListener(null)
-                showStatusBar()
+                if (isMaximized) {
+                    hideStatusBar()
+                } else {
+                    showStatusBar()
+                }
                 phoneChatOverlayGesture?.setActive(false)
                 resetPhoneChatOverlayPresentation(chatLayout, phoneChatOverlayHandle)
                 resetPhoneChatOverlayLayout(
@@ -3594,8 +3600,7 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
     protected fun setPipActions(playing: Boolean, autoEnterEnabled: Boolean? = null) {
         pipPlaying = playing
         // The window keeps the shape it was entered with; only a fresh request may change it.
-        val isInPip = isInPictureInPicture()
-        if (!isInPip) pipChatRequested = canShowChatInPictureInPicture()
+        if (!isInPictureInPicture()) pipChatRequested = canShowChatInPictureInPicture()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             requireActivity().packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE) &&
             requireContext().prefs().getBoolean(C.PLAYER_PICTURE_IN_PICTURE, true)
@@ -3639,30 +3644,26 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                         )
                     }
                 ))
-                if (!isInPip || pipAspectRatio == null || pipSourceRectHint == null) {
-                    if (binding.playerLayout.width > 0 && binding.playerLayout.height > 0) {
-                        val aspectRatio = binding.playerLayout.width.toFloat() / binding.playerLayout.height
-                        val sourceRect = Rect()
-                        if (pipChatRequested) {
-                            pipAspectRatio = PIP_CHAT_ASPECT_RATIO
-                            // The window is video plus chat, so hint the matching slice from the top.
-                            if (binding.slidingLayout.getGlobalVisibleRect(sourceRect) && sourceRect.width() > 0) {
-                                val height = (sourceRect.width() * PIP_CHAT_ASPECT_RATIO.denominator / PIP_CHAT_ASPECT_RATIO.numerator)
-                                sourceRect.bottom = minOf(sourceRect.bottom, sourceRect.top + height)
-                                if (sourceRect.height() > 0) pipSourceRectHint = Rect(sourceRect)
-                            }
-                        } else {
-                            if (aspectRatio in 0.42f..2.39f) {
-                                pipAspectRatio = Rational(binding.playerLayout.width, binding.playerLayout.height)
-                            }
-                            if (binding.playerLayout.getGlobalVisibleRect(sourceRect) && sourceRect.width() > 0 && sourceRect.height() > 0) {
-                                pipSourceRectHint = Rect(sourceRect)
-                            }
+                if (binding.playerLayout.width > 0 && binding.playerLayout.height > 0) {
+                    val aspectRatio = binding.playerLayout.width.toFloat() / binding.playerLayout.height
+                    val sourceRect = Rect()
+                    if (pipChatRequested) {
+                        setAspectRatio(PIP_CHAT_ASPECT_RATIO)
+                        // The window is video plus chat, so hint the matching slice from the top.
+                        if (binding.slidingLayout.getGlobalVisibleRect(sourceRect) && sourceRect.width() > 0) {
+                            val height = (sourceRect.width() * PIP_CHAT_ASPECT_RATIO.denominator / PIP_CHAT_ASPECT_RATIO.numerator)
+                            sourceRect.bottom = minOf(sourceRect.bottom, sourceRect.top + height)
+                            if (sourceRect.height() > 0) setSourceRectHint(sourceRect)
+                        }
+                    } else {
+                        if (aspectRatio in 0.42f..2.39f) {
+                            setAspectRatio(Rational(binding.playerLayout.width, binding.playerLayout.height))
+                        }
+                        if (binding.playerLayout.getGlobalVisibleRect(sourceRect) && sourceRect.width() > 0 && sourceRect.height() > 0) {
+                            setSourceRectHint(sourceRect)
                         }
                     }
                 }
-                pipAspectRatio?.let(::setAspectRatio)
-                pipSourceRectHint?.let(::setSourceRectHint)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     setAutoEnterEnabled(autoEnterEnabled ?: (playing && canEnterPictureInPicture()))
                 }
@@ -4987,23 +4988,18 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
         }
         with(binding) {
             if (isInPictureInPictureMode) {
-                // PiP can be requested during the minimize/maximize animation. Stop it
-                // before normalizing the player or its end frame can shrink the video
-                // inside the system-sized PiP window.
-                slidingLayout.animate().cancel()
                 if (!isMaximized) {
                     isMaximized = true
                     requireActivity().onBackPressedDispatcher.addCallback(viewLifecycleOwner, backPressedCallback)
                     if (videoType == STREAM && chatFragment?.emoteMenuIsVisible() == true) {
                         chatFragment?.toggleBackPressedCallback(true)
                     }
+                    slidingLayout.translationX = 0f
+                    slidingLayout.translationY = 0f
+                    slidingLayout.scaleX = 1f
+                    slidingLayout.scaleY = 1f
+                    syncDismissButton()
                 }
-                slidingLayout.translationX = 0f
-                slidingLayout.translationY = 0f
-                slidingLayout.scaleX = 1f
-                slidingLayout.scaleY = 1f
-                enableBackground()
-                syncDismissButton()
                 applyPictureInPictureChat()
                 useController = false
                 hideController(force = true)
@@ -5114,7 +5110,6 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                                 setListener(null)
                                 if (view != null) {
                                     syncDismissButton()
-                                    refreshPipParams()
                                 }
                                 activePointerId = -1
                             }
@@ -5124,6 +5119,7 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                 }
             }
             if (isPortrait) {
+                showStatusBar()
                 setChatLayoutVisibility(View.GONE)
                 slidingLayout.doOnLayout {
                     animate()
@@ -5159,6 +5155,7 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
             }
             refreshPlayerHudLayout()
             if (isPortrait) {
+                hideStatusBar()
                 setChatLayoutVisibility(View.VISIBLE)
             } else {
                 hideStatusBar()
@@ -5185,7 +5182,6 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                             if (view != null) {
                                 enableBackground()
                                 syncDismissButton()
-                                refreshPipParams()
                             }
                             activePointerId = -1
                         }
