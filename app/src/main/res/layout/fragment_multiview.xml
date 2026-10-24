@@ -99,6 +99,16 @@
                 android:src="@drawable/ic_seek_to_live" />
 
             <ImageButton
+                android:id="@+id/fillButton"
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/multiview_fill"
+                android:padding="14dp"
+                android:src="@drawable/baseline_aspect_ratio_black_24"
+                app:tint="@android:color/white" />
+
+            <ImageButton
                 android:id="@+id/addStreamButton"
                 android:layout_width="56dp"
                 android:layout_height="56dp"
