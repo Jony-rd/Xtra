@@ -43,6 +43,7 @@ import com.github.andreyasadchy.xtra.ui.multiview.ui.AddMultiviewStreamsSheet
 import com.github.andreyasadchy.xtra.ui.multiview.ui.MultiviewLayoutManager
 import com.github.andreyasadchy.xtra.ui.multiview.ui.MultiviewLayoutMode
 import com.github.andreyasadchy.xtra.ui.multiview.ui.MultiviewSlotView
+import com.github.andreyasadchy.xtra.ui.player.SleepTimerDialog
 import com.github.andreyasadchy.xtra.ui.player.PlayerSwipeBrightnessViewModel
 import com.github.andreyasadchy.xtra.ui.player.PlayerSwipeGestureController
 import com.github.andreyasadchy.xtra.util.C
@@ -130,7 +131,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         binding.orientationButton.setOnClickListener { toggleMultiviewOrientation() }
         binding.addStreamButton.setOnClickListener { showAddStreamSheet() }
         binding.chatButton.setOnClickListener { toggleChat() }
-        binding.layoutButton.setOnClickListener { showLayoutMenu() }
+        binding.layoutButton.setOnClickListener { toggleLayoutMode() }
+        binding.fillButton.setOnClickListener { viewModel.setFillVideo(!latestState.fillVideo) }
         binding.moreButton.setOnClickListener { showMoreMenu(binding.moreButton) }
         binding.pipButton.setOnClickListener { (activity as? MainActivity)?.minimizeMultiview() }
         binding.seekToLiveButton.setOnClickListener { seekAllToLive() }
@@ -230,6 +232,14 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         if (_binding != null) {
+            requireActivity().findViewById<View>(R.id.navBarContainer)?.visibility = View.GONE
+            enterImmersiveMode()
+            binding.root.post {
+                if (_binding != null) {
+                    requireActivity().findViewById<View>(R.id.navBarContainer)?.visibility = View.GONE
+                    enterImmersiveMode()
+                }
+            }
             updateOrientationLayout()
             render()
         }
@@ -396,6 +406,12 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         } else {
             ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         }
+        binding.root.postDelayed({
+            if (_binding != null) {
+                requireActivity().findViewById<View>(R.id.navBarContainer)?.visibility = View.GONE
+                enterImmersiveMode()
+            }
+        }, 150)
     }
 
     private fun createSlotView(identity: String): MultiviewSlotView {
@@ -559,6 +575,13 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             !(Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && requireActivity().isInPictureInPictureMode)
         binding.chatButton.isVisible = !requireContext().prefs().getBoolean(C.CHAT_DISABLE, false) && active != null
         binding.seekToLiveButton.isVisible = state.streams.isNotEmpty()
+        binding.fillButton.setImageResource(
+            if (state.fillVideo) R.drawable.baseline_fullscreen_exit_black_24
+            else R.drawable.baseline_aspect_ratio_black_24
+        )
+        binding.fillButton.contentDescription = getString(
+            if (state.fillVideo) R.string.multiview_fit else R.string.multiview_fill
+        )
         binding.chatContainer.isVisible = state.chatVisible || specialTwoStreamChat
         val identity = state.chatIdentity ?: state.activeIdentity
         binding.chatTitle.text =
@@ -660,6 +683,28 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             .show(childFragmentManager, AddMultiviewStreamsSheet.TAG)
     }
 
+    private fun toggleLayoutMode() {
+        val state = latestState
+        val isPortrait = resources.configuration.orientation != Configuration.ORIENTATION_LANDSCAPE
+        val newMode = if (state.layoutMode == MultiviewLayoutMode.FOCUS) {
+            MultiviewLayoutMode.AUTO
+        } else {
+            MultiviewLayoutMode.FOCUS
+        }
+        if (newMode == MultiviewLayoutMode.FOCUS && state.focusedIdentity == null) {
+            viewModel.setFocus(state.activeIdentity ?: state.identities.firstOrNull())
+        }
+        viewModel.setLayoutMode(newMode)
+
+        if (isPortrait) {
+            if (newMode == MultiviewLayoutMode.AUTO && state.streams.size >= 4) {
+                if (chatVisible) toggleChat()
+            } else if (newMode == MultiviewLayoutMode.FOCUS) {
+                if (!chatVisible) toggleChat()
+            }
+        }
+    }
+
     private fun showLayoutMenu() {
         revealControls()
         lockControls()
@@ -688,8 +733,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 showQualityModeMenu()
                 true
             }
-            menu.add(if (latestState.fillVideo) R.string.multiview_fit else R.string.multiview_fill).setOnMenuItemClickListener {
-                viewModel.setFillVideo(!latestState.fillVideo)
+            menu.add(R.string.sleep_timer).setOnMenuItemClickListener {
+                SleepTimerDialog.newInstance((activity as? MainActivity)?.getSleepTimerTimeLeft() ?: 0)
+                    .show(childFragmentManager, null)
                 true
             }
             menu.add(R.string.multiview_reorder).setOnMenuItemClickListener {
