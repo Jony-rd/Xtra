@@ -1,5 +1,7 @@
 package com.github.andreyasadchy.xtra.ui.multiview
+import com.github.andreyasadchy.xtra.ui.multiview.ui.MultiviewLayoutPlan
 
+import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
@@ -10,21 +12,25 @@ import android.view.Gravity
 import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
-import android.widget.GridLayout
+import android.view.WindowManager
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.Toast
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.doOnLayout
 import androidx.core.view.isVisible
 import androidx.core.view.updatePadding
 import androidx.fragment.app.Fragment
-import androidx.fragment.app.viewModels
+import androidx.fragment.app.activityViewModels
 import androidx.activity.OnBackPressedCallback
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import androidx.media3.ui.AspectRatioFrameLayout
 import com.github.andreyasadchy.xtra.R
 import com.github.andreyasadchy.xtra.databinding.FragmentMultiviewBinding
 import com.github.andreyasadchy.xtra.databinding.PlayerVolumeBinding
@@ -37,17 +43,20 @@ import com.github.andreyasadchy.xtra.ui.multiview.ui.AddMultiviewStreamsSheet
 import com.github.andreyasadchy.xtra.ui.multiview.ui.MultiviewLayoutManager
 import com.github.andreyasadchy.xtra.ui.multiview.ui.MultiviewLayoutMode
 import com.github.andreyasadchy.xtra.ui.multiview.ui.MultiviewSlotView
+import com.github.andreyasadchy.xtra.ui.player.PlayerSwipeBrightnessViewModel
+import com.github.andreyasadchy.xtra.ui.player.PlayerSwipeGestureController
 import com.github.andreyasadchy.xtra.util.C
 import com.github.andreyasadchy.xtra.util.prefs
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.slider.Slider
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     private var _binding: FragmentMultiviewBinding? = null
     private val binding get() = _binding!!
-    private val viewModel: MultiviewViewModel by viewModels { MultiviewViewModel.MultiviewViewModelFactory }
+    private val viewModel: MultiviewViewModel by activityViewModels { MultiviewViewModel.MultiviewViewModelFactory }
     private val slotViews = linkedMapOf<String, MultiviewSlotView>()
     private val controlsHandler = Handler(Looper.getMainLooper())
     private val hideControls = Runnable {
@@ -62,6 +71,21 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     private var previousNavBarVisibility = View.VISIBLE
     private var controlsLockCount = 0
     private var suppressBackgroundOnNextStop = false
+    private var previousCutoutMode: Int? = null
+    private var lastImeBottom = 0
+    private var lastRootWidth = 0
+    private var lastRootHeight = 0
+
+    // Brightness/volume swipe, main stream only. Same shared settings and
+    // brightness state as the single-stream player (activityViewModels).
+    private val swipeBrightnessViewModel: PlayerSwipeBrightnessViewModel by activityViewModels()
+    private var swipeGestureController: PlayerSwipeGestureController? = null
+    private var swipeControllerIdentity: String? = null
+
+    // Toolbar buttons meant to hold your own artwork: full button = full
+    // image, no padding. Add a button's id here to make it swap-only too.
+    private val CUSTOM_ICON_BUTTON_IDS = setOf(R.id.seekToLiveButton, R.id.orientationButton)
+    private var previousRequestedOrientation: Int? = null
 
     private val bindingOrNull: FragmentMultiviewBinding?
         get() = _binding
@@ -75,23 +99,45 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             navBar.visibility = View.GONE
         }
 
+                // Full-immersive multiview: never pad for system bars or the display
+        // cutout — the streams own the whole screen. Only the IME may push
+        // content up so the chat input stays visible while typing.
         ViewCompat.setOnApplyWindowInsetsListener(binding.multiviewRoot) { root, insets ->
-            val bars = insets.getInsets(
-                androidx.core.view.WindowInsetsCompat.Type.systemBars() or
-                    androidx.core.view.WindowInsetsCompat.Type.displayCutout() or
-                    androidx.core.view.WindowInsetsCompat.Type.ime(),
-            )
-            root.updatePadding(top = bars.top, bottom = bars.bottom, left = 0, right = 0)
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            root.updatePadding(top = 0, bottom = ime.bottom, left = 0, right = 0)
+            if (ime.bottom != lastImeBottom) {
+                lastImeBottom = ime.bottom
+                root.post { if (_binding != null) updateOrientationLayout() }
+            }
             insets
         }
 
+        // Portrait heights depend on the real screen width/height, so redo the
+        // sizing whenever the root actually changes size (rotation, split screen).
+        binding.multiviewRoot.addOnLayoutChangeListener { v, left, top, right, bottom, _, _, _, _ ->
+            val width = right - left
+            val height = bottom - top
+            if (width != lastRootWidth || height != lastRootHeight) {
+                lastRootWidth = width
+                lastRootHeight = height
+                v.post { if (_binding != null) updateOrientationLayout() }
+            }
+        }
+
+                enterImmersiveMode()
+
         binding.backButton.setOnClickListener { requireActivity().onBackPressedDispatcher.onBackPressed() }
+        binding.orientationButton.setOnClickListener { toggleMultiviewOrientation() }
         binding.addStreamButton.setOnClickListener { showAddStreamSheet() }
         binding.chatButton.setOnClickListener { toggleChat() }
-        binding.combinedChatButton.setOnClickListener { toggleCombinedChat() }
         binding.layoutButton.setOnClickListener { showLayoutMenu() }
         binding.moreButton.setOnClickListener { showMoreMenu(binding.moreButton) }
         binding.pipButton.setOnClickListener { (activity as? MainActivity)?.minimizeMultiview() }
+        binding.seekToLiveButton.setOnClickListener { seekAllToLive() }
+        binding.chatHeader.apply {
+            minimumHeight = dp(CHAT_HEADER_DP)
+            updatePadding(top = 0, bottom = 0)
+        }
 
         childFragmentManager.setFragmentResultListener(
             AddMultiviewStreamsSheet.RESULT_KEY,
@@ -107,8 +153,22 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
         val initialStream = requireArguments().parcelable<Stream>(ARG_STREAM)
         viewModel.initialize(initialStream)
+        // The multiview ViewModel is activity-scoped so playback can survive
+        // navigation away from this screen. If multiview is opened again with
+        // a different initial stream, add that stream to the preserved session
+        // instead of losing the new selection.
+        initialStream?.let { stream ->
+            val identity = MultiviewSessionReducer.stableIdentity(stream)
+            if (identity != null && viewModel.state.value.streams.none {
+                    MultiviewSessionReducer.stableIdentity(it).equals(identity, true)
+                }
+            ) {
+                viewModel.addStreams(listOf(stream))
+            }
+        }
         viewModel.startRaidMonitoring()
         updateOrientationLayout()
+        binding.multiviewRoot.doOnLayout { updateOrientationLayout() }
         revealControls()
 
         viewLifecycleOwner.lifecycleScope.launch {
@@ -147,11 +207,13 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     override fun onStart() {
         super.onStart()
         if ((activity as? MainActivity)?.playerFragment != null) return
+        enterImmersiveMode()
         (activity as? MainActivity)?.prepareMultiviewPictureInPicture()
         viewModel.onStart()
     }
 
     override fun onStop() {
+        exitImmersiveMode()
         if ((activity as? MainActivity)?.playerFragment != null) {
             suppressBackgroundOnNextStop = false
             super.onStop()
@@ -173,8 +235,52 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         }
     }
 
+    private fun enterImmersiveMode() {
+        val mainActivity = activity as? MainActivity ?: return
+        val window = mainActivity.window
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            if (previousCutoutMode == null) {
+                previousCutoutMode = window.attributes.layoutInDisplayCutoutMode
+            }
+            // SHORT_EDGES lets content render into the camera cutout area,
+            // which removes the black bar beside the camera in landscape.
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
+        }
+        // Re-dispatch insets so the activity clears the navHostFragment
+        // cutout margins while multiview is open.
+        window.decorView.requestApplyInsets()
+    }
+
+    private fun exitImmersiveMode() {
+        val mainActivity = activity ?: return
+        val window = mainActivity.window
+        WindowCompat.getInsetsController(window, window.decorView)
+            .show(WindowInsetsCompat.Type.systemBars())
+        val cutoutMode = previousCutoutMode
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && cutoutMode != null) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode = cutoutMode
+            }
+            previousCutoutMode = null
+        }
+        window.decorView.requestApplyInsets()
+    }
+
     override fun onDestroyView() {
         viewModel.stopRaidMonitoring()
+        swipeGestureController?.release(restoreBrightness = true)
+        swipeGestureController = null
+        swipeControllerIdentity = null
+        previousRequestedOrientation?.let { requireActivity().requestedOrientation = it }
+        previousRequestedOrientation = null
         controlsHandler.removeCallbacks(hideControls)
         controlsLockCount = 0
         slotViews.forEach { (identity, slotView) ->
@@ -189,6 +295,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         renderedLayoutKey = null
         (activity as? MainActivity)?.clearMultiviewPictureInPicture()
         requireActivity().findViewById<View>(R.id.navBarContainer)?.visibility = previousNavBarVisibility
+        exitImmersiveMode()
         _binding = null
         super.onDestroyView()
     }
@@ -219,6 +326,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 fillVideo = state.fillVideo,
             )
         }
+        updateMainStreamSwipeControls(state)
 
         viewModel.playbackCoordinator.sync(
             streams = state.streams,
@@ -232,20 +340,78 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         updateOrientationLayout()
         updateToolbar(state)
         updateChat(state)
-        binding.multiviewContent.doOnLayout { renderTileBounds() }
+        binding.videoGrid.doOnLayout { renderTileBounds() }
+    }
+
+    /**
+     * Attaches brightness/volume swipe to whichever stream currently counts as
+     * "main" (focused, else audio-active, else the first stream) and detaches
+     * it from anywhere else. Skips the work entirely when the main stream
+     * hasn't changed, so this is safe to call on every render().
+     */
+    private fun updateMainStreamSwipeControls(state: MultiviewSessionState) {
+        val primary = (state.focusedIdentity ?: state.activeIdentity ?: state.identities.firstOrNull())
+            ?.takeIf(state.identities::contains)
+            ?: state.identities.firstOrNull()
+
+        if (primary == swipeControllerIdentity && slotViews[primary]?.swipeController === swipeGestureController) {
+            return
+        }
+
+        swipeControllerIdentity?.let { previous -> slotViews[previous]?.swipeController = null }
+        swipeGestureController?.release(restoreBrightness = true)
+        swipeGestureController = null
+        swipeControllerIdentity = null
+
+        val targetSlot = primary?.let(slotViews::get) ?: return
+        val controller = PlayerSwipeGestureController(
+            context = requireContext(),
+            window = requireActivity().window,
+            brightness = swipeBrightnessViewModel,
+            host = targetSlot,
+            getSpeed = { null },
+            setSpeed = { },
+        )
+        targetSlot.swipeController = controller
+        swipeGestureController = controller
+        swipeControllerIdentity = primary
+    }
+
+    /**
+     * Forces multiview into whichever orientation it isn't currently in, ignoring
+     * the phone's own rotation-lock setting (same thing video apps do). Uses the
+     * "sensor" variants so the phone can still flip between the two landscape
+     * directions (or upright/upside-down portrait) once forced into that plane.
+     * Whatever the orientation was before the first tap is restored when you leave
+     * multiview, so the rest of the app goes back to normal.
+     */
+    private fun toggleMultiviewOrientation() {
+        val activity = requireActivity()
+        if (previousRequestedOrientation == null) {
+            previousRequestedOrientation = activity.requestedOrientation
+        }
+        val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        activity.requestedOrientation = if (landscape) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        }
     }
 
     private fun createSlotView(identity: String): MultiviewSlotView {
         return MultiviewSlotView(requireContext()).apply {
             onTap = {
                 viewModel.setActive(identity)
-                if (latestState.chatVisible && !latestState.combinedChat) {
-                    viewModel.setChat(true, combined = false, identity = identity)
+                if (!latestState.combinedChat && (latestState.chatVisible || isTwoStreamLandscapeChatOff())) {
+                    // keep the toggle as it is (on or off), only switch whose chat is shown
+                    viewModel.setChat(latestState.chatVisible, combined = false, identity = identity)
                 }
                 revealControls(this)
             }
             onDoubleTap = {
-                viewModel.setFocus(if (latestState.focusedIdentity.equals(identity, true)) null else identity)
+                val unfocus = latestState.focusedIdentity.equals(identity, true)
+                viewModel.setFocus(if (unfocus) null else identity)
+                if (!unfocus) followChatInTwoStreamLandscape(identity)
                 revealControls(this)
             }
             onLongPress = {
@@ -264,6 +430,11 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         }
     }
 
+    private var latestLayoutPlan: MultiviewLayoutPlan = MultiviewLayoutPlan(
+        placements = emptyList(),
+        portraitHeightWidthRatio = 9f / 16f,
+    )
+
     private fun applyLayout(state: MultiviewSessionState) {
         val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         val plan = MultiviewLayoutManager.plan(
@@ -272,83 +443,140 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             mode = state.layoutMode,
             focusedIdentity = state.focusedIdentity,
             landscape = landscape,
+            chatVisible = state.chatVisible,
         )
-        val layoutKey = "${plan.rowCount}:${plan.columnCount}:" + plan.placements.joinToString("|") {
-            "${it.identity}:${it.row},${it.column},${it.rowSpan},${it.columnSpan}"
+        latestLayoutPlan = plan
+
+        val layoutKey = plan.placements.joinToString("|") {
+            "${it.identity}:${it.left},${it.top},${it.right},${it.bottom}"
         }
         if (layoutKey == renderedLayoutKey && binding.videoGrid.childCount == plan.placements.size) {
             renderTileBounds()
             return
         }
+
         renderedLayoutKey = layoutKey
         binding.videoGrid.removeAllViews()
-        binding.videoGrid.rowCount = plan.rowCount.coerceAtLeast(1)
-        binding.videoGrid.columnCount = plan.columnCount.coerceAtLeast(1)
+
         plan.placements.forEach { placement ->
             val slotView = slotViews[placement.identity] ?: return@forEach
-            val params = GridLayout.LayoutParams(
-                // Weight the full span, not just its first cell. This keeps
-                // asymmetric and focused tiles edge-to-edge when they span
-                // more than one row or column.
-                GridLayout.spec(placement.row, placement.rowSpan, placement.rowSpan.toFloat()),
-                GridLayout.spec(placement.column, placement.columnSpan, placement.columnSpan.toFloat()),
-            ).apply {
-                width = 0
-                height = 0
-                setMargins(dp(1), dp(1), dp(1), dp(1))
-            }
-            binding.videoGrid.addView(slotView, params)
+            binding.videoGrid.addView(
+                slotView,
+                FrameLayout.LayoutParams(0, 0),
+            )
             slotView.doOnLayout {
                 viewModel.playbackCoordinator.attach(placement.identity, slotView.playerView)
-                viewModel.playbackCoordinator.updateTileBounds(placement.identity, slotView.width, slotView.height)
+                viewModel.playbackCoordinator.updateTileBounds(
+                    placement.identity,
+                    slotView.width,
+                    slotView.height,
+                )
+            }
+        }
+
+        binding.videoGrid.doOnLayout { renderTileBounds() }
+    }
+
+    private fun renderTileBounds() {
+        val parentWidth = binding.videoGrid.width
+        val parentHeight = binding.videoGrid.height
+        if (parentWidth <= 0 || parentHeight <= 0) return
+
+        val specialTwoStream = isTwoStreamLandscapeChatOff()
+        val firstIdentity = latestLayoutPlan.placements.firstOrNull()?.identity
+
+        latestLayoutPlan.placements.forEach { placement ->
+            val slotView = slotViews[placement.identity] ?: return@forEach
+
+            val left = (placement.left * parentWidth).roundToInt()
+            val top = (placement.top * parentHeight).roundToInt()
+            val right = (placement.right * parentWidth).roundToInt()
+            var bottom = (placement.bottom * parentHeight).roundToInt()
+            if (specialTwoStream && placement.identity != firstIdentity) {
+                // 2 streams, landscape, chat off: the small stream is exactly as tall
+                // as 16:9 needs, flush top-right. Chat takes everything under it.
+                bottom = top + specialSecondTileHeight(right - left, parentHeight)
+            }
+
+            val width = (right - left).coerceAtLeast(1)
+            val height = (bottom - top).coerceAtLeast(1)
+
+            val current = slotView.layoutParams as? FrameLayout.LayoutParams
+            if (current == null ||
+                current.width != width ||
+                current.height != height ||
+                current.leftMargin != left ||
+                current.topMargin != top
+            ) {
+                slotView.layoutParams = FrameLayout.LayoutParams(width, height).apply {
+                    leftMargin = left
+                    topMargin = top
+                }
+            }
+
+            if (slotView.width > 0 && slotView.height > 0) {
+                viewModel.playbackCoordinator.updateTileBounds(
+                    placement.identity,
+                    slotView.width,
+                    slotView.height,
+                )
             }
         }
     }
 
-    private fun renderTileBounds() {
-        slotViews.forEach { (identity, view) ->
-            if (view.width > 0 && view.height > 0) {
-                viewModel.playbackCoordinator.updateTileBounds(identity, view.width, view.height)
+    private fun isTwoStreamLandscapeChatOff(state: MultiviewSessionState = latestState): Boolean {
+        return resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE &&
+            !state.chatVisible &&
+            state.streams.size == 2
+    }
+
+    /** 2 streams, landscape, chat toggle off: chat still shows, so keep it on the stream the user picked. */
+    private fun followChatInTwoStreamLandscape(identity: String) {
+        if (isTwoStreamLandscapeChatOff() && !latestState.combinedChat) {
+            viewModel.setChat(false, combined = false, identity = identity)
+        }
+    }
+
+    private fun seekAllToLive() {
+        latestState.identities.forEach { identity ->
+            viewModel.playbackCoordinator.player(identity)?.let { player ->
+                if (player.isCurrentMediaItemLive || player.isCurrentMediaItemDynamic) {
+                    player.seekToDefaultPosition()
+                }
             }
         }
+        revealControls()
     }
 
     private fun updateToolbar(state: MultiviewSessionState) {
         val active = state.streams.firstOrNull { stream ->
             MultiviewSessionReducer.stableIdentity(stream).equals(state.activeIdentity, true)
         }
-        val audible = state.streams.filter { stream ->
-            MultiviewSessionReducer.stableIdentity(stream)?.let(viewModel::audioVolume)?.let { it > 0f } == true
-        }
-        binding.activeAudio.isVisible = audible.isNotEmpty()
-        binding.activeAudio.text = when {
-            audible.size == 1 -> getString(R.string.multiview_audio, displayName(audible.first()))
-            audible.size > 1 -> getString(R.string.multiview_audio_multiple, audible.size)
-            else -> null
-        }
+        val specialTwoStreamChat = isTwoStreamLandscapeChatOff(state)
+
         binding.addStreamButton.isVisible = state.streams.size < MAX_STREAMS
         binding.pipButton.isVisible = (activity as? MainActivity)?.canMinimizeMultiview() == true &&
             !(Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && requireActivity().isInPictureInPictureMode)
         binding.chatButton.isVisible = !requireContext().prefs().getBoolean(C.CHAT_DISABLE, false) && active != null
-        binding.chatContainer.isVisible = state.chatVisible
-        binding.combinedChatButton.isVisible = state.chatVisible && state.streams.size > 1
-        binding.chatTitle.text = if (state.combinedChat) {
-            getString(R.string.multiview_all_chats)
-        } else {
-            state.chatIdentity?.let { identity ->
-                state.streams.firstOrNull { MultiviewSessionReducer.stableIdentity(it).equals(identity, true) }
+        binding.seekToLiveButton.isVisible = state.streams.isNotEmpty()
+        binding.chatContainer.isVisible = state.chatVisible || specialTwoStreamChat
+        val identity = state.chatIdentity ?: state.activeIdentity
+        binding.chatTitle.text =
+            identity?.let { chatIdentity ->
+                state.streams.firstOrNull {
+                    MultiviewSessionReducer.stableIdentity(it).equals(chatIdentity, true)
+                }
             }?.let(::displayName) ?: getString(R.string.multiview_chat)
-        }
         binding.chatButton.contentDescription = getString(
             if (state.chatVisible) R.string.multiview_hide_chat else R.string.multiview_chat,
-        )
-        binding.combinedChatButton.contentDescription = getString(
-            if (state.combinedChat) R.string.multiview_channel_chat else R.string.multiview_all_chats,
         )
     }
 
     private fun updateChat(state: MultiviewSessionState) {
-        if (!state.chatVisible) {
+        val specialTwoStreamChat = isTwoStreamLandscapeChatOff(state)
+        val showChat = state.chatVisible || specialTwoStreamChat
+
+        if (!showChat) {
             if (renderedChatKey == null && childFragmentManager.fragments.none { it.id == R.id.chatContent }) {
                 return
             }
@@ -363,29 +591,21 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             }.commit()
             return
         }
-        val singleStream = if (!state.combinedChat) {
-            state.streams.firstOrNull {
-                MultiviewSessionReducer.stableIdentity(it).equals(state.chatIdentity, true)
-            } ?: run {
-                renderedChatKey = null
-                return
-            }
-        } else {
-            null
+
+        val chatIdentity = state.chatIdentity ?: state.activeIdentity
+        val singleStream = state.streams.firstOrNull {
+            MultiviewSessionReducer.stableIdentity(it).equals(chatIdentity, true)
+        } ?: run {
+            renderedChatKey = null
+            return
         }
-        val key = if (state.combinedChat) {
-            "all:${state.identities.joinToString(",")}"
-        } else {
-            "single:${state.chatIdentity}"
-        }
+
+        val key = "single:$chatIdentity"
         if (key == renderedChatKey) return
         renderedChatKey = key
+
         val transaction = childFragmentManager.beginTransaction()
-        val targetTag = if (state.combinedChat) {
-            COMBINED_CHAT_TAG
-        } else {
-            "$SINGLE_CHAT_TAG${state.chatIdentity}"
-        }
+        val targetTag = "$SINGLE_CHAT_TAG$chatIdentity"
         val existingTarget = childFragmentManager.findFragmentByTag(targetTag)
         childFragmentManager.fragments
             .filter { it.id == R.id.chatContent }
@@ -394,23 +614,18 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 releaseChatFragment(fragment)
                 transaction.remove(fragment)
             }
-        if (state.combinedChat) {
-            val tag = COMBINED_CHAT_TAG
-            val fragment = childFragmentManager.findFragmentByTag(tag)
-            if (fragment is CombinedChatFragment) fragment.updateStreams(state.streams)
-            val target = fragment ?: CombinedChatFragment.newInstance(state.streams).also {
+
+        val tag = targetTag
+        val fragment = existingTarget
+            ?: ChatFragment.newInstance(
+                singleStream.channelId,
+                singleStream.channelLogin,
+                displayName(singleStream),
+                singleStream.id,
+            ).also {
                 transaction.add(R.id.chatContent, it, tag)
             }
-            transaction.show(target)
-        } else {
-            val stream = singleStream ?: return
-            val tag = targetTag
-            val fragment = existingTarget
-                ?: ChatFragment.newInstance(stream.channelId, stream.channelLogin, displayName(stream), stream.id).also {
-                    transaction.add(R.id.chatContent, it, tag)
-                }
-            transaction.show(fragment)
-        }
+        transaction.show(fragment)
         transaction.commit()
     }
 
@@ -431,15 +646,6 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             viewModel.setChat(true, combined = false, identity = identity)
         }
         revealControls()
-    }
-
-    private fun toggleCombinedChat() {
-        if (latestState.combinedChat) {
-            val identity = latestState.activeIdentity ?: latestState.identities.firstOrNull() ?: return
-            viewModel.setChat(true, combined = false, identity = identity)
-        } else if (latestState.streams.size > 1) {
-            viewModel.setChat(true, combined = true, identity = null)
-        }
     }
 
     private fun showAddStreamSheet() {
@@ -483,7 +689,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 true
             }
             menu.add(if (latestState.fillVideo) R.string.multiview_fit else R.string.multiview_fill).setOnMenuItemClickListener {
-                showAspectMenu()
+                viewModel.setFillVideo(!latestState.fillVideo)
                 true
             }
             menu.add(R.string.multiview_reorder).setOnMenuItemClickListener {
@@ -507,20 +713,6 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             .setTitle(R.string.multiview_quality_mode)
             .setSingleChoiceItems(labels, modes.indexOf(latestState.qualityMode)) { dialog, which ->
                 viewModel.setQualityMode(modes[which])
-                dialog.dismiss()
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .setOnDismissListener { unlockControls() }
-            .show()
-    }
-
-    private fun showAspectMenu() {
-        lockControls()
-        val options = arrayOf(getString(R.string.multiview_fit), getString(R.string.multiview_fill))
-        MaterialAlertDialogBuilder(requireContext())
-            .setTitle(R.string.multiview_aspect)
-            .setSingleChoiceItems(options, if (latestState.fillVideo) 1 else 0) { dialog, which ->
-                viewModel.setFillVideo(which == 1)
                 dialog.dismiss()
             }
             .setNegativeButton(android.R.string.cancel, null)
@@ -582,7 +774,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 if (latestState.focusedIdentity.equals(identity, true)) R.string.multiview_unfocus
                 else R.string.multiview_focus,
             ).setOnMenuItemClickListener {
-                viewModel.setFocus(if (latestState.focusedIdentity.equals(identity, true)) null else identity)
+                val unfocus = latestState.focusedIdentity.equals(identity, true)
+                viewModel.setFocus(if (unfocus) null else identity)
+                if (!unfocus) followChatInTwoStreamLandscape(identity)
                 true
             }
             menu.add(R.string.multiview_open_player).setOnMenuItemClickListener {
@@ -700,21 +894,16 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
     private fun setControlsOverlayVisible(visible: Boolean) {
         val binding = _binding ?: return
-        binding.controlsOverlay.isVisible = visible
-        if (!visible) {
-            binding.videoGrid.updatePadding(top = 0)
-            binding.multiviewContent.doOnLayout { renderTileBounds() }
-            return
+        if (binding.controlsOverlay.parent === binding.chatHeader) {
+            binding.controlsOverlay.isVisible = true
+        } else {
+            binding.controlsOverlay.isVisible = visible
         }
 
-        // The toolbar is an overlay, while each tile also owns a top info bar.
-        // Reserve the toolbar's measured height so those two rows cannot cover
-        // each other when controls are revealed.
-        binding.controlsOverlay.doOnLayout { controls ->
-            if (_binding == null || !controls.isVisible) return@doOnLayout
-            binding.videoGrid.updatePadding(top = controls.height + dp(16))
-            binding.multiviewContent.doOnLayout { renderTileBounds() }
-        }
+        // The toolbar is an overlay. Do not reserve vertical space for it:
+        // the compact layouts are intentionally edge-to-edge.
+        binding.videoGrid.updatePadding(0, 0, 0, 0)
+        binding.multiviewContent.doOnLayout { renderTileBounds() }
     }
 
     private fun lockControls() {
@@ -727,31 +916,253 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         if (controlsLockCount == 0) revealControls(slot)
     }
 
+    private fun moveControlsToChatHeader() {
+        if (binding.controlsOverlay.parent !== binding.chatHeader) {
+            (binding.controlsOverlay.parent as? ViewGroup)?.removeView(binding.controlsOverlay)
+            binding.chatHeader.addView(
+                binding.controlsOverlay,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    dp(CHAT_HEADER_DP),
+                ).apply {
+                    gravity = Gravity.CENTER_VERTICAL
+                },
+            )
+        }
+
+        binding.controlsOverlay.background = null
+        binding.controlsOverlay.minimumHeight = dp(CHAT_HEADER_DP)
+        setToolbarButtonSize(CHAT_HEADER_DP)
+        binding.controlsOverlay.isVisible = true
+    }
+
+    private fun moveControlsToVideo() {
+        if (binding.controlsOverlay.parent !== binding.multiviewContent) {
+            (binding.controlsOverlay.parent as? ViewGroup)?.removeView(binding.controlsOverlay)
+            binding.multiviewContent.addView(
+                binding.controlsOverlay,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    dp(56),
+                    Gravity.BOTTOM or Gravity.START,
+                ),
+            )
+        }
+
+        binding.controlsOverlay.background =
+            ContextCompat.getDrawable(requireContext(), R.drawable.bg_multiview_toolbar)
+        binding.controlsOverlay.minimumHeight = dp(56)
+        setToolbarButtonSize(56)
+        positionVideoToolbar()
+    }
+
+    private fun positionVideoToolbar() {
+        binding.controlsOverlay.layoutParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            dp(56),
+            Gravity.BOTTOM or Gravity.START,
+        ).apply {
+            setMargins(dp(8), 0, 0, dp(8))
+        }
+    }
+
+    private fun setToolbarButtonSize(sizeDp: Int) {
+        for (index in 0 until binding.controlsOverlay.childCount) {
+            val child = binding.controlsOverlay.getChildAt(index)
+            child.layoutParams = child.layoutParams.apply {
+                width = dp(sizeDp)
+                height = dp(sizeDp)
+            }
+            if (child.id in CUSTOM_ICON_BUTTON_IDS) {
+                // your own artwork: no inset, the whole button is the image
+                child.setPadding(0, 0, 0, 0)
+            } else {
+                val padding = dp(if (sizeDp >= 56) 14 else if (sizeDp >= 40) 10 else 8)
+                child.setPadding(padding, padding, padding, padding)
+            }
+        }
+    }
+
     private fun updateOrientationLayout() {
         val binding = _binding ?: return
         val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        binding.multiviewRoot.orientation = if (landscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
-        (binding.multiviewContent.layoutParams as? LinearLayout.LayoutParams)?.apply {
-            if (landscape) {
-                width = 0
-                height = ViewGroup.LayoutParams.MATCH_PARENT
+        val specialTwoStreamChat = isTwoStreamLandscapeChatOff(latestState)
+
+        fun moveChatToRoot() {
+            if (binding.chatContainer.parent === binding.multiviewRoot) return
+            (binding.chatContainer.parent as? ViewGroup)?.removeView(binding.chatContainer)
+            binding.multiviewRoot.addView(
+                binding.chatContainer,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    0,
+                ),
+            )
+        }
+
+        fun moveChatToSpecialColumn() {
+            if (binding.chatContainer.parent === binding.specialRightColumn) return
+            (binding.chatContainer.parent as? ViewGroup)?.removeView(binding.chatContainer)
+            binding.specialRightColumn.addView(
+                binding.chatContainer,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    0,
+                    Gravity.BOTTOM,
+                ),
+            )
+        }
+
+        if (landscape) {
+            binding.multiviewRoot.orientation = LinearLayout.HORIZONTAL
+
+            if (specialTwoStreamChat) {
+                moveChatToSpecialColumn()
+
+                (binding.multiviewContent.layoutParams as? LinearLayout.LayoutParams)?.apply {
+                    width = ViewGroup.LayoutParams.MATCH_PARENT
+                    height = ViewGroup.LayoutParams.MATCH_PARENT
+                    weight = 0f
+                }?.also { binding.multiviewContent.layoutParams = it }
+
+                binding.chatContainer.isVisible = true
+                binding.specialRightColumn.isVisible = true
+                moveControlsToVideo()
+
+                binding.multiviewContent.doOnLayout {
+                    val totalWidth = binding.multiviewContent.width
+                    val totalHeight = binding.multiviewContent.height
+                    if (totalWidth <= 0 || totalHeight <= 0) return@doOnLayout
+
+                    val rightWidth = (totalWidth * LANDSCAPE_SIDE_WEIGHT).roundToInt()
+
+                    // The video grid still uses the full screen here. Its
+                    // rightmost 20% contains the second stream; the transparent
+                    // special column overlays only the lower half with chat.
+                    binding.videoGrid.layoutParams = FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+
+                    binding.specialRightColumn.layoutParams = FrameLayout.LayoutParams(
+                        rightWidth,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        Gravity.END,
+                    )
+
+                    val secondTileHeight = specialSecondTileHeight(
+                        totalWidth - (LANDSCAPE_MAIN_FRACTION * totalWidth).roundToInt(),
+                        totalHeight,
+                    )
+                    binding.chatContainer.layoutParams = FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        totalHeight - secondTileHeight,
+                        Gravity.BOTTOM,
+                    )
+
+                    positionVideoToolbar()
+                    renderTileBounds()
+                }
             } else {
-                width = ViewGroup.LayoutParams.MATCH_PARENT
-                height = 0
+                moveChatToRoot()
+                binding.specialRightColumn.isVisible = false
+
+                (binding.multiviewContent.layoutParams as? LinearLayout.LayoutParams)?.apply {
+                    if (latestState.chatVisible) {
+                        width = 0
+                        height = ViewGroup.LayoutParams.MATCH_PARENT
+                        weight = 1f
+                    } else {
+                        width = ViewGroup.LayoutParams.MATCH_PARENT
+                        height = ViewGroup.LayoutParams.MATCH_PARENT
+                        weight = 0f
+                    }
+                }?.also { binding.multiviewContent.layoutParams = it }
+
+                (binding.chatContainer.layoutParams as? LinearLayout.LayoutParams)?.apply {
+                    if (latestState.chatVisible) {
+                        width = 0
+                        height = ViewGroup.LayoutParams.MATCH_PARENT
+                        weight = LANDSCAPE_CHAT_WEIGHT
+                    } else {
+                        width = 0
+                        height = 0
+                        weight = 0f
+                    }
+                }?.also { binding.chatContainer.layoutParams = it }
+
+                binding.videoGrid.layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+                moveControlsToVideo()
+                binding.multiviewContent.doOnLayout { renderTileBounds() }
             }
-            weight = 1f
-        }?.also { binding.multiviewContent.layoutParams = it }
-        (binding.chatContainer.layoutParams as? LinearLayout.LayoutParams)?.apply {
-            if (landscape) {
-                width = 0
-                height = ViewGroup.LayoutParams.MATCH_PARENT
-                weight = if (latestState.combinedChat) LANDSCAPE_COMBINED_CHAT_WEIGHT else LANDSCAPE_CHAT_WEIGHT
+        } else {
+            moveChatToRoot()
+            binding.specialRightColumn.isVisible = false
+            binding.multiviewRoot.orientation = LinearLayout.VERTICAL
+
+            // Compact portrait: the video area is only as tall as the streams need
+            // (16:9 tiles, no letterbox). Everything left over goes to chat.
+            val root = binding.multiviewRoot
+            val availableHeight = root.height - root.paddingTop - root.paddingBottom
+            val chatOn = latestState.chatVisible
+            val videoHeight = portraitVideoHeight(root.width, availableHeight, chatOn)
+
+            if (chatOn) {
+                setLinearParams(binding.multiviewContent, ViewGroup.LayoutParams.MATCH_PARENT, videoHeight, 0f)
+                setLinearParams(binding.chatContainer, ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+                setFrameParams(binding.videoGrid, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                moveControlsToChatHeader()
             } else {
-                width = ViewGroup.LayoutParams.MATCH_PARENT
-                height = 0
-                weight = PORTRAIT_CHAT_WEIGHT
+                setLinearParams(binding.multiviewContent, ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+                setLinearParams(binding.chatContainer, ViewGroup.LayoutParams.MATCH_PARENT, 0, 0f)
+                // streams stuck to the very top, nothing above them
+                setFrameParams(binding.videoGrid, ViewGroup.LayoutParams.MATCH_PARENT, videoHeight)
+                moveControlsToVideo()
             }
-        }?.also { binding.chatContainer.layoutParams = it }
+
+            binding.multiviewRoot.doOnLayout {
+                binding.videoGrid.doOnLayout { renderTileBounds() }
+            }
+        }
+    }
+
+    /** Height (px) the portrait video area needs so every tile is a true 16:9. */
+    private fun portraitVideoHeight(width: Int, availableHeight: Int, chatOn: Boolean): Int {
+        if (width <= 0 || availableHeight <= 0) return ViewGroup.LayoutParams.MATCH_PARENT
+        val wanted = (width * latestLayoutPlan.portraitHeightWidthRatio).roundToInt()
+        val maxHeight = if (chatOn) {
+            (availableHeight - dp(PORTRAIT_MIN_CHAT_DP)).coerceAtLeast(availableHeight / 3)
+        } else {
+            availableHeight
+        }
+        return wanted.coerceIn(1, maxHeight.coerceAtLeast(1))
+    }
+
+    /** Height (px) of the small stream in the 2-stream landscape chat-off layout. */
+    private fun specialSecondTileHeight(tileWidth: Int, totalHeight: Int): Int {
+        val wanted = (tileWidth * 9f / 16f).roundToInt()
+        return wanted.coerceIn(1, (totalHeight * 0.6f).roundToInt().coerceAtLeast(1))
+    }
+
+    private fun setLinearParams(view: View, width: Int, height: Int, weight: Float) {
+        val params = view.layoutParams as? LinearLayout.LayoutParams ?: return
+        if (params.width != width || params.height != height || params.weight != weight) {
+            params.width = width
+            params.height = height
+            params.weight = weight
+            view.layoutParams = params
+        }
+    }
+
+    private fun setFrameParams(view: View, width: Int, height: Int) {
+        val gravity = Gravity.TOP or Gravity.START
+        val params = view.layoutParams as? FrameLayout.LayoutParams
+        if (params == null || params.width != width || params.height != height || params.gravity != gravity) {
+            view.layoutParams = FrameLayout.LayoutParams(width, height, gravity)
+        }
     }
 
     private fun displayName(stream: Stream): String {
@@ -782,12 +1193,12 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
     fun pauseForExternalPlayer() {
         suppressBackgroundOnNextStop = true
-        if (_binding != null) viewModel.onStop(allowBackground = false)
+        viewModel.onStop(allowBackground = false)
     }
-
     fun resumeAfterExternalPlayer() {
         suppressBackgroundOnNextStop = false
         if (_binding != null) {
+            enterImmersiveMode()
             (activity as? MainActivity)?.prepareMultiviewPictureInPicture()
             viewModel.onStart()
         }
@@ -812,13 +1223,17 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
     companion object {
         const val ARG_STREAM = "multiview_stream"
-        private const val COMBINED_CHAT_TAG = "multiview_combined_chat"
         private const val SINGLE_CHAT_TAG = "multiview_single_chat_"
         private const val MAX_STREAMS = 4
         private const val CONTROLS_TIMEOUT_MS = 4_500L
-        private const val LANDSCAPE_CHAT_WEIGHT = 0.7f
-        private const val LANDSCAPE_COMBINED_CHAT_WEIGHT = 1.2f
-        private const val PORTRAIT_CHAT_WEIGHT = 0.42f
+        private const val LANDSCAPE_CHAT_WEIGHT = 0.25f
+        private const val LANDSCAPE_SIDE_WEIGHT = 0.20f
+        // Height of the chat header (streamer name, and the toolbar icons in portrait).
+        private const val CHAT_HEADER_DP = 34
+        // Keeps at least this much chat visible in portrait (e.g. with the keyboard open).
+        private const val PORTRAIT_MIN_CHAT_DP = 160
+        // Must match mainRight in MultiviewLayoutManager for 2 streams with chat off.
+        private const val LANDSCAPE_MAIN_FRACTION = 0.80f
 
         fun arguments(stream: Stream): Bundle = Bundle().apply { putParcelable(ARG_STREAM, stream) }
     }
