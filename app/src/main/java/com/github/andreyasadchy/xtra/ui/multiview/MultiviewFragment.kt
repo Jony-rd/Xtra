@@ -698,9 +698,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
         if (isPortrait) {
             if (newMode == MultiviewLayoutMode.AUTO && state.streams.size >= 4) {
-                if (chatVisible) toggleChat()
+                if (state.chatVisible) toggleChat()
             } else if (newMode == MultiviewLayoutMode.FOCUS) {
-                if (!chatVisible) toggleChat()
+                if (!state.chatVisible) toggleChat()
             }
         }
     }
