@@ -47,14 +47,10 @@ object MultiviewLayoutManager {
                 primary = primary,
                 chatVisible = chatVisible,
             )
-        } else if (!chatVisible && ids.size in 3..4 && mode != MultiviewLayoutMode.FOCUS) {
-            // chat's off, nothing sharing the screen, use the full width instead of leaving it empty
-            stackedPortrait(ids)
         } else {
             when (mode) {
                 MultiviewLayoutMode.FOCUS -> focusPortrait(ids, primary)
-                MultiviewLayoutMode.AUTO -> autoPortrait(ids, primary)
-                MultiviewLayoutMode.GRID -> gridPortrait(ids)
+                MultiviewLayoutMode.AUTO, MultiviewLayoutMode.GRID -> stackedPortrait(ids)
             }
         }
     }
