@@ -1,4 +1,6 @@
 package com.github.andreyasadchy.xtra.ui.main
+import androidx.lifecycle.ViewModelProvider
+import com.github.andreyasadchy.xtra.ui.multiview.MultiviewViewModel
 
 import android.Manifest
 import android.app.ActivityOptions
