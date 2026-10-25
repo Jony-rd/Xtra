@@ -2,7 +2,7 @@ name: Build XtraTerrestrial ARM64
 on:
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -10,6 +10,168 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+
+      - name: Apply XtraTerrestrial Complete Fixes
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git apply << 'EOF'
+diff --git a/app/src/main/java/com/github/andreyasadchy/xtra/ui/chat/EmotePickerImageLoader.kt b/app/src/main/java/com/github/andreyasadchy/xtra/ui/chat/EmotePickerImageLoader.kt
+index 9fbd7f4..fe44922 100644
+--- a/app/src/main/java/com/github/andreyasadchy/xtra/ui/chat/EmotePickerImageLoader.kt
++++ b/app/src/main/java/com/github/andreyasadchy/xtra/ui/chat/EmotePickerImageLoader.kt
+@@ -25,15 +25,15 @@ import kotlin.math.roundToInt
+ 
+ /** Shared, bounded image requests for the emote picker and its adapters. */
+ internal object EmotePickerImageLoader {
+-    const val INITIAL_PREFETCH_LIMIT = 64
+-    const val LOOKAHEAD_PREFETCH_LIMIT = 24
+-    private const val PREFETCH_TRACKER_LIMIT = 512
++    const val INITIAL_PREFETCH_LIMIT = 256
++    const val LOOKAHEAD_PREFETCH_LIMIT = 96
++    private const val PREFETCH_TRACKER_LIMIT = 1024
+     /** Prefetches on the wire at once; the rest of the connections stay free for visible cells. */
+-    private const val PREFETCH_CONCURRENCY = 4
+-    private const val PREFETCH_PENDING_LIMIT = 48
++    private const val PREFETCH_CONCURRENCY = 16
++    private const val PREFETCH_PENDING_LIMIT = 256
+     /** Background warming only ever fills idle connections and is capped so it cannot flood the disk cache. */
+-    private const val WARM_PENDING_LIMIT = 320
+-    private const val WARM_CONCURRENCY = 2
++    private const val WARM_PENDING_LIMIT = 640
++    private const val WARM_CONCURRENCY = 12
+     private val RETRY_DELAYS_MS = longArrayOf(1_000L, 3_000L)
+     private const val PREFETCH_TRACKER_TTL_MS = 15_000L
+     private val prefetchedAt = LinkedHashMap<String, Long>(PREFETCH_TRACKER_LIMIT, .75f, true)
+@@ -144,8 +144,6 @@ internal object EmotePickerImageLoader {
+      */
+     fun warm(context: Context, items: Iterable<Emote>, quality: String) {
+         val appContext = context.applicationContext
+-        val connectivity = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+-        if (connectivity == null || connectivity.isActiveNetworkMetered) return
+         val batch = prefetchBatch(appContext, items, quality, WARM_PENDING_LIMIT)
+         if (batch.isEmpty()) return
+         val dropped = ArrayList<String>()
+diff --git a/app/src/main/java/com/github/andreyasadchy/xtra/ui/common/StreamsAdapter.kt b/app/src/main/java/com/github/andreyasadchy/xtra/ui/common/StreamsAdapter.kt
+index 9a5f422..3b9dda8 100644
+--- a/app/src/main/java/com/github/andreyasadchy/xtra/ui/common/StreamsAdapter.kt
++++ b/app/src/main/java/com/github/andreyasadchy/xtra/ui/common/StreamsAdapter.kt
+@@ -542,7 +542,7 @@ class StreamsAdapter(
+ 
+         private fun openMultiview(stream: Stream) {
+             val mainActivity = fragment.activity as? MainActivity
+-            val playingStream = (mainActivity?.playerFragment as? com.github.andreyasadchy.xtra.ui.player.Media3PlayerFragment)?.viewModel?.stream?.value
++            val playingStream = mainActivity?.currentPlayingStream()
+             val streamsToOpen = if (playingStream != null && playingStream.id != stream.id) {
+                 listOf(playingStream, stream)
+             } else {
+diff --git a/app/src/main/java/com/github/andreyasadchy/xtra/ui/common/StreamsCompactAdapter.kt b/app/src/main/java/com/github/andreyasadchy/xtra/ui/common/StreamsCompactAdapter.kt
+index e2ef48d..76698af 100644
+--- a/app/src/main/java/com/github/andreyasadchy/xtra/ui/common/StreamsCompactAdapter.kt
++++ b/app/src/main/java/com/github/andreyasadchy/xtra/ui/common/StreamsCompactAdapter.kt
+@@ -383,7 +383,7 @@ class StreamsCompactAdapter(
+ 
+         private fun openMultiview(stream: Stream) {
+             val mainActivity = fragment.activity as? MainActivity
+-            val playingStream = (mainActivity?.playerFragment as? com.github.andreyasadchy.xtra.ui.player.Media3PlayerFragment)?.viewModel?.stream?.value
++            val playingStream = mainActivity?.currentPlayingStream()
+             val streamsToOpen = if (playingStream != null && playingStream.id != stream.id) {
+                 listOf(playingStream, stream)
+             } else {
+diff --git a/app/src/main/java/com/github/andreyasadchy/xtra/ui/following/streams/StreamsShelfPagingAdapter.kt b/app/src/main/java/com/github/andreyasadchy/xtra/ui/following/streams/StreamsShelfPagingAdapter.kt
+index 2bff83f..d36c237 100644
+--- a/app/src/main/java/com/github/andreyasadchy/xtra/ui/following/streams/StreamsShelfPagingAdapter.kt
++++ b/app/src/main/java/com/github/andreyasadchy/xtra/ui/following/streams/StreamsShelfPagingAdapter.kt
+@@ -338,7 +338,7 @@ class StreamsShelfPagingAdapter(
+ 
+         private fun openMultiview(stream: Stream) {
+             val mainActivity = fragment.activity as? MainActivity
+-            val playingStream = (mainActivity?.playerFragment as? com.github.andreyasadchy.xtra.ui.player.Media3PlayerFragment)?.viewModel?.stream?.value
++            val playingStream = mainActivity?.currentPlayingStream()
+             val streamsToOpen = if (playingStream != null && playingStream.id != stream.id) {
+                 listOf(playingStream, stream)
+             } else {
+diff --git a/app/src/main/java/com/github/andreyasadchy/xtra/ui/main/MainActivity.kt b/app/src/main/java/com/github/andreyasadchy/xtra/ui/main/MainActivity.kt
+index a2db13b..595ceee 100644
+--- a/app/src/main/java/com/github/andreyasadchy/xtra/ui/main/MainActivity.kt
++++ b/app/src/main/java/com/github/andreyasadchy/xtra/ui/main/MainActivity.kt
+@@ -1692,6 +1692,8 @@ class MainActivity : AppCompatActivity() {
+         }
+     }
+ 
++    fun currentPlayingStream(): Stream? = (playerFragment as? Media3PlayerFragment)?.currentStream()
++
+     fun getSleepTimerTimeLeft(): Long {
+         return viewModel.sleepTimerEndTime - System.currentTimeMillis()
+     }
+diff --git a/app/src/main/java/com/github/andreyasadchy/xtra/ui/multiview/ui/MultiviewSlotView.kt b/app/src/main/java/com/github/andreyasadchy/xtra/ui/multiview/ui/MultiviewSlotView.kt
+index e321b1e..0223e5f 100644
+--- a/app/src/main/java/com/github/andreyasadchy/xtra/ui/multiview/ui/MultiviewSlotView.kt
++++ b/app/src/main/java/com/github/andreyasadchy/xtra/ui/multiview/ui/MultiviewSlotView.kt
+@@ -1,6 +1,7 @@
+ package com.github.andreyasadchy.xtra.ui.multiview.ui
+ 
+ import android.annotation.SuppressLint
++import android.os.Build
+ import android.content.Context
+ import android.view.GestureDetector
+ import android.view.LayoutInflater
+@@ -76,6 +77,12 @@ class MultiviewSlotView(context: Context) : FrameLayout(context) {
+     init {
+         isClickable = true
+         isFocusable = true
++        clipChildren = true
++        clipToPadding = true
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
++            clipToOutline = true
++        }
++        binding.playerView.clipToOutline = true
+         setOnClickListener { onTap?.invoke() }
+         installPlayerTouchListener()
+         binding.overflowButton.setOnClickListener { onOverflow?.invoke() }
+diff --git a/app/src/main/java/com/github/andreyasadchy/xtra/ui/player/Media3PlayerFragment.kt b/app/src/main/java/com/github/andreyasadchy/xtra/ui/player/Media3PlayerFragment.kt
+index d4530a3..eea2e2d 100644
+--- a/app/src/main/java/com/github/andreyasadchy/xtra/ui/player/Media3PlayerFragment.kt
++++ b/app/src/main/java/com/github/andreyasadchy/xtra/ui/player/Media3PlayerFragment.kt
+@@ -5436,6 +5436,8 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
+         _binding = null
+     }
+ 
++    fun currentStream(): Stream? = viewModel.stream.value
++
+     companion object {
+         private const val LIVE_DOT_MUTED_TAG = "live_dot_muted"
+         // A 16:9 video takes 56% of this window, leaving the rest for compact chat.
+diff --git a/app/src/main/res/layout/fragment_multiview.xml b/app/src/main/res/layout/fragment_multiview.xml
+index 26d25ea..c150e62 100644
+--- a/app/src/main/res/layout/fragment_multiview.xml
++++ b/app/src/main/res/layout/fragment_multiview.xml
+@@ -16,6 +16,8 @@
+ 
+         <FrameLayout
+             android:id="@+id/videoGrid"
++                android:clipChildren="true"
++                android:clipToPadding="true"
+             android:layout_width="match_parent"
+             android:layout_height="match_parent"
+             android:background="@android:color/black"
+diff --git a/app/src/main/res/layout/multiview_slot.xml b/app/src/main/res/layout/multiview_slot.xml
+index 5dfb756..da2fd65 100644
+--- a/app/src/main/res/layout/multiview_slot.xml
++++ b/app/src/main/res/layout/multiview_slot.xml
+@@ -2,6 +2,8 @@
+ <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+     xmlns:app="http://schemas.android.com/apk/res-auto"
+     android:id="@+id/multiviewSlot"
++    android:clipChildren="true"
++    android:clipToPadding="true"
+     android:layout_width="match_parent"
+     android:layout_height="match_parent"
+     android:background="@android:color/black"
+EOF
+          git commit -am "Apply XtraTerrestrial complete fixes" || true
+          git push origin master || true
       - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
