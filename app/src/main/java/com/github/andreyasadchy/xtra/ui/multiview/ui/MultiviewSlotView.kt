@@ -62,6 +62,7 @@ class MultiviewSlotView(context: Context) : FrameLayout(context) {
     var onLongPress: (() -> Unit)? = null
     var onOverflow: (() -> Unit)? = null
     var onAudioClick: (() -> Unit)? = null
+    var onRemove: (() -> Unit)? = null
     var onRetry: (() -> Unit)? = null
 
     /**
@@ -78,6 +79,7 @@ class MultiviewSlotView(context: Context) : FrameLayout(context) {
         setOnClickListener { onTap?.invoke() }
         installPlayerTouchListener()
         binding.overflowButton.setOnClickListener { onOverflow?.invoke() }
+        binding.removeButton.setOnClickListener { onRemove?.invoke() }
         binding.audioIcon.setOnClickListener { onAudioClick?.invoke() }
         binding.statusMessage.setOnClickListener { onRetry?.invoke() }
         setControlsVisible(false)
@@ -194,6 +196,7 @@ class MultiviewSlotView(context: Context) : FrameLayout(context) {
         binding.infoBar.isVisible = visible
         binding.audioIcon.isVisible = visible && width >= dp(180)
         binding.overflowButton.isVisible = visible
+        binding.removeButton.isVisible = visible
         binding.qualityBadge.isVisible = visible && qualityLabelAvailable && width >= dp(240)
     }
 
