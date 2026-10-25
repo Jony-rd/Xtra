@@ -27,6 +27,7 @@ import androidx.core.view.isVisible
 import androidx.core.view.updatePadding
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
+import androidx.navigation.fragment.findNavController
 import androidx.activity.OnBackPressedCallback
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -127,7 +128,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
                 enterImmersiveMode()
 
-        binding.backButton.setOnClickListener { requireActivity().onBackPressedDispatcher.onBackPressed() }
+        binding.backButton.setOnClickListener { findNavController().popBackStack() }
         binding.orientationButton.setOnClickListener { toggleMultiviewOrientation() }
         binding.addStreamButton.setOnClickListener { showAddStreamSheet() }
         binding.chatButton.setOnClickListener { toggleChat() }
@@ -153,13 +154,11 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             viewLifecycleOwner,
         ) { _, _ -> unlockControls() }
 
+        val initialStreams = requireArguments().parcelableArrayList<Stream>(ARG_STREAMS)
         val initialStream = requireArguments().parcelable<Stream>(ARG_STREAM)
-        viewModel.initialize(initialStream)
-        // The multiview ViewModel is activity-scoped so playback can survive
-        // navigation away from this screen. If multiview is opened again with
-        // a different initial stream, add that stream to the preserved session
-        // instead of losing the new selection.
-        initialStream?.let { stream ->
+        val streamsToInit = if (!initialStreams.isNullOrEmpty()) initialStreams else listOfNotNull(initialStream)
+        viewModel.initialize(streamsToInit.firstOrNull())
+        streamsToInit.forEach { stream ->
             val identity = MultiviewSessionReducer.stableIdentity(stream)
             if (identity != null && viewModel.state.value.streams.none {
                     MultiviewSessionReducer.stableIdentity(it).equals(identity, true)
@@ -442,6 +441,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 viewModel.toggleAudio(identity)
                 revealControls(this)
             }
+            onRemove = {
+                viewModel.remove(identity)
+            }
             onRetry = { viewModel.playbackCoordinator.retry(identity) }
         }
     }
@@ -685,24 +687,23 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
     private fun toggleLayoutMode() {
         val state = latestState
-        val isPortrait = resources.configuration.orientation != Configuration.ORIENTATION_LANDSCAPE
-        val newMode = if (state.layoutMode == MultiviewLayoutMode.FOCUS) {
-            MultiviewLayoutMode.AUTO
-        } else {
-            MultiviewLayoutMode.FOCUS
+        val streamCount = state.streams.size
+        val newMode = when {
+            streamCount >= 4 -> {
+                when (state.layoutMode) {
+                    MultiviewLayoutMode.FOCUS -> MultiviewLayoutMode.TIERED
+                    MultiviewLayoutMode.TIERED -> MultiviewLayoutMode.AUTO
+                    else -> MultiviewLayoutMode.FOCUS
+                }
+            }
+            else -> {
+                if (state.layoutMode == MultiviewLayoutMode.FOCUS) MultiviewLayoutMode.AUTO else MultiviewLayoutMode.FOCUS
+            }
         }
         if (newMode == MultiviewLayoutMode.FOCUS && state.focusedIdentity == null) {
             viewModel.setFocus(state.activeIdentity ?: state.identities.firstOrNull())
         }
         viewModel.setLayoutMode(newMode)
-
-        if (isPortrait) {
-            if (newMode == MultiviewLayoutMode.AUTO && state.streams.size >= 4) {
-                if (state.chatVisible) toggleChat()
-            } else if (newMode == MultiviewLayoutMode.FOCUS) {
-                if (!state.chatVisible) toggleChat()
-            }
-        }
     }
 
     private fun showLayoutMenu() {
@@ -1269,6 +1270,12 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
     companion object {
         const val ARG_STREAM = "multiview_stream"
+        const val ARG_STREAMS = "multiview_streams"
+        fun arguments(stream: Stream): Bundle = Bundle().apply { putParcelable(ARG_STREAM, stream) }
+        fun arguments(streams: List<Stream>): Bundle = Bundle().apply {
+            putParcelableArrayList(ARG_STREAMS, ArrayList(streams))
+            if (streams.isNotEmpty()) putParcelable(ARG_STREAM, streams.first())
+        }
         private const val SINGLE_CHAT_TAG = "multiview_single_chat_"
         private const val MAX_STREAMS = 4
         private const val CONTROLS_TIMEOUT_MS = 4_500L
@@ -1281,7 +1288,6 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         // Must match mainRight in MultiviewLayoutManager for 2 streams with chat off.
         private const val LANDSCAPE_MAIN_FRACTION = 0.80f
 
-        fun arguments(stream: Stream): Bundle = Bundle().apply { putParcelable(ARG_STREAM, stream) }
     }
 }
 
@@ -1289,6 +1295,7 @@ private fun MultiviewLayoutMode.labelRes(): Int = when (this) {
     MultiviewLayoutMode.AUTO -> R.string.multiview_layout_auto
     MultiviewLayoutMode.GRID -> R.string.multiview_layout_grid
     MultiviewLayoutMode.FOCUS -> R.string.multiview_layout_focus
+    MultiviewLayoutMode.TIERED -> R.string.multiview_layout_tiered
 }
 
 private fun MultiviewQualityMode.labelRes(): Int = when (this) {
