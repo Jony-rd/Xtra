@@ -28,7 +28,8 @@
             android:paddingLeft="10dp"
             android:paddingStart="10dp"
             android:paddingRight="10dp"
-            android:paddingEnd="10dp" />
+            android:paddingEnd="10dp"
+            android:paddingBottom="56dp" />
 
                 <Button
             android:id="@+id/editFavorites"

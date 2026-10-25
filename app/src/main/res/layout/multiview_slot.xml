@@ -88,6 +88,17 @@
             android:src="@drawable/baseline_more_vert_black_24"
             android:visibility="gone"
             app:tint="@android:color/white" />
+
+        <ImageButton
+            android:id="@+id/removeButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/multiview_remove_stream"
+            android:padding="12dp"
+            android:src="@drawable/ic_close"
+            android:visibility="gone"
+            app:tint="@android:color/white" />
     </LinearLayout>
 
     <TextView
