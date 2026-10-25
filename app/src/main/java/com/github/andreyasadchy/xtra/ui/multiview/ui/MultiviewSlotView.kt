@@ -76,6 +76,12 @@ class MultiviewSlotView(context: Context) : FrameLayout(context) {
     init {
         isClickable = true
         isFocusable = true
+        clipChildren = true
+        clipToPadding = true
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            clipToOutline = true
+        }
+        binding.playerView.clipToOutline = true
         setOnClickListener { onTap?.invoke() }
         installPlayerTouchListener()
         binding.overflowButton.setOnClickListener { onOverflow?.invoke() }
