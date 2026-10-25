@@ -1658,26 +1658,31 @@ class MainActivity : AppCompatActivity() {
             viewModel.sleepTimer = Timer().apply {
                 schedule(duration) {
                     lifecycleScope.launch {
-                        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                        fun handleSleepTimeout() {
                             (playerFragment as? Media3PlayerFragment)?.also {
                                 if (!isTv) it.minimize()
                                 closePlayer()
+                            }
+                            if (currentMultiviewFragment() != null) {
+                                stopMultiviewAudioForForegroundPlayer()
+                                if (::navController.isInitialized) {
+                                    navController.popBackStack(R.id.multiviewFragment, true)
+                                }
                             }
                             if (prefs.getBoolean(C.SLEEP_TIMER_LOCK, false)) {
                                 if ((getSystemService(POWER_SERVICE) as PowerManager).isInteractive) {
                                     try {
                                         (getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager).lockNow()
                                     } catch (e: SecurityException) {
-
                                     }
                                 }
                             }
+                        }
+                        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                            handleSleepTimeout()
                         } else {
                             withStarted {
-                                (playerFragment as? Media3PlayerFragment)?.also {
-                                    if (!isTv) it.minimize()
-                                    closePlayer()
-                                }
+                                handleSleepTimeout()
                             }
                         }
                     }
