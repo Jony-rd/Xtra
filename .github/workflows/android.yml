@@ -17,7 +17,14 @@ jobs:
           python3 -c "
           import os
 
-          # 1. Add android.os.Build import to MultiviewSlotView
+          # 1. Fix duplicate clipToPadding in fragment_multiview.xml
+          mv_path = 'app/src/main/res/layout/fragment_multiview.xml'
+          if os.path.exists(mv_path):
+              with open(mv_path, 'r') as f: c = f.read()
+              c = c.replace('android:clipToPadding=\"false\"', '')
+              with open(mv_path, 'w') as f: f.write(c)
+
+          # 2. Add android.os.Build import to MultiviewSlotView
           slot_path = 'app/src/main/java/com/github/andreyasadchy/xtra/ui/multiview/ui/MultiviewSlotView.kt'
           if os.path.exists(slot_path):
               with open(slot_path, 'r') as f: c = f.read()
@@ -25,7 +32,7 @@ jobs:
                   c = c.replace('import android.annotation.SuppressLint', 'import android.annotation.SuppressLint\nimport android.os.Build')
                   with open(slot_path, 'w') as f: f.write(c)
 
-          # 2. Add currentStream getter to Media3PlayerFragment
+          # 3. Add currentStream getter to Media3PlayerFragment
           m3_path = 'app/src/main/java/com/github/andreyasadchy/xtra/ui/player/Media3PlayerFragment.kt'
           if os.path.exists(m3_path):
               with open(m3_path, 'r') as f: c2 = f.read()
@@ -33,7 +40,7 @@ jobs:
                   c2 = c2.replace('    companion object {', '    fun currentStream(): com.github.andreyasadchy.xtra.model.ui.Stream? = viewModel.stream.value\n\n    companion object {')
                   with open(m3_path, 'w') as f: f.write(c2)
 
-          # 3. Add currentPlayingStream getter to MainActivity
+          # 4. Add currentPlayingStream getter to MainActivity
           main_path = 'app/src/main/java/com/github/andreyasadchy/xtra/ui/main/MainActivity.kt'
           if os.path.exists(main_path):
               with open(main_path, 'r') as f: c3 = f.read()
@@ -41,7 +48,7 @@ jobs:
                   c3 = c3.replace('    fun getSleepTimerTimeLeft(): Long {', '    fun currentPlayingStream(): com.github.andreyasadchy.xtra.model.ui.Stream? = (playerFragment as? com.github.andreyasadchy.xtra.ui.player.Media3PlayerFragment)?.currentStream()\n\n    fun getSleepTimerTimeLeft(): Long {')
                   with open(main_path, 'w') as f: f.write(c3)
 
-          # 4. Fix adapters accessing protected viewModel
+          # 5. Fix adapters accessing protected viewModel
           for a in [
               'app/src/main/java/com/github/andreyasadchy/xtra/ui/common/StreamsAdapter.kt',
               'app/src/main/java/com/github/andreyasadchy/xtra/ui/common/StreamsCompactAdapter.kt',
@@ -52,7 +59,7 @@ jobs:
                   ca = ca.replace('(mainActivity?.playerFragment as? com.github.andreyasadchy.xtra.ui.player.Media3PlayerFragment)?.viewModel?.stream?.value', '(fragment.activity as? com.github.andreyasadchy.xtra.ui.main.MainActivity)?.currentPlayingStream()')
                   with open(a, 'w') as f: f.write(ca)
 
-          # 5. Speed up emotes (16x concurrency, cellular warming)
+          # 6. Speed up emotes (16x concurrency, cellular warming)
           emote_path = 'app/src/main/java/com/github/andreyasadchy/xtra/ui/chat/EmotePickerImageLoader.kt'
           if os.path.exists(emote_path):
               with open(emote_path, 'r') as f: ce = f.read()
