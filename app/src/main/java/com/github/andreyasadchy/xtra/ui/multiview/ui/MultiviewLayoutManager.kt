@@ -88,15 +88,7 @@ object MultiviewLayoutManager {
             )
         }
 
-        if (rest.size == 1 && chatVisible) {
-            return MultiviewLayoutPlan(
-                placements = listOf(
-                    TilePlacement(primary, 0f, 0f, 0.5f, 1f),
-                    TilePlacement(rest.first(), 0.5f, 0f, 1f, 1f),
-                ),
-                portraitHeightWidthRatio = 1f,
-            )
-        }
+
         val mainRight = if (chatVisible) 0.75f else 0.80f
         val placements = mutableListOf(
             TilePlacement(primary, 0f, 0f, mainRight, 1f),
@@ -188,10 +180,10 @@ object MultiviewLayoutManager {
     private fun tieredPortrait(ids: List<String>): MultiviewLayoutPlan {
         if (ids.size < 4) return stackedPortrait(ids)
         val placements = listOf(
-            TilePlacement(ids[0], 0f, 0f, 1f, 1f / 3f),
-            TilePlacement(ids[1], 0f, 1f / 3f, 1f, 2f / 3f),
-            TilePlacement(ids[2], 0f, 2f / 3f, 0.5f, 1f),
-            TilePlacement(ids[3], 0.5f, 2f / 3f, 1f, 1f),
+            TilePlacement(ids[0], 0f, 0f, 1f, 0.40f),
+            TilePlacement(ids[1], 0f, 0.40f, 1f, 0.80f),
+            TilePlacement(ids[2], 0f, 0.80f, 0.5f, 1f),
+            TilePlacement(ids[3], 0.5f, 0.80f, 1f, 1f),
         )
         return MultiviewLayoutPlan(
             placements = placements,

@@ -1,6 +1,7 @@
 package com.github.andreyasadchy.xtra.ui.multiview.ui
 
 import android.annotation.SuppressLint
+import android.os.Build
 import android.content.Context
 import android.view.GestureDetector
 import android.view.LayoutInflater
@@ -96,26 +97,31 @@ class MultiviewSlotView(context: Context) : FrameLayout(context) {
         binding.playerView.setOnTouchListener { _, event ->
             val swipe = swipeController
             if (swipe != null) {
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> swipe.begin(event, canHandle = true, interactionLocked = false)
-                    MotionEvent.ACTION_MOVE -> when (swipe.onMove(event, touchSlop)) {
-                        SwipeMoveResult.STARTED -> {
-                            // A vertical swipe just won the gesture — cancel the pending
-                            // tap/double-tap/long-press so it doesn't also fire.
-                            val cancel = MotionEvent.obtain(event).apply { action = MotionEvent.ACTION_CANCEL }
-                            gestureDetector.onTouchEvent(cancel)
-                            cancel.recycle()
-                            return@setOnTouchListener true
-                        }
-                        SwipeMoveResult.PENDING, SwipeMoveResult.ACTIVE, SwipeMoveResult.CONSUMED -> {
-                            return@setOnTouchListener true
-                        }
-                        SwipeMoveResult.NONE, SwipeMoveResult.REJECTED -> Unit
-                    }
-                    MotionEvent.ACTION_UP -> if (swipe.onUp(event)) return@setOnTouchListener true
-                    MotionEvent.ACTION_CANCEL -> if (swipe.onCancel()) return@setOnTouchListener true
+                val gridEvent = MotionEvent.obtain(event).apply {
+                    offsetLocation(this@MultiviewSlotView.left.toFloat(), this@MultiviewSlotView.top.toFloat())
                 }
-                if (swipe.shouldConsumeCurrentSequence) return@setOnTouchListener true
+                try {
+                    when (gridEvent.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> swipe.begin(gridEvent, canHandle = true, interactionLocked = false)
+                        MotionEvent.ACTION_MOVE -> when (swipe.onMove(gridEvent, touchSlop)) {
+                            SwipeMoveResult.STARTED -> {
+                                val cancel = MotionEvent.obtain(event).apply { action = MotionEvent.ACTION_CANCEL }
+                                gestureDetector.onTouchEvent(cancel)
+                                cancel.recycle()
+                                return@setOnTouchListener true
+                            }
+                            SwipeMoveResult.PENDING, SwipeMoveResult.ACTIVE, SwipeMoveResult.CONSUMED -> {
+                                return@setOnTouchListener true
+                            }
+                            SwipeMoveResult.NONE, SwipeMoveResult.REJECTED -> Unit
+                        }
+                        MotionEvent.ACTION_UP -> if (swipe.onUp(gridEvent)) return@setOnTouchListener true
+                        MotionEvent.ACTION_CANCEL -> if (swipe.onCancel()) return@setOnTouchListener true
+                    }
+                    if (swipe.shouldConsumeCurrentSequence) return@setOnTouchListener true
+                } finally {
+                    gridEvent.recycle()
+                }
             }
             gestureDetector.onTouchEvent(event)
             true
