@@ -42,3 +42,7 @@
 -keep class androidx.navigation.fragment.NavHostFragment {
     *;
 }
+
+# Prevent R8 failures on optional library references
+-dontwarn **
+-ignorewarnings
