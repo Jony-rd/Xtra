@@ -10,76 +10,13 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
-
-      - name: Fix compiler issues & optimize emotes
-        shell: bash
-        run: |
-          python3 -c "
-          import os
-
-          # 1. Fix duplicate clipToPadding in fragment_multiview.xml
-          mv_path = 'app/src/main/res/layout/fragment_multiview.xml'
-          if os.path.exists(mv_path):
-              with open(mv_path, 'r') as f: c = f.read()
-              c = c.replace('android:clipToPadding=\"false\"', '')
-              with open(mv_path, 'w') as f: f.write(c)
-
-          # 2. Add android.os.Build import to MultiviewSlotView
-          slot_path = 'app/src/main/java/com/github/andreyasadchy/xtra/ui/multiview/ui/MultiviewSlotView.kt'
-          if os.path.exists(slot_path):
-              with open(slot_path, 'r') as f: c = f.read()
-              if 'import android.os.Build' not in c:
-                  c = c.replace('import android.annotation.SuppressLint', 'import android.annotation.SuppressLint\nimport android.os.Build')
-                  with open(slot_path, 'w') as f: f.write(c)
-
-          # 3. Add currentStream getter to Media3PlayerFragment
-          m3_path = 'app/src/main/java/com/github/andreyasadchy/xtra/ui/player/Media3PlayerFragment.kt'
-          if os.path.exists(m3_path):
-              with open(m3_path, 'r') as f: c2 = f.read()
-              if 'fun currentStream()' not in c2:
-                  c2 = c2.replace('    companion object {', '    fun currentStream(): com.github.andreyasadchy.xtra.model.ui.Stream? = viewModel.stream.value\n\n    companion object {')
-                  with open(m3_path, 'w') as f: f.write(c2)
-
-          # 4. Add currentPlayingStream getter to MainActivity
-          main_path = 'app/src/main/java/com/github/andreyasadchy/xtra/ui/main/MainActivity.kt'
-          if os.path.exists(main_path):
-              with open(main_path, 'r') as f: c3 = f.read()
-              if 'fun currentPlayingStream()' not in c3:
-                  c3 = c3.replace('    fun getSleepTimerTimeLeft(): Long {', '    fun currentPlayingStream(): com.github.andreyasadchy.xtra.model.ui.Stream? = (playerFragment as? com.github.andreyasadchy.xtra.ui.player.Media3PlayerFragment)?.currentStream()\n\n    fun getSleepTimerTimeLeft(): Long {')
-                  with open(main_path, 'w') as f: f.write(c3)
-
-          # 5. Fix adapters accessing protected viewModel
-          for a in [
-              'app/src/main/java/com/github/andreyasadchy/xtra/ui/common/StreamsAdapter.kt',
-              'app/src/main/java/com/github/andreyasadchy/xtra/ui/common/StreamsCompactAdapter.kt',
-              'app/src/main/java/com/github/andreyasadchy/xtra/ui/following/streams/StreamsShelfPagingAdapter.kt'
-          ]:
-              if os.path.exists(a):
-                  with open(a, 'r') as f: ca = f.read()
-                  ca = ca.replace('(mainActivity?.playerFragment as? com.github.andreyasadchy.xtra.ui.player.Media3PlayerFragment)?.viewModel?.stream?.value', '(fragment.activity as? com.github.andreyasadchy.xtra.ui.main.MainActivity)?.currentPlayingStream()')
-                  with open(a, 'w') as f: f.write(ca)
-
-          # 6. Speed up emotes (16x concurrency, cellular warming)
-          emote_path = 'app/src/main/java/com/github/andreyasadchy/xtra/ui/chat/EmotePickerImageLoader.kt'
-          if os.path.exists(emote_path):
-              with open(emote_path, 'r') as f: ce = f.read()
-              ce = ce.replace('PREFETCH_CONCURRENCY = 4', 'PREFETCH_CONCURRENCY = 16')
-              ce = ce.replace('WARM_CONCURRENCY = 2', 'WARM_CONCURRENCY = 12')
-              ce = ce.replace('if (connectivity == null || connectivity.isActiveNetworkMetered) return', '// cellular warming enabled')
-              with open(emote_path, 'w') as f: f.write(ce)
-
-          print('All build fixes applied cleanly!')
-          "
-
       - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
-
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-
       - name: Calculate version code
         id: version
         shell: bash
@@ -91,7 +28,6 @@ jobs:
           echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
           echo "Version: $version"
           echo "Version code: $version_code"
-
       - name: Get Twitch public client ID
         id: twitch
         shell: bash
@@ -103,7 +39,6 @@ jobs:
             exit 1
           fi
           echo "client_id=$client_id" >> "$GITHUB_OUTPUT"
-
       - name: Build ARM64 release APK
         shell: bash
         run: |
@@ -111,7 +46,6 @@ jobs:
           ./gradlew --no-daemon :app:assembleRelease \
             "-PciVersionCode=${{ steps.version.outputs.version_code }}" \
             "-PtwitchPublicClientId=${{ steps.twitch.outputs.client_id }}"
-
       - name: Show generated APK
         shell: bash
         run: |
@@ -121,7 +55,6 @@ jobs:
             -type f \
             -name "*.apk" \
             -print
-
       - name: Verify exactly one ARM64 APK
         shell: bash
         run: |
@@ -140,7 +73,6 @@ jobs:
           fi
           echo "ARM64 APK:"
           echo "${apks[0]}"
-
       - name: Upload ARM64 APK
         uses: actions/upload-artifact@v4
         with:
@@ -148,4 +80,3 @@ jobs:
           path: app/build/outputs/apk/release/*arm64-v8a*.apk
           if-no-files-found: error
           retention-days: 14
-          
