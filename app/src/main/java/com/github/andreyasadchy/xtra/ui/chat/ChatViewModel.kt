@@ -8208,6 +8208,13 @@ class ChatViewModel(
                 EmotePickerImageLoader.warm(applicationContext, emotes, "4")
             }
         }
+        viewModelScope.launch {
+            availableFavoriteEmotes.collectLatest { emotes ->
+                if (emotes.isNotEmpty()) {
+                    EmotePickerImageLoader.warm(applicationContext, emotes, "4")
+                }
+            }
+        }
     }
 
     companion object {
