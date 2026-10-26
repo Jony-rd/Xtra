@@ -359,31 +359,19 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
      * hasn't changed, so this is safe to call on every render().
      */
     private fun updateMainStreamSwipeControls(state: MultiviewSessionState) {
-        val primary = (state.focusedIdentity ?: state.activeIdentity ?: state.identities.firstOrNull())
-            ?.takeIf(state.identities::contains)
-            ?: state.identities.firstOrNull()
-
-        if (primary == swipeControllerIdentity && slotViews[primary]?.swipeController === swipeGestureController) {
-            return
+        if (_binding == null) return
+        if (swipeGestureController == null) {
+            val controller = PlayerSwipeGestureController(
+                context = requireContext(),
+                window = requireActivity().window,
+                brightness = swipeBrightnessViewModel,
+                host = binding.videoGrid,
+                getSpeed = { null },
+                setSpeed = { },
+            )
+            swipeGestureController = controller
         }
-
-        swipeControllerIdentity?.let { previous -> slotViews[previous]?.swipeController = null }
-        swipeGestureController?.release(restoreBrightness = true)
-        swipeGestureController = null
-        swipeControllerIdentity = null
-
-        val targetSlot = primary?.let(slotViews::get) ?: return
-        val controller = PlayerSwipeGestureController(
-            context = requireContext(),
-            window = requireActivity().window,
-            brightness = swipeBrightnessViewModel,
-            host = targetSlot,
-            getSpeed = { null },
-            setSpeed = { },
-        )
-        targetSlot.swipeController = controller
-        swipeGestureController = controller
-        swipeControllerIdentity = primary
+        slotViews.values.forEach { it.swipeController = swipeGestureController }
     }
 
     /**

@@ -269,6 +269,7 @@ class MultiviewViewModel(
 
     fun onStart() = playbackCoordinator.onStart()
 
+    fun releaseAll() = playbackCoordinator.releaseAll()
     fun onStop(allowBackground: Boolean = true, inPictureInPicture: Boolean = false) =
         playbackCoordinator.onStop(allowBackground, inPictureInPicture)
 
