@@ -338,7 +338,7 @@ class StreamsShelfPagingAdapter(
 
         private fun openMultiview(stream: Stream) {
             val mainActivity = fragment.activity as? MainActivity
-            val playingStream = (mainActivity?.playerFragment as? com.github.andreyasadchy.xtra.ui.player.Media3PlayerFragment)?.viewModel?.stream?.value
+            val playingStream = mainActivity?.currentPlayingStream()
             val streamsToOpen = if (playingStream != null && playingStream.id != stream.id) {
                 listOf(playingStream, stream)
             } else {
