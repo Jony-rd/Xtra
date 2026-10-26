@@ -5436,6 +5436,8 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
         _binding = null
     }
 
+    fun currentStream(): Stream? = viewModel.stream.value
+
     companion object {
         private const val LIVE_DOT_MUTED_TAG = "live_dot_muted"
         // A 16:9 video takes 56% of this window, leaving the rest for compact chat.
