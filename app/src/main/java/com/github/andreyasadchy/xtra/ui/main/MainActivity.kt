@@ -1663,11 +1663,11 @@ class MainActivity : AppCompatActivity() {
                                 if (!isTv) it.minimize()
                                 closePlayer()
                             }
-                            if (currentMultiviewFragment() != null) {
-                                stopMultiviewAudioForForegroundPlayer()
-                                if (::navController.isInitialized) {
-                                    navController.popBackStack(R.id.multiviewFragment, true)
-                                }
+                            try {
+                                ViewModelProvider(this@MainActivity, MultiviewViewModel.MultiviewViewModelFactory)[MultiviewViewModel::class.java].releaseAll()
+                            } catch (e: Exception) {}
+                            if (::navController.isInitialized) {
+                                navController.popBackStack(R.id.multiviewFragment, true)
                             }
                             if (prefs.getBoolean(C.SLEEP_TIMER_LOCK, false)) {
                                 if ((getSystemService(POWER_SERVICE) as PowerManager).isInteractive) {
@@ -1691,6 +1691,8 @@ class MainActivity : AppCompatActivity() {
             viewModel.sleepTimerEndTime = System.currentTimeMillis() + duration
         }
     }
+
+    fun currentPlayingStream(): Stream? = (playerFragment as? Media3PlayerFragment)?.currentStream()
 
     fun getSleepTimerTimeLeft(): Long {
         return viewModel.sleepTimerEndTime - System.currentTimeMillis()
