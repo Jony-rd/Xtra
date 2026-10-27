@@ -247,6 +247,7 @@ internal class PlayerSwipeGestureController(
 
     fun begin(event: MotionEvent, canHandle: Boolean, interactionLocked: Boolean): Boolean {
         clearGesture(hide = false)
+        try { feedback.bringToFront() } catch (e: Exception) {}
         if (!canHandle) return false
         brightness.attach(window)
         val settings = SwipeControlsSettings.read(context)
