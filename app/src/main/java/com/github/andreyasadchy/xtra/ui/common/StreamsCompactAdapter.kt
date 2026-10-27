@@ -427,42 +427,5 @@ class StreamsCompactAdapter(
                 MultiviewFragment.arguments(streamsToOpen)
             )
         }
-            val activeStreams = mvVm?.state?.value?.streams.orEmpty()
-            if (activeStreams.size >= 4 && activeStreams.none { it.id == stream.id }) {
-                val streamNames = activeStreams.map { it.channelName.ifBlank { it.channelLogin } }.toTypedArray()
-                com.google.android.material.dialog.MaterialAlertDialogBuilder(fragment.requireContext())
-                    .setTitle("Multiview full. Replace which stream?")
-                    .setItems(streamNames) { _, which ->
-                        val toReplace = activeStreams[which]
-                        mvVm?.removeStream(toReplace.id)
-                        mvVm?.addStreams(listOf(stream))
-                        if (mainActivity?.playerFragment != null) mainActivity.closePlayer()
-                        fragment.findNavController().navigate(R.id.multiviewFragment)
-                    }
-                    .setNegativeButton(android.R.string.cancel) { _, _ ->
-                        val toReplace = activeStreams.last()
-                        mvVm?.removeStream(toReplace.id)
-                        mvVm?.addStreams(listOf(stream))
-                        if (mainActivity?.playerFragment != null) mainActivity.closePlayer()
-                        fragment.findNavController().navigate(R.id.multiviewFragment)
-                    }
-                    .show()
-                return
-            }
-
-            val playingStream = mainActivity?.currentPlayingStream()
-            val streamsToOpen = if (playingStream != null && playingStream.id != stream.id) {
-                listOf(playingStream, stream)
-            } else {
-                listOf(stream)
-            }
-            if (mainActivity?.playerFragment != null) {
-                mainActivity.closePlayer()
-            }
-            fragment.findNavController().navigate(
-                R.id.multiviewFragment,
-                MultiviewFragment.arguments(streamsToOpen)
-            )
-        }
     }
 }
