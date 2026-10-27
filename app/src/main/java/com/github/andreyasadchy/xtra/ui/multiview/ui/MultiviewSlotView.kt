@@ -80,9 +80,16 @@ class MultiviewSlotView(context: Context) : FrameLayout(context) {
         clipChildren = true
         clipToPadding = true
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            val rectOutlineProvider = object : android.view.ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: android.graphics.Outline) {
+                    outline.setRect(0, 0, view.width, view.height)
+                }
+            }
+            outlineProvider = rectOutlineProvider
             clipToOutline = true
+            binding.playerView.outlineProvider = rectOutlineProvider
+            binding.playerView.clipToOutline = true
         }
-        binding.playerView.clipToOutline = true
         setOnClickListener { onTap?.invoke() }
         installPlayerTouchListener()
         binding.overflowButton.setOnClickListener { onOverflow?.invoke() }
