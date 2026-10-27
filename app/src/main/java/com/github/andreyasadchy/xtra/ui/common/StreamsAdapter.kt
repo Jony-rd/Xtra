@@ -540,11 +540,52 @@ class StreamsAdapter(
             }
         }
 
-        private fun openMultiview(stream: Stream) {
+                private fun openMultiview(stream: Stream) {
             val mainActivity = fragment.activity as? MainActivity
             val mvVm = fragment.activity?.let {
                 androidx.lifecycle.ViewModelProvider(it, com.github.andreyasadchy.xtra.ui.multiview.MultiviewViewModel.MultiviewViewModelFactory)[com.github.andreyasadchy.xtra.ui.multiview.MultiviewViewModel::class.java]
             }
+            val activeStreams = mvVm?.state?.value?.streams.orEmpty()
+            if (activeStreams.size >= 4 && activeStreams.none { it.id == stream.id }) {
+                val streamNames = activeStreams.map {
+                    (it.channelName?.takeIf { n -> n.isNotBlank() } ?: it.channelLogin).orEmpty()
+                }.toTypedArray()
+                com.google.android.material.dialog.MaterialAlertDialogBuilder(fragment.requireContext())
+                    .setTitle("Multiview full. Replace which stream?")
+                    .setItems(streamNames) { _, which ->
+                        val targetIdentity = mvVm?.state?.value?.identities?.getOrNull(which) ?: mvVm?.state?.value?.identities?.lastOrNull()
+                        if (targetIdentity != null) {
+                            mvVm?.replaceStream(targetIdentity, stream)
+                        }
+                        if (mainActivity?.playerFragment != null) mainActivity.closePlayer()
+                        fragment.findNavController().navigate(R.id.multiviewFragment)
+                    }
+                    .setNegativeButton(android.R.string.cancel) { _, _ ->
+                        val targetIdentity = mvVm?.state?.value?.identities?.lastOrNull()
+                        if (targetIdentity != null) {
+                            mvVm?.replaceStream(targetIdentity, stream)
+                        }
+                        if (mainActivity?.playerFragment != null) mainActivity.closePlayer()
+                        fragment.findNavController().navigate(R.id.multiviewFragment)
+                    }
+                    .show()
+                return
+            }
+
+            val playingStream = mainActivity?.currentPlayingStream()
+            val streamsToOpen = if (playingStream != null && playingStream.id != stream.id) {
+                listOf(playingStream, stream)
+            } else {
+                listOf(stream)
+            }
+            if (mainActivity?.playerFragment != null) {
+                mainActivity.closePlayer()
+            }
+            fragment.findNavController().navigate(
+                R.id.multiviewFragment,
+                MultiviewFragment.arguments(streamsToOpen)
+            )
+        }
             val activeStreams = mvVm?.state?.value?.streams.orEmpty()
             if (activeStreams.size >= 4 && activeStreams.none { it.id == stream.id }) {
                 val streamNames = activeStreams.map { it.channelName.ifBlank { it.channelLogin } }.toTypedArray()
