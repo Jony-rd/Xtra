@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Glowing Neon Green Spiderweb filling 4 corners -->
+    <path
+        android:fillColor="#39FF14"
+        android:pathData="M2,2 L2,8 L4,6 L6,8 L8,6 L6,4 L8,2 Z M22,2 L16,2 L18,4 L16,6 L18,8 L20,6 L22,8 Z M2,22 L8,22 L6,20 L8,18 L6,16 L4,18 L2,16 Z M22,22 L22,16 L20,18 L18,16 L16,18 L18,20 L16,22 Z" />
+    <path
+        android:fillColor="#FF7700"
+        android:pathData="M10,10 L14,10 L14,14 L10,14 Z" />
+</vector>
