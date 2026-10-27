@@ -117,10 +117,16 @@ open class ChatMessageTextView private constructor(
         attrs,
     )
 
-    // Rows are inset from the screen edge by the user's chat edge padding setting;
-    // it is re-read on every bind so a settings change applies to rebuilt rows.
+    // The renderer supplies the resolved style so PiP can force edge-to-edge rows.
+    // Until the first style update, keep the saved preference as the default.
+    private var edgePaddingDpOverride: Int? = null
+
     private fun edgePaddingPx(): Int =
-        (chatEdgePaddingDp(context) * resources.displayMetrics.density).roundToInt()
+        ((edgePaddingDpOverride ?: chatEdgePaddingDp(context)) * resources.displayMetrics.density).roundToInt()
+
+    fun setEdgePaddingDp(value: Int) {
+        edgePaddingDpOverride = value
+    }
 
     private var boundEdgePaddingPx = -1
     private val layoutPaddingStart = paddingStart
@@ -169,6 +175,9 @@ open class ChatMessageTextView private constructor(
     private var onGifClick: ((ChatGifInteraction) -> Unit)? = null
     private var onClipPreviewClick: ((String) -> Unit)? = null
     private var boundRow: ChatRowUiModel? = null
+    private var interactionSelected = false
+    private var interactionBaseBackground: Drawable? = null
+    private var hasInteractionBaseBackground = false
     private var boundTextSizePx = Float.NaN
     private var bindingRow = false
     /** Live timelines resolve the saved gesture policy at DOWN; interaction dialogs keep their own callbacks. */
@@ -240,6 +249,15 @@ open class ChatMessageTextView private constructor(
         if (animateGifs == value) return
         animateGifs = value
         updateDrawableAnimations()
+    }
+
+    fun setInteractionSelected(selected: Boolean) {
+        interactionSelected = selected
+        if (selected) {
+            applyInteractionSelectionBackground()
+        } else {
+            restoreInteractionBackground()
+        }
     }
 
     fun bind(row: ChatRowUiModel) {
@@ -322,6 +340,7 @@ open class ChatMessageTextView private constructor(
     }
 
     private fun bindRow(row: ChatRowUiModel, bindAssets: ChatRowBindAssets) {
+        restoreInteractionBackground()
         invalidateClipDrawCache()
         if (boundMessageId != row.id) {
             cancelTouchGesture()
@@ -527,6 +546,24 @@ open class ChatMessageTextView private constructor(
         if (row.isAction) output.setSpan(StyleSpan(android.graphics.Typeface.ITALIC), 0, output.length, 0)
         contentDescription = row.accessibilityText
         text = output
+        if (interactionSelected) applyInteractionSelectionBackground()
+    }
+
+    private fun applyInteractionSelectionBackground() {
+        if (!hasInteractionBaseBackground) {
+            interactionBaseBackground = background
+            hasInteractionBaseBackground = true
+        }
+        setBackgroundColor(
+            com.google.android.material.color.MaterialColors.getColor(this, R.attr.chatMessageSelectedColor),
+        )
+    }
+
+    private fun restoreInteractionBackground() {
+        if (!hasInteractionBaseBackground) return
+        setBackground(interactionBaseBackground)
+        interactionBaseBackground = null
+        hasInteractionBaseBackground = false
     }
 
     private fun hasPendingAssets(assetKeys: Set<ChatAssetKey>): Boolean = assetKeys.any { key ->

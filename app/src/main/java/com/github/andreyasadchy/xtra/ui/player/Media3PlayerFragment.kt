@@ -155,6 +155,7 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
     private var qualityLabelCatalog: List<VideoQuality>? = null
     private var qualityLabelLocales: String? = null
     private var qualityLabels: List<Pair<String, VideoQuality>>? = null
+    private var pendingNetworkDefaultQualityProfile: PlayerQualityNetworkProfile? = null
     protected val binding get() = _binding!!
     protected val viewModel: Media3PlayerViewModel by viewModels { Media3PlayerViewModelFactory }
     protected var chatFragment: ChatFragment? = null
@@ -648,8 +649,13 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
             ?: startActivity(intent)
     }
     open fun showPlaylistTags(mediaPlaylist: Boolean) {}
-    open fun changeQuality(selectedQuality: VideoQuality?, persistSavedQuality: Boolean = true) {}
+    open fun changeQuality(
+        selectedQuality: VideoQuality?,
+        persistSavedQuality: Boolean = true,
+        persistPlaybackState: Boolean = persistSavedQuality,
+    ) {}
     open fun startAudioOnly() {}
+    open fun startBackgroundPlayback() {}
     open fun downloadVideo() {}
     open fun close() {}
 
@@ -1637,7 +1643,7 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                             openViewerList()
                         }
                     }
-                    val showLiveTransport = requireContext().isTelevision() || isLiveRewindAvailable()
+                    val showLiveTransport = shouldShowLiveSkipButtons()
                     rewind.visibility = if (showLiveTransport) View.VISIBLE else View.GONE
                     fastForward.visibility = if (showLiveTransport) View.VISIBLE else View.GONE
                     position.visibility = View.GONE
@@ -3209,22 +3215,50 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
             return
         }
 
-        if (viewModel.qualities.isNullOrEmpty()) {
-            // Startup/playlist discovery will select the current network's
-            // default itself.
+        if (viewModel.qualities.isNullOrEmpty() || !isQualityCatalogCurrent()) {
+            pendingNetworkDefaultQualityProfile = profile
+            if (BuildConfig.DEBUG) {
+                Log.d(
+                    "XtraQuality",
+                    "event=network_default_quality action=deferred profile=${profile.name.lowercase()} " +
+                        "reason=quality_catalog_unavailable",
+                )
+            }
             return
         }
 
         val target = resolveDefaultQualityForNetwork(profile) ?: return
+        pendingNetworkDefaultQualityProfile = null
 
         if (viewModel.quality?.name == target.name &&
             viewModel.quality?.url == target.url
         ) {
+            if (BuildConfig.DEBUG) {
+                Log.d(
+                    "XtraQuality",
+                    "event=network_default_quality action=unchanged profile=${profile.name.lowercase()} " +
+                        "quality=${target.name}",
+                )
+            }
             return
         }
 
-        changeQuality(target, persistSavedQuality = false)
+        if (BuildConfig.DEBUG) {
+            Log.d(
+                "XtraQuality",
+                "event=network_default_quality action=apply profile=${profile.name.lowercase()} " +
+                    "quality=${target.name}",
+            )
+        }
+        changeQuality(target, persistSavedQuality = false, persistPlaybackState = true)
         setQualityText()
+    }
+
+    protected fun reapplyPendingNetworkDefaultQuality() {
+        val profile = pendingNetworkDefaultQualityProfile ?: return
+        if (viewModel.qualities.isNullOrEmpty() || !isQualityCatalogCurrent()) return
+        pendingNetworkDefaultQualityProfile = null
+        reapplyNetworkDefaultQuality(profile)
     }
 
     private fun firstVideoQuality(): VideoQuality? = viewModel.qualities?.firstOrNull {
@@ -3675,6 +3709,7 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
     override fun onResume() {
         super.onResume()
         binding.playerControls.root.reloadProfile()
+        if (videoType == PlaybackContract.STREAM) updateLiveRewindUi()
         if (requireContext().isTelevision() && !isPortrait) {
             applyTvChatPresentation(binding.chatLayout, binding.playerLayout, binding.slidingLayout, isChatOpen)
         } else if (!isPortrait) {
@@ -4123,8 +4158,12 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
         }
     }
 
+    private fun shouldShowLiveSkipButtons(): Boolean =
+        requireContext().prefs().getBoolean(C.PLAYER_LIVE_SKIP_BUTTONS, true) &&
+            (requireContext().isTelevision() || isLiveRewindAvailable())
+
     private fun updateLiveRewindUi() {
-        val showLiveTransport = requireContext().isTelevision() || isLiveRewindAvailable()
+        val showLiveTransport = shouldShowLiveSkipButtons()
         binding.playerControls.rewind.visibility = if (showLiveTransport) View.VISIBLE else View.GONE
         binding.playerControls.fastForward.visibility = if (showLiveTransport) View.VISIBLE else View.GONE
         if (!isLiveRewindAvailable()) {

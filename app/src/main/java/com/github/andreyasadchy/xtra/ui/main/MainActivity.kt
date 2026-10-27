@@ -191,6 +191,10 @@ class MainActivity : AppCompatActivity() {
     private var qualityNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private var lastPlaybackNetworkProfile: PlayerQualityNetworkProfile? = null
     private var pipActionReceiver: BroadcastReceiver? = null
+    private var wasInPictureInPictureMode = false
+    private var backgroundAudioActionExitingPictureInPicture = false
+    private var preserveBackgroundPlaybackOnDestroy = false
+    private var pendingPictureInPictureClose: Runnable? = null
     private lateinit var prefs: SharedPreferences
     private var appliedUiStyle: String? = null
     var settingsResultLauncher: ActivityResultLauncher<Intent>? = null
@@ -652,6 +656,14 @@ class MainActivity : AppCompatActivity() {
                 lifecycleScope.launch {
                     val previous = lastPlaybackNetworkProfile
                     lastPlaybackNetworkProfile = profile
+                    if (BuildConfig.DEBUG) {
+                        Log.d(
+                            "XtraQuality",
+                            "event=network_profile previous=${previous?.name?.lowercase() ?: "unknown"} " +
+                                "current=${profile.name.lowercase()} " +
+                                "action=${if (previous == null) "baseline" else if (previous == profile) "unchanged" else "changed"}",
+                        )
+                    }
 
                     // First callback only establishes the baseline.
                     // Only a change between quality profiles should reapply
@@ -660,7 +672,7 @@ class MainActivity : AppCompatActivity() {
                         return@launch
                     }
 
-                    (playerFragment as? Media3PlayerFragment)?.reapplyNetworkDefaultQuality(profile)
+                    (activePlayerFragment() as? Media3PlayerFragment)?.reapplyNetworkDefaultQuality(profile)
                 }
             }
         }
@@ -670,8 +682,18 @@ class MainActivity : AppCompatActivity() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 when (intent?.action) {
                     INTENT_START_AUDIO_ONLY -> {
-                        (playerFragment as? Media3PlayerFragment)?.startAudioOnly()
-                        moveTaskToBack(false)
+                        (playerFragment as? Media3PlayerFragment)?.let { player ->
+                            val exitsPictureInPicture =
+                                isInPictureInPictureMode || wasInPictureInPictureMode
+                            backgroundAudioActionExitingPictureInPicture = exitsPictureInPicture
+                            player.startBackgroundPlayback()
+                            if (exitsPictureInPicture) {
+                                preserveBackgroundPlaybackOnDestroy = true
+                                finish()
+                            } else {
+                                moveTaskToBack(false)
+                            }
+                        }
                     }
                     INTENT_PLAY_PAUSE_PLAYER -> {
                         (playerFragment as? Media3PlayerFragment)?.playPause()
@@ -824,8 +846,49 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        pendingPictureInPictureClose?.let { binding.root.removeCallbacks(it) }
+        pendingPictureInPictureClose = null
+        if (!isInPictureInPictureMode) {
+            backgroundAudioActionExitingPictureInPicture = false
+        }
         prefs.registerOnSharedPreferenceChangeListener(anonymousModeProfilePreferenceListener)
         if (::appBackgroundController.isInitialized) appBackgroundController.start()
+    }
+
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean) {
+        val wasInPictureInPicture = wasInPictureInPictureMode
+        wasInPictureInPictureMode = isInPictureInPictureMode
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode)
+        val backgroundAudioActionExitedPictureInPicture = wasInPictureInPicture &&
+            !isInPictureInPictureMode &&
+            backgroundAudioActionExitingPictureInPicture
+        if (wasInPictureInPicture && !isInPictureInPictureMode) {
+            backgroundAudioActionExitingPictureInPicture = false
+        }
+
+        // The system close button exits PiP and leaves this activity stopped.
+        // Reopening the app can deliver the callback before lifecycle start,
+        // so defer the check and cancel it from onStart().
+        if (wasInPictureInPicture &&
+            !isInPictureInPictureMode &&
+            !backgroundAudioActionExitedPictureInPicture &&
+            !isChangingConfigurations &&
+            playerFragment != null
+        ) {
+            pendingPictureInPictureClose?.let { binding.root.removeCallbacks(it) }
+            pendingPictureInPictureClose = Runnable {
+                pendingPictureInPictureClose = null
+                if (!isInPictureInPictureMode &&
+                    !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) &&
+                    !isChangingConfigurations &&
+                    playerFragment != null &&
+                    !prefs.getBoolean(C.PLAYER_KEEP_PLAYING_AFTER_PIP_CLOSED, false)
+                ) {
+                    closePlayer()
+                }
+            }.also { binding.root.post(it) }
+        }
     }
 
     override fun onStop() {
@@ -1092,7 +1155,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        PlaybackRuntimeDiagnostic.clear(playbackDiagnosticOwner)
+        if (!preserveBackgroundPlaybackOnDestroy) {
+            PlaybackRuntimeDiagnostic.clear(playbackDiagnosticOwner)
+        }
         appBackgroundController.stop()
         PerfFrameMetricsDiagnostics.detach()
         UiInteractionGovernor.setInteracting(bottomNavigationInteractionSource, false)
@@ -1118,7 +1183,7 @@ class MainActivity : AppCompatActivity() {
         fragmentLifecycleCallbacks?.let {
             supportFragmentManager.unregisterFragmentLifecycleCallbacks(it)
         }
-        if (isFinishing) {
+        if (isFinishing && !preserveBackgroundPlaybackOnDestroy) {
             onPlayerReturnedToBrowsing(playerStillOpen = false)
             (playerFragment as? Media3PlayerFragment)?.close()
         }

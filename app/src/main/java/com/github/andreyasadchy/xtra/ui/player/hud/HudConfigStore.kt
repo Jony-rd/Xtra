@@ -100,7 +100,17 @@ internal object HudConfigJson {
                     val y = value.optDouble("y", 0.5).toFloat().takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: 0.5f
                     val scale = value.optDouble("scale", 1.0).toFloat()
                         .takeIf(Float::isFinite)?.let(spec::clampScale) ?: 1f
-                    put(id, HudPlacement(value.optBoolean("enabled", false), x, y, scale))
+                    put(
+                        id,
+                        HudPlacement(
+                            enabled = value.optBoolean("enabled", false),
+                            x = x,
+                            y = y,
+                            scale = scale,
+                            autoArrange = value.optBoolean("autoArrange", false),
+                            anchorToEnd = id == HudElementId.TIME_STATUS && value.optBoolean("anchorToEnd", false),
+                        ),
+                    )
                 }
             }
         }
@@ -138,6 +148,8 @@ internal object HudConfigJson {
                     put("x", placement.x.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: 0.5f)
                     put("y", placement.y.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: 0.5f)
                     put("scale", placement.scale.takeIf(Float::isFinite)?.let(spec::clampScale) ?: 1f)
+                    put("autoArrange", placement.autoArrange)
+                    if (id == HudElementId.TIME_STATUS) put("anchorToEnd", placement.anchorToEnd)
                 })
             }
         })

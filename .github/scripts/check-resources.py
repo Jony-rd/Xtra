@@ -388,6 +388,9 @@ INTENTIONAL_FALLBACK_RESOURCES = {
     "settings_live_rewind_time_position",
     "settings_live_rewind_time_left",
     "settings_live_rewind_time_right",
+    # Live skip-button visibility copy uses default English until translated.
+    "settings_live_skip_buttons",
+    "settings_live_skip_buttons_summary",
     # Player-control editor labels are currently English-only until translated.
     "settings_home_controls",
     "settings_home_controls_summary",
@@ -864,15 +867,25 @@ INTENTIONAL_FALLBACK_RESOURCES = {
     "account_benefits_loading",
     "account_connection_error",
     "account_live_label",
-    # Emote picker animation switch and Twitch tab empty states use default English copy until localized.
+    # Emote picker animation switch and Twitch tab states use default English copy until localized.
     "chat_animate_picker_emotes",
     "chat_animate_picker_emotes_summary",
     "twitch_emotes_login_required",
     "twitch_emotes_empty",
+    "twitch_emotes_loading",
+    "twitch_emotes_error",
     # Singular-session wording is used only for English until these labels are
     # reviewed and translated consistently across supported locales.
     "statistics_selected_bucket_summary_singular",
     "statistics_selected_bucket_summary_with_channel_singular",
+    # Image cache settings ship with the default English wording until their
+    # translations are reviewed by native speakers.
+    "settings_cached_images",
+    "settings_cached_images_summary",
+    "settings_image_cache_limit",
+    "settings_image_cache_limit_summary",
+    "settings_emote_revalidation_days",
+    "settings_emote_revalidation_days_summary",
     "statistics_chart_selected_description_singular",
     "statistics_detail_summary_singular",
     "statistics_detail_sessions_singular",

@@ -81,6 +81,14 @@ object C {
     const val SETTINGS_BACKGROUND_PLAYBACK = "settings_background_playback"
     const val SETTINGS_TIMESTAMP_FORMAT_VERSION = "settings_timestamp_format_version"
     const val SETTINGS_HTTP_PROXY_ENABLED = "http_proxy_enabled"
+    const val IMAGE_DISK_CACHE_SIZE_MIB = "image_disk_cache_size_mib"
+    const val IMAGE_DISK_CACHE_SIZE_MIB_DEFAULT = 768
+    const val IMAGE_DISK_CACHE_SIZE_MIB_MIN = 48
+    const val IMAGE_DISK_CACHE_SIZE_MIB_MAX = 2048
+    const val EMOTE_CACHE_REVALIDATION_DAYS = "emote_cache_revalidation_days"
+    const val EMOTE_CACHE_REVALIDATION_DAYS_DEFAULT = 30
+    const val EMOTE_CACHE_REVALIDATION_DAYS_MIN = 1
+    const val EMOTE_CACHE_REVALIDATION_DAYS_MAX = 365
     const val PLAYER_HUD_LAYOUT_V2 = "player_hud_layout_v2"
     const val SETTINGS_PLAYER_SPEED_OPTIONS = "player_speed_options"
     const val SETTINGS_DEVELOPER_UNLOCKED = "developer_options_unlocked"
@@ -285,6 +293,7 @@ object C {
     const val PLAYER_VAFT_AD_PREVIEW_Y = "player_vaft_ad_preview_y"
     const val PLAYER_LIVE_REWIND = "player_live_rewind"
     const val PLAYER_LIVE_REWIND_TIME_SIDE = "player_live_rewind_time_side"
+    const val PLAYER_LIVE_SKIP_BUTTONS = "player_live_skip_buttons"
     const val PLAYER_PROXY = "player_proxy"
     const val PLAYER_STREAM_PROXY = "player_stream_proxy"
     const val PLAYER_PROXY_URL = "player_proxy_url"
