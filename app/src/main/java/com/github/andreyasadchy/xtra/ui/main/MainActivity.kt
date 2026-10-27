@@ -1657,32 +1657,23 @@ class MainActivity : AppCompatActivity() {
         if (duration > 0L) {
             viewModel.sleepTimer = Timer().apply {
                 schedule(duration) {
-                    lifecycleScope.launch {
-                        fun handleSleepTimeout() {
-                            (playerFragment as? Media3PlayerFragment)?.also {
-                                if (!isTv) it.minimize()
-                                closePlayer()
-                            }
-                            try {
-                                ViewModelProvider(this@MainActivity, MultiviewViewModel.MultiviewViewModelFactory)[MultiviewViewModel::class.java].releaseAll()
-                            } catch (e: Exception) {}
-                            if (::navController.isInitialized) {
-                                navController.popBackStack(R.id.multiviewFragment, true)
-                            }
-                            if (prefs.getBoolean(C.SLEEP_TIMER_LOCK, false)) {
-                                if ((getSystemService(POWER_SERVICE) as PowerManager).isInteractive) {
-                                    try {
-                                        (getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager).lockNow()
-                                    } catch (e: SecurityException) {
-                                    }
-                                }
-                            }
+                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main.immediate).launch {
+                        (playerFragment as? Media3PlayerFragment)?.also {
+                            if (!isTv) it.minimize()
+                            closePlayer()
                         }
-                        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
-                            handleSleepTimeout()
-                        } else {
-                            withStarted {
-                                handleSleepTimeout()
+                        try {
+                            ViewModelProvider(this@MainActivity, MultiviewViewModel.MultiviewViewModelFactory)[MultiviewViewModel::class.java].releaseAll()
+                        } catch (e: Exception) {}
+                        if (::navController.isInitialized) {
+                            navController.popBackStack(R.id.multiviewFragment, true)
+                        }
+                        if (prefs.getBoolean(C.SLEEP_TIMER_LOCK, false)) {
+                            if ((getSystemService(POWER_SERVICE) as PowerManager).isInteractive) {
+                                try {
+                                    (getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager).lockNow()
+                                } catch (e: SecurityException) {
+                                }
                             }
                         }
                     }
@@ -1879,6 +1870,21 @@ class MainActivity : AppCompatActivity() {
 
     private fun initNavigation() {
         navController = (supportFragmentManager.findFragmentById(R.id.navHostFragment) as NavHostFragment).navController
+        val multiviewVm = ViewModelProvider(this, MultiviewViewModel.MultiviewViewModelFactory)[MultiviewViewModel::class.java]
+        lifecycleScope.launch {
+            multiviewVm.state.collectLatest { state ->
+                val isInMultiview = navController.currentDestination?.id == R.id.multiviewFragment
+                val hasActiveMultiview = state.streams.isNotEmpty()
+                binding.multiviewReturnButton.isVisible = hasActiveMultiview && !isInMultiview
+            }
+        }
+        navController.addOnDestinationChangedListener { _, destination, _ ->
+            val hasActiveMultiview = multiviewVm.state.value.streams.isNotEmpty()
+            binding.multiviewReturnButton.isVisible = hasActiveMultiview && destination.id != R.id.multiviewFragment
+        }
+        binding.multiviewReturnButton.setOnClickListener {
+            navController.navigate(R.id.multiviewFragment)
+        }
         navController.setOnBackPressedDispatcher(onBackPressedDispatcher)
         val tabList = resolveNavigationTabList(
             prefs.getString(C.UI_NAVIGATION_TAB_LIST, null),
