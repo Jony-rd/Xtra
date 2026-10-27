@@ -86,7 +86,17 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
     // Toolbar buttons meant to hold your own artwork: full button = full
     // image, no padding. Add a button's id here to make it swap-only too.
-    private val CUSTOM_ICON_BUTTON_IDS = setOf(R.id.seekToLiveButton, R.id.orientationButton)
+    private val CUSTOM_ICON_BUTTON_IDS = setOf(
+        R.id.backButton,
+        R.id.orientationButton,
+        R.id.pipButton,
+        R.id.chatButton,
+        R.id.seekToLiveButton,
+        R.id.fillButton,
+        R.id.addStreamButton,
+        R.id.layoutButton,
+        R.id.moreButton,
+    )
     private var previousRequestedOrientation: Int? = null
 
     private val bindingOrNull: FragmentMultiviewBinding?
