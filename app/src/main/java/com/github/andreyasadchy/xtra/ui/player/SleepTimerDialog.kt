@@ -51,7 +51,13 @@ class SleepTimerDialog : DialogFragment() {
                 // NumberPicker commits keyboard edits when its input loses focus.
                 hours.clearFocus()
                 minutes.clearFocus()
-                (parentFragment as? Media3PlayerFragment)?.onSleepTimerChanged(hours.value * 3600_000L + minutes.value * 60_000L,  hours.value, minutes.value, lockCheckbox.isChecked)
+                val durationMs = hours.value * 3600_000L + minutes.value * 60_000L
+                val player = parentFragment as? Media3PlayerFragment
+                if (player != null) {
+                    player.onSleepTimerChanged(durationMs, hours.value, minutes.value, lockCheckbox.isChecked)
+                } else {
+                    (activity as? com.github.andreyasadchy.xtra.ui.main.MainActivity)?.setSleepTimer(durationMs)
+                }
                 requireContext().prefs().edit {
                     putInt(C.SLEEP_TIMER_MINUTES, hours.value * 60 + minutes.value)
                 }
@@ -72,7 +78,12 @@ class SleepTimerDialog : DialogFragment() {
                 minutes.value = (minutesLeft % 60).toInt()
                 builder.setPositiveButton(getString(R.string.set), positiveListener)
                 builder.setNegativeButton(getString(R.string.stop)) { _, _ ->
-                    (parentFragment as? Media3PlayerFragment)?.onSleepTimerChanged(-1L, 0, 0, lockCheckbox.isChecked)
+                    val player = parentFragment as? Media3PlayerFragment
+                    if (player != null) {
+                        player.onSleepTimerChanged(-1L, 0, 0, lockCheckbox.isChecked)
+                    } else {
+                        (activity as? com.github.andreyasadchy.xtra.ui.main.MainActivity)?.setSleepTimer(-1L)
+                    }
                     dismiss()
                 }
                 builder.setNeutralButton(android.R.string.cancel) { _, _ -> dismiss() }

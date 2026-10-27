@@ -65,7 +65,7 @@
                 android:contentDescription="Rotate multiview"
                 android:padding="0dp"
                 android:scaleType="fitCenter"
-                android:src="@drawable/ic_hw_bloodmoon_orientation" />
+                android:src="@drawable/ic_hw_phone_rotate" />
 
             <ImageButton
                 android:id="@+id/pipButton"
@@ -94,7 +94,7 @@
                 android:contentDescription="Seek to live"
                 android:padding="0dp"
                 android:scaleType="fitCenter"
-                android:src="@drawable/ic_seek_to_live" />
+                android:src="@drawable/ic_hw_cauldron_live" />
 
             <ImageButton
                 android:id="@+id/fillButton"
@@ -103,7 +103,7 @@
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="@string/multiview_fill"
                 android:padding="14dp"
-                android:src="@drawable/baseline_aspect_ratio_black_24"
+                android:src="@drawable/ic_hw_spiderweb_fill"
                  />
 
             <ImageButton
@@ -123,7 +123,7 @@
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="@string/multiview_layout"
                 android:padding="14dp"
-                android:src="@drawable/ic_multiview"
+                android:src="@drawable/ic_hw_pumpkin_layout"
                  />
 
             <ImageButton

@@ -164,10 +164,12 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             viewLifecycleOwner,
         ) { _, _ -> unlockControls() }
 
-        val initialStreams = requireArguments().parcelableArrayList<Stream>(ARG_STREAMS)
-        val initialStream = requireArguments().parcelable<Stream>(ARG_STREAM)
+        val initialStreams = arguments?.parcelableArrayList<Stream>(ARG_STREAMS)
+        val initialStream = arguments?.parcelable<Stream>(ARG_STREAM)
         val streamsToInit = if (!initialStreams.isNullOrEmpty()) initialStreams else listOfNotNull(initialStream)
-        viewModel.initialize(streamsToInit.firstOrNull())
+        if (streamsToInit.isNotEmpty()) {
+            viewModel.initialize(streamsToInit.firstOrNull())
+        }
         streamsToInit.forEach { stream ->
             val identity = MultiviewSessionReducer.stableIdentity(stream)
             if (identity != null && viewModel.state.value.streams.none {
@@ -575,10 +577,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             !(Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && requireActivity().isInPictureInPictureMode)
         binding.chatButton.isVisible = !requireContext().prefs().getBoolean(C.CHAT_DISABLE, false) && active != null
         binding.seekToLiveButton.isVisible = state.streams.isNotEmpty()
-        binding.fillButton.setImageResource(
-            if (state.fillVideo) R.drawable.baseline_fullscreen_exit_black_24
-            else R.drawable.baseline_aspect_ratio_black_24
-        )
+        binding.fillButton.setImageResource(R.drawable.ic_hw_spiderweb_fill)
         binding.fillButton.contentDescription = getString(
             if (state.fillVideo) R.string.multiview_fit else R.string.multiview_fill
         )

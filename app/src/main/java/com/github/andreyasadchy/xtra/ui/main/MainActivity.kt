@@ -1565,6 +1565,17 @@ class MainActivity : AppCompatActivity() {
      * Permanently closes the foreground player. Backgrounding the activity uses
      * the lifecycle playback path instead, so background playback remains available.
      */
+    fun updateMultiviewReturnButtonVisibility() {
+        if (!::binding.isInitialized || !::navController.isInitialized) return
+        val multiviewVm = try {
+            ViewModelProvider(this, MultiviewViewModel.MultiviewViewModelFactory)[MultiviewViewModel::class.java]
+        } catch (e: Exception) { return }
+        val isInMultiview = navController.currentDestination?.id == R.id.multiviewFragment
+        val hasActiveMultiview = multiviewVm.state.value.streams.isNotEmpty()
+        val isPlayerOpen = playerFragment != null && viewModel.isPlayerOpened
+        binding.multiviewReturnButton.isVisible = hasActiveMultiview && !isInMultiview && !isPlayerOpen
+    }
+
     fun closePlayer() {
         closePlayerInternal(null)
     }
@@ -1574,6 +1585,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun closePlayerInternal(expectedPlayer: Fragment?) {
+        binding.root.post { updateMultiviewReturnButtonVisibility() }
         if (expectedPlayer != null && playerFragment !== expectedPlayer) {
             return
         }
@@ -1937,18 +1949,18 @@ class MainActivity : AppCompatActivity() {
         navController = (supportFragmentManager.findFragmentById(R.id.navHostFragment) as NavHostFragment).navController
         val multiviewVm = ViewModelProvider(this, MultiviewViewModel.MultiviewViewModelFactory)[MultiviewViewModel::class.java]
         lifecycleScope.launch {
-            multiviewVm.state.collectLatest { state ->
-                val isInMultiview = navController.currentDestination?.id == R.id.multiviewFragment
-                val hasActiveMultiview = state.streams.isNotEmpty()
-                binding.multiviewReturnButton.isVisible = hasActiveMultiview && !isInMultiview
+            multiviewVm.state.collectLatest {
+                updateMultiviewReturnButtonVisibility()
             }
         }
-        navController.addOnDestinationChangedListener { _, destination, _ ->
-            val hasActiveMultiview = multiviewVm.state.value.streams.isNotEmpty()
-            binding.multiviewReturnButton.isVisible = hasActiveMultiview && destination.id != R.id.multiviewFragment
+        navController.addOnDestinationChangedListener { _, _, _ ->
+            updateMultiviewReturnButtonVisibility()
         }
         binding.multiviewReturnButton.setOnClickListener {
-            navController.navigate(R.id.multiviewFragment)
+            navController.navigate(
+                R.id.multiviewFragment,
+                MultiviewFragment.arguments(emptyList())
+            )
         }
         navController.setOnBackPressedDispatcher(onBackPressedDispatcher)
         val tabList = resolveNavigationTabList(

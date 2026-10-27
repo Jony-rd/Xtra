@@ -399,7 +399,7 @@ class StreamsCompactAdapter(
                             mvVm?.replaceStream(targetIdentity, stream)
                         }
                         if (mainActivity?.playerFragment != null) mainActivity.closePlayer()
-                        fragment.findNavController().navigate(R.id.multiviewFragment)
+                        fragment.findNavController().navigate(R.id.multiviewFragment, com.github.andreyasadchy.xtra.ui.multiview.MultiviewFragment.arguments(emptyList()))
                     }
                     .setNegativeButton(android.R.string.cancel) { _, _ ->
                         val targetIdentity = mvVm?.state?.value?.identities?.lastOrNull()
@@ -407,7 +407,7 @@ class StreamsCompactAdapter(
                             mvVm?.replaceStream(targetIdentity, stream)
                         }
                         if (mainActivity?.playerFragment != null) mainActivity.closePlayer()
-                        fragment.findNavController().navigate(R.id.multiviewFragment)
+                        fragment.findNavController().navigate(R.id.multiviewFragment, com.github.andreyasadchy.xtra.ui.multiview.MultiviewFragment.arguments(emptyList()))
                     }
                     .show()
                 return
