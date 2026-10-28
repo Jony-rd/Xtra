@@ -24,7 +24,9 @@ import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import coil.load
+import android.widget.ImageView
+import android.widget.LinearLayout
+import com.github.andreyasadchy.xtra.ui.common.loadStreamProfileImage
 import android.os.PowerManager
 import android.os.SystemClock
 import android.os.ext.SdkExtensions
@@ -1597,17 +1599,9 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
                     }
+                    setImageResource(R.drawable.ic_person_placeholder)
                 }
-                val url = stream.channelImage?.takeIf { it.isNotBlank() } ?: stream.channelImageURL
-                if (!url.isNullOrBlank()) {
-                    iv.load(url) {
-                        crossfade(true)
-                        placeholder(R.drawable.baseline_account_circle_black_24)
-                        error(R.drawable.baseline_account_circle_black_24)
-                    }
-                } else {
-                    iv.setImageResource(R.drawable.baseline_account_circle_black_24)
-                }
+                loadStreamProfileImage(this, iv, stream)
                 container.addView(iv)
             }
         }
