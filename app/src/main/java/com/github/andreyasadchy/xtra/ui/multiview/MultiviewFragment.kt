@@ -930,7 +930,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     marginStart = dp(8)
                 }
                 text = displayName(stream)
-                setTextColor(ContextCompat.getColor(context, R.color.white))
+                setTextColor(android.graphics.Color.WHITE)
                 textSize = 14f
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
             }
@@ -939,7 +939,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             var vol = viewModel.audioVolume(identity)
             val percentView = android.widget.TextView(context).apply {
                 text = "${(vol * 100).roundToInt()}%"
-                setTextColor(ContextCompat.getColor(context, R.color.white))
+                setTextColor(android.graphics.Color.WHITE)
                 textSize = 13f
             }
             headerRow.addView(percentView)
@@ -950,7 +950,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 }
                 background = ContextCompat.getDrawable(context, android.R.drawable.screen_background_dark_transparent)
                 setImageResource(if (vol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
-                setColorFilter(ContextCompat.getColor(context, R.color.white))
+                setColorFilter(android.graphics.Color.WHITE)
             }
             headerRow.addView(muteBtn)
             streamRow.addView(headerRow)
