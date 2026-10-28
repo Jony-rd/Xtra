@@ -1253,7 +1253,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         setControlsOverlayVisible(false)
         slotViews.values.forEach { it.setControlsVisible(false) }
         binding.chatContainer.isVisible = false
-        binding.toolbar.visibility = View.GONE
+        binding.controlsOverlay.visibility = View.GONE
     }
 
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean) {
@@ -1266,9 +1266,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             setControlsOverlayVisible(false)
             slotViews.values.forEach { it.setControlsVisible(false) }
             binding.chatContainer.isVisible = false
-            binding.toolbar.visibility = View.GONE
+            binding.controlsOverlay.visibility = View.GONE
         } else {
-            binding.toolbar.visibility = View.VISIBLE
+            binding.controlsOverlay.visibility = View.VISIBLE
             updateToolbar(latestState)
             updateChat(latestState)
             revealControls()
