@@ -1277,6 +1277,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    fun launchFloatingWindowOrPip() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val freeformSuccess = runCatching {
+            val options = ActivityOptions.makeBasic()
+            val setWindowingMode = ActivityOptions::class.java.methods.firstOrNull {
+                it.name == "setLaunchWindowingMode" && it.parameterTypes.size == 1
+            }
+            if (setWindowingMode != null) {
+                setWindowingMode.invoke(options, 5)
+                val intent = Intent(this, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or 0x00002000)
+                    putExtra("miui.intent.extra.START_ACTIVITY_WHEN_LOCKED", true)
+                }
+                startActivity(intent, options.toBundle())
+                true
+            } else false
+        }.getOrDefault(false)
+
+        if (!freeformSuccess) {
+            minimizeMultiview()
+        }
+    }
+
     fun prepareMultiviewPictureInPicture() {
         if (!canMinimizeMultiview() || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
         setPictureInPictureParams(

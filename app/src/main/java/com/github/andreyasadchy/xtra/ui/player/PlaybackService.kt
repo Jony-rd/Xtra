@@ -421,7 +421,7 @@ class PlaybackService : MediaSessionService() {
             controller.reset(initialLivePolicy, enabled = false)
             setLivePlaybackSpeedControl(adaptiveLiveSpeedControl!!)
             setAudioAttributes(AudioAttributes.DEFAULT, prefs().getBoolean(C.PLAYER_AUDIO_FOCUS, false))
-            setHandleAudioBecomingNoisy(true)
+            setHandleAudioBecomingNoisy(false)
             setSeekBackIncrementMs((prefs().getString(C.PLAYER_REWIND, "10")?.toLongOrNull() ?: 10) * 1000)
             setSeekForwardIncrementMs((prefs().getString(C.PLAYER_FORWARD, "10")?.toLongOrNull() ?: 10) * 1000)
         }

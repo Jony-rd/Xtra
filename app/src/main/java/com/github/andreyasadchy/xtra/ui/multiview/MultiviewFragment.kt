@@ -145,7 +145,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         binding.layoutButton.setOnClickListener { toggleLayoutMode() }
         binding.fillButton.setOnClickListener { viewModel.setFillVideo(!latestState.fillVideo) }
         binding.moreButton.setOnClickListener { showMoreMenu(binding.moreButton) }
-        binding.pipButton.setOnClickListener { (activity as? MainActivity)?.minimizeMultiview() }
+        binding.pipButton.setOnClickListener { (activity as? MainActivity)?.launchFloatingWindowOrPip() }
         binding.seekToLiveButton.setOnClickListener { seekAllToLive() }
         binding.chatHeader.apply {
             minimumHeight = dp(CHAT_HEADER_DP)
@@ -727,6 +727,10 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         revealControls()
         lockControls()
         PopupMenu(requireContext(), anchor, Gravity.END).apply {
+            menu.add("Audio Mixer").setOnMenuItemClickListener {
+                showAudioMixerDialog()
+                true
+            }
             menu.add(R.string.multiview_quality_mode).setOnMenuItemClickListener {
                 showQualityModeMenu()
                 true
@@ -865,6 +869,121 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             .setNegativeButton(android.R.string.cancel, null)
             .setOnDismissListener { unlockControls(slot) }
             .show()
+    }
+
+    private fun showAudioMixerDialog() {
+        val streams = latestState.streams
+        if (streams.isEmpty()) return
+        lockControls()
+
+        val context = requireContext()
+        val scroll = android.widget.ScrollView(context)
+        val container = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            val p = (16 * resources.displayMetrics.density).toInt()
+            setPadding(p, p, p, p)
+        }
+        scroll.addView(container)
+
+        val dialog = MaterialAlertDialogBuilder(context)
+            .setTitle("Multiview Audio Mixer")
+            .setView(scroll)
+            .setPositiveButton(android.R.string.ok, null)
+            .setNeutralButton("Mute All") { _, _ ->
+                streams.forEach { stream ->
+                    MultiviewSessionReducer.stableIdentity(stream)?.let { id ->
+                        viewModel.setAudioVolume(id, 0f)
+                    }
+                }
+            }
+            .setOnDismissListener { unlockControls() }
+            .create()
+
+        streams.forEach { stream ->
+            val identity = MultiviewSessionReducer.stableIdentity(stream) ?: return@forEach
+            val streamRow = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(6), 0, dp(10))
+            }
+
+            val headerRow = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+
+            val avatar = android.widget.ImageView(context).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(22), dp(22))
+                scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+                clipToOutline = true
+                outlineProvider = object : android.view.ViewOutlineProvider() {
+                    override fun getOutline(view: View, outline: android.graphics.Outline) {
+                        outline.setRoundRect(0, 0, view.width, view.height, dp(4).toFloat())
+                    }
+                }
+                setImageResource(R.drawable.ic_person_placeholder)
+            }
+            com.github.andreyasadchy.xtra.ui.common.loadStreamProfileImage(context, avatar, stream)
+            headerRow.addView(avatar)
+
+            val nameView = android.widget.TextView(context).apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginStart = dp(8)
+                }
+                text = displayName(stream)
+                setTextColor(ContextCompat.getColor(context, R.color.white))
+                textSize = 14f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+            }
+            headerRow.addView(nameView)
+
+            var vol = viewModel.audioVolume(identity)
+            val percentView = android.widget.TextView(context).apply {
+                text = "${(vol * 100).roundToInt()}%"
+                setTextColor(ContextCompat.getColor(context, R.color.white))
+                textSize = 13f
+            }
+            headerRow.addView(percentView)
+
+            val muteBtn = android.widget.ImageButton(context).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(36), dp(36)).apply {
+                    marginStart = dp(4)
+                }
+                background = ContextCompat.getDrawable(context, android.R.drawable.screen_background_dark_transparent)
+                setImageResource(if (vol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
+                setColorFilter(ContextCompat.getColor(context, R.color.white))
+            }
+            headerRow.addView(muteBtn)
+            streamRow.addView(headerRow)
+
+            val slider = Slider(context).apply {
+                valueFrom = 0f
+                valueTo = 100f
+                stepSize = 1f
+                value = (vol * 100f).coerceIn(0f, 100f)
+                addOnChangeListener { _, value, fromUser ->
+                    if (fromUser) {
+                        val newVol = value / 100f
+                        viewModel.setAudioVolume(identity, newVol)
+                        percentView.text = "${value.roundToInt()}%"
+                        muteBtn.setImageResource(if (newVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
+                    }
+                }
+            }
+
+            muteBtn.setOnClickListener {
+                val currentVol = viewModel.audioVolume(identity)
+                val targetVol = if (currentVol > 0f) 0f else viewModel.defaultAudioVolume().takeIf { it > 0f } ?: 1f
+                viewModel.setAudioVolume(identity, targetVol)
+                slider.value = targetVol * 100f
+                percentView.text = "${(targetVol * 100).roundToInt()}%"
+                muteBtn.setImageResource(if (targetVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
+            }
+
+            streamRow.addView(slider)
+            container.addView(streamRow)
+        }
+
+        dialog.show()
     }
 
     private fun showVolumeDialog(identity: String, stream: Stream) {

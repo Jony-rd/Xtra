@@ -296,7 +296,7 @@ class MultiviewPlaybackCoordinator(
                 AudioAttributes.DEFAULT,
                 false,
             )
-            setHandleAudioBecomingNoisy(true)
+            setHandleAudioBecomingNoisy(false)
         }.build()
         return MultiviewPlayerSlot(identity, stream, player).also { slot ->
             player.addListener(object : Player.Listener {
