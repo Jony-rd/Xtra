@@ -3,11 +3,12 @@
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
-    <!-- Glowing neon purple/cyan flying bat back arrow -->
+    <!-- Huge full-bleed neon purple flying bat pointing left as back arrow -->
     <path
         android:fillColor="#BF00FF"
-        android:pathData="M2,12 C4,9 7,8 10,10 L10,8 C11,9 12,9 12,8 C12,9 13,9 14,8 L14,10 C17,8 20,9 22,12 C20,13 18,12 16,13 C15,15 13,17 12,19 C11,17 9,15 8,13 C6,12 4,13 2,12 Z" />
+        android:pathData="M1,12 C3,8 7,5 11,8 L11,5 C12,6.5 13,6.5 13,5 L13,8 C17,5 21,8 23,12 C20,14 17,13 15,15 C13.5,18 12.5,21 12,23 C11.5,21 10.5,18 9,15 C7,13 4,14 1,12 Z" />
+    <!-- Glowing electric cyan arrowhead pointing back inside the bat -->
     <path
         android:fillColor="#00F0FF"
-        android:pathData="M7,12 L12,7 L12,10 L17,10 L17,14 L12,14 L12,17 Z" />
+        android:pathData="M4,12 L11,5 L11,9 L20,9 L20,15 L11,15 L11,19 Z" />
 </vector>

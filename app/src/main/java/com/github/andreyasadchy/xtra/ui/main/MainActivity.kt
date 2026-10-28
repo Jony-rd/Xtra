@@ -24,6 +24,7 @@ import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import coil.load
 import android.os.PowerManager
 import android.os.SystemClock
 import android.os.ext.SdkExtensions
@@ -1570,10 +1571,46 @@ class MainActivity : AppCompatActivity() {
         val multiviewVm = try {
             ViewModelProvider(this, MultiviewViewModel.MultiviewViewModelFactory)[MultiviewViewModel::class.java]
         } catch (e: Exception) { return }
+        val streams = multiviewVm.state.value.streams
         val isInMultiview = navController.currentDestination?.id == R.id.multiviewFragment
-        val hasActiveMultiview = multiviewVm.state.value.streams.isNotEmpty()
-        val isPlayerOpen = playerFragment != null && viewModel.isPlayerOpened
-        binding.multiviewReturnButton.isVisible = hasActiveMultiview && !isInMultiview && !isPlayerOpen
+        val hasActiveMultiview = streams.isNotEmpty()
+        val isPlayerOpen = playerFragment != null || viewModel.isPlayerOpened || activePlayerFragment() != null
+        val shouldShow = hasActiveMultiview && !isInMultiview && !isPlayerOpen
+        binding.multiviewReturnButton.isVisible = shouldShow
+        if (shouldShow) {
+            val container = binding.multiviewAvatarsContainer
+            container.removeAllViews()
+            val sizePx = (22 * resources.displayMetrics.density).toInt()
+            val marginPx = (4 * resources.displayMetrics.density).toInt()
+            val cornerRadius = 4 * resources.displayMetrics.density
+            streams.take(4).forEach { stream ->
+                val iv = ImageView(this).apply {
+                    layoutParams = LinearLayout.LayoutParams(sizePx, sizePx).apply {
+                        marginStart = marginPx
+                    }
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                        clipToOutline = true
+                        outlineProvider = object : android.view.ViewOutlineProvider() {
+                            override fun getOutline(view: View, outline: android.graphics.Outline) {
+                                outline.setRoundRect(0, 0, view.width, view.height, cornerRadius)
+                            }
+                        }
+                    }
+                }
+                val url = stream.channelImage?.takeIf { it.isNotBlank() } ?: stream.channelImageURL
+                if (!url.isNullOrBlank()) {
+                    iv.load(url) {
+                        crossfade(true)
+                        placeholder(R.drawable.baseline_account_circle_black_24)
+                        error(R.drawable.baseline_account_circle_black_24)
+                    }
+                } else {
+                    iv.setImageResource(R.drawable.baseline_account_circle_black_24)
+                }
+                container.addView(iv)
+            }
+        }
     }
 
     fun closePlayer() {

@@ -57,30 +57,15 @@ object FavoriteEmoteCatalog {
         return result
     }
 
-    private fun cleanEmoteName(name: String): String {
-        return name.lowercase()
-            .replace("_hw", "")
-            .replace("_halloween", "")
-            .replace("_spooky", "")
-            .replace("-hw", "")
-            .replace("-halloween", "")
-            .trim()
-    }
-
     fun availableFavorites(
         favorites: List<FavoriteEmote>,
         emotes: List<Emote>,
     ): List<Emote> {
-        val deduplicated = deduplicate(emotes)
-        val availableByKey = deduplicated.mapNotNull { emote ->
+        val availableByKey = deduplicate(emotes).mapNotNull { emote ->
             emote.favoriteKey()?.let { it to emote }
         }.toMap()
-        val availableByName = deduplicated.associateBy { emote ->
-            cleanEmoteName(emote.name.orEmpty())
-        }
         return favorites.mapNotNull { favorite ->
-            val key = favorite.key() ?: return@mapNotNull null
-            availableByKey[key] ?: availableByName[cleanEmoteName(favorite.emoteId)]
+            favorite.key()?.let(availableByKey::get)
         }
     }
 
