@@ -377,7 +377,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 context = requireContext(),
                 window = requireActivity().window,
                 brightness = swipeBrightnessViewModel,
-                host = binding.videoGrid,
+                host = binding.multiviewContent,
                 getSpeed = { null },
                 setSpeed = { },
             )

@@ -241,6 +241,7 @@ internal class PlayerSwipeGestureController(
             feedback,
             FrameLayout.LayoutParams(dp(220), dp(82), Gravity.CENTER),
         )
+        feedback.elevation = dp(32).toFloat()
         feedback.visibility = View.GONE
         preferences.registerOnSharedPreferenceChangeListener(this)
     }
@@ -426,6 +427,10 @@ internal class PlayerSwipeGestureController(
         }
         feedback.setContent(title, valueText, fraction)
         feedback.visibility = View.VISIBLE
+        try {
+            feedback.bringToFront()
+            feedback.elevation = dp(32).toFloat()
+        } catch (_: Exception) {}
         handler.removeCallbacks(hideFeedback)
         handler.postDelayed(hideFeedback, FEEDBACK_HIDE_DELAY_MS)
     }
