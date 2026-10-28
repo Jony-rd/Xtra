@@ -542,8 +542,12 @@ class StreamsAdapter(
 
                 private fun openMultiview(stream: Stream) {
             val mainActivity = fragment.activity as? MainActivity
+            if (mainActivity?.isFinishing == true || !fragment.isAdded) return
+
             val mvVm = fragment.activity?.let {
-                androidx.lifecycle.ViewModelProvider(it, com.github.andreyasadchy.xtra.ui.multiview.MultiviewViewModel.MultiviewViewModelFactory)[com.github.andreyasadchy.xtra.ui.multiview.MultiviewViewModel::class.java]
+                try {
+                    androidx.lifecycle.ViewModelProvider(it, com.github.andreyasadchy.xtra.ui.multiview.MultiviewViewModel.MultiviewViewModelFactory)[com.github.andreyasadchy.xtra.ui.multiview.MultiviewViewModel::class.java]
+                } catch (e: Exception) { null }
             }
             val activeStreams = mvVm?.state?.value?.streams.orEmpty()
             if (activeStreams.size >= 4 && activeStreams.none { it.id == stream.id }) {
@@ -557,34 +561,38 @@ class StreamsAdapter(
                         if (targetIdentity != null) {
                             mvVm?.replaceStream(targetIdentity, stream)
                         }
-                        if (mainActivity?.playerFragment != null) mainActivity.closePlayer()
-                        fragment.findNavController().navigate(R.id.multiviewFragment, com.github.andreyasadchy.xtra.ui.multiview.MultiviewFragment.arguments(emptyList()))
+                        mainActivity?.closePlayer()
+                        runCatching {
+                            fragment.findNavController().navigate(
+                                R.id.multiviewFragment,
+                                com.github.andreyasadchy.xtra.ui.multiview.MultiviewFragment.arguments(emptyList())
+                            )
+                        }
                     }
                     .setNegativeButton(android.R.string.cancel) { _, _ ->
                         val targetIdentity = mvVm?.state?.value?.identities?.lastOrNull()
                         if (targetIdentity != null) {
                             mvVm?.replaceStream(targetIdentity, stream)
                         }
-                        if (mainActivity?.playerFragment != null) mainActivity.closePlayer()
-                        fragment.findNavController().navigate(R.id.multiviewFragment, com.github.andreyasadchy.xtra.ui.multiview.MultiviewFragment.arguments(emptyList()))
+                        mainActivity?.closePlayer()
+                        runCatching {
+                            fragment.findNavController().navigate(
+                                R.id.multiviewFragment,
+                                com.github.andreyasadchy.xtra.ui.multiview.MultiviewFragment.arguments(emptyList())
+                            )
+                        }
                     }
                     .show()
                 return
             }
 
-            val playingStream = mainActivity?.currentPlayingStream()
-            val streamsToOpen = if (playingStream != null && playingStream.id != stream.id) {
-                listOf(playingStream, stream)
-            } else {
-                listOf(stream)
+            mainActivity?.closePlayer()
+            runCatching {
+                fragment.findNavController().navigate(
+                    R.id.multiviewFragment,
+                    MultiviewFragment.arguments(stream)
+                )
             }
-            if (mainActivity?.playerFragment != null) {
-                mainActivity.closePlayer()
-            }
-            fragment.findNavController().navigate(
-                R.id.multiviewFragment,
-                MultiviewFragment.arguments(streamsToOpen)
-            )
         }
     }
 }

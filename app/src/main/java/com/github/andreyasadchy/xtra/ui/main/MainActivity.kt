@@ -1254,7 +1254,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun canMinimizeMultiview(): Boolean {
-        return !isTv && playerFragment == null &&
+        return !isTv &&
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE) &&
             prefs.getBoolean(C.PLAYER_PICTURE_IN_PICTURE, true)
@@ -1263,6 +1263,7 @@ class MainActivity : AppCompatActivity() {
     fun minimizeMultiview() {
         if (!canMinimizeMultiview()) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        currentMultiviewFragment()?.prepareForPictureInPicture()
         runCatching {
             enterPictureInPictureMode(PictureInPictureParams.Builder().build())
         }
@@ -1545,6 +1546,8 @@ class MainActivity : AppCompatActivity() {
         playerFragment = fragment
         PlaybackRuntimeDiagnostic.setActive(playbackDiagnosticOwner, backend)
         viewModel.isPlayerOpened = true
+        binding.playerContainer.visibility = View.VISIBLE
+        binding.multiviewReturnButton.visibility = View.GONE
         val transaction = supportFragmentManager.beginTransaction()
             .setReorderingAllowed(true)
             .replace(R.id.playerContainer, fragment)
@@ -1576,7 +1579,7 @@ class MainActivity : AppCompatActivity() {
         val streams = multiviewVm.state.value.streams
         val isInMultiview = navController.currentDestination?.id == R.id.multiviewFragment
         val hasActiveMultiview = streams.isNotEmpty()
-        val isPlayerOpen = playerFragment != null || viewModel.isPlayerOpened || activePlayerFragment() != null
+        val isPlayerOpen = playerFragment != null || viewModel.isPlayerOpened || activePlayerFragment() != null || (supportFragmentManager.findFragmentById(R.id.playerContainer) != null)
         val shouldShow = hasActiveMultiview && !isInMultiview && !isPlayerOpen
         binding.multiviewReturnButton.isVisible = shouldShow
         if (shouldShow) {
@@ -1631,20 +1634,18 @@ class MainActivity : AppCompatActivity() {
         onPlayerReturnedToBrowsing(playerStillOpen = false)
         supportFragmentManager.findFragmentById(R.id.playerContainer)?.let { player ->
             val transaction = supportFragmentManager.beginTransaction()
-                .setTransition(FragmentTransaction.TRANSIT_FRAGMENT_FADE)
                 .remove(player)
-            // The system PiP close action can be delivered after onSaveInstanceState().
-            // Playback has already been stopped above, so dropping this visual removal is
-            // preferable to throwing and leaving the activity in a broken state.
             if (supportFragmentManager.isStateSaved) {
                 transaction.commitAllowingStateLoss()
             } else {
-                transaction.commit()
+                transaction.commitNow()
             }
         }
         playerFragment = null
         PlaybackRuntimeDiagnostic.clear(playbackDiagnosticOwner)
         viewModel.isPlayerOpened = false
+        binding.playerContainer.removeAllViews()
+        binding.playerContainer.visibility = View.GONE
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
             setPictureInPictureParams(PictureInPictureParams.Builder().setAutoEnterEnabled(false).build())
         }
@@ -1988,10 +1989,13 @@ class MainActivity : AppCompatActivity() {
             updateMultiviewReturnButtonVisibility()
         }
         binding.multiviewReturnButton.setOnClickListener {
-            navController.navigate(
-                R.id.multiviewFragment,
-                MultiviewFragment.arguments(emptyList())
-            )
+            closePlayer()
+            runCatching {
+                navController.navigate(
+                    R.id.multiviewFragment,
+                    MultiviewFragment.arguments(emptyList())
+                )
+            }
         }
         navController.setOnBackPressedDispatcher(onBackPressedDispatcher)
         val tabList = resolveNavigationTabList(

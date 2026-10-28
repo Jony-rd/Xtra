@@ -125,13 +125,6 @@
         </LinearLayout>
     </LinearLayout>
 
-    <FrameLayout
-        android:id="@+id/playerContainer"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:clipChildren="false"
-        android:focusable="true" />
-
     <!-- Multiview Quick-Return Floating Tile -->
     <LinearLayout
         android:id="@+id/multiviewReturnButton"
@@ -167,5 +160,12 @@
             android:gravity="center_vertical"
             android:orientation="horizontal" />
     </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/playerContainer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clipChildren="false"
+        android:focusable="true" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

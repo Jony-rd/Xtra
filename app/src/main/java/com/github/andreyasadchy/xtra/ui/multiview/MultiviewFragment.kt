@@ -1248,9 +1248,17 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         }
     }
 
+    fun prepareForPictureInPicture() {
+        if (_binding == null) return
+        setControlsOverlayVisible(false)
+        slotViews.values.forEach { it.setControlsVisible(false) }
+        binding.chatContainer.isVisible = false
+        binding.toolbar.visibility = View.GONE
+    }
+
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode)
-        if (_binding == null || (activity as? MainActivity)?.playerFragment != null) return
+        if (_binding == null) return
         controlsHandler.removeCallbacks(hideControls)
         controlsLockCount = 0
         if (isInPictureInPictureMode) {
@@ -1258,7 +1266,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             setControlsOverlayVisible(false)
             slotViews.values.forEach { it.setControlsVisible(false) }
             binding.chatContainer.isVisible = false
+            binding.toolbar.visibility = View.GONE
         } else {
+            binding.toolbar.visibility = View.VISIBLE
             updateToolbar(latestState)
             updateChat(latestState)
             revealControls()
