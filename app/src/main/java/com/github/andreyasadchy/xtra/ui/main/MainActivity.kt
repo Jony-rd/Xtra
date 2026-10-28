@@ -1263,9 +1263,17 @@ class MainActivity : AppCompatActivity() {
     fun minimizeMultiview() {
         if (!canMinimizeMultiview()) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        currentMultiviewFragment()?.prepareForPictureInPicture()
+        val mv = currentMultiviewFragment()
+        mv?.prepareForPictureInPicture()
+        val gridRatio = mv?.calculateGridAspectRatio() ?: android.util.Rational(1, 1)
+        val sourceRect = mv?.getVideoGridRect()
         runCatching {
-            enterPictureInPictureMode(PictureInPictureParams.Builder().build())
+            val builder = PictureInPictureParams.Builder()
+                .setAspectRatio(gridRatio)
+            if (sourceRect != null && sourceRect.width() > 0 && sourceRect.height() > 0) {
+                builder.setSourceRectHint(sourceRect)
+            }
+            enterPictureInPictureMode(builder.build())
         }
     }
 

@@ -1029,6 +1029,22 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
     private fun updateOrientationLayout() {
         val binding = _binding ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && requireActivity().isInPictureInPictureMode) {
+            binding.chatContainer.isVisible = false
+            binding.specialRightColumn.isVisible = false
+            binding.controlsOverlay.visibility = View.GONE
+            (binding.multiviewContent.layoutParams as? LinearLayout.LayoutParams)?.apply {
+                width = ViewGroup.LayoutParams.MATCH_PARENT
+                height = ViewGroup.LayoutParams.MATCH_PARENT
+                weight = 1f
+            }
+            binding.videoGrid.layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+            renderTileBounds()
+            return
+        }
         val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         val specialTwoStreamChat = isTwoStreamLandscapeChatOff(latestState)
 
@@ -1246,6 +1262,27 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             (activity as? MainActivity)?.prepareMultiviewPictureInPicture()
             viewModel.onStart()
         }
+    }
+
+    fun calculateGridAspectRatio(): android.util.Rational {
+        val vg = _binding?.videoGrid
+        val w = vg?.width ?: 0
+        val h = vg?.height ?: 0
+        if (w > 0 && h > 0) {
+            val ratio = w.toFloat() / h.toFloat()
+            val clamped = ratio.coerceIn(1f / 2.38f, 2.38f)
+            return android.util.Rational((clamped * 1000).toInt(), 1000)
+        }
+        val streamCount = latestState.streams.size
+        return if (streamCount == 1) android.util.Rational(16, 9) else android.util.Rational(1, 1)
+    }
+
+    fun getVideoGridRect(): android.graphics.Rect? {
+        val vg = _binding?.videoGrid ?: return null
+        if (vg.width <= 0 || vg.height <= 0) return null
+        val location = IntArray(2)
+        vg.getLocationOnScreen(location)
+        return android.graphics.Rect(location[0], location[1], location[0] + vg.width, location[1] + vg.height)
     }
 
     fun prepareForPictureInPicture() {
