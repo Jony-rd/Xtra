@@ -1321,7 +1321,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 viewModel.toggleAudio(identity)
                 true
             }
-            menu.add(R.string.multiview_remove).setOnMenuItemClickListener {
+            menu.add(R.string.multiview_remove_stream).setOnMenuItemClickListener {
                 viewModel.remove(identity)
                 true
             }
