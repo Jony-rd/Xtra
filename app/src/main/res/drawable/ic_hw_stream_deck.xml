@@ -1,0 +1,37 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Stream Deck outer hardware body -->
+    <path
+        android:fillColor="#241938"
+        android:strokeColor="#A970FF"
+        android:strokeWidth="1.2"
+        android:pathData="M3,3 h18 a2,2 0 0 1 2,2 v14 a2,2 0 0 1 -2,2 h-18 a2,2 0 0 1 -2,-2 v-14 a2,2 0 0 1 2,-2 z" />
+    <!-- 6 Illuminated LCD Stream Deck Keys -->
+    <!-- Key 1 -->
+    <path
+        android:fillColor="#9146FF"
+        android:pathData="M4.5,5 h3.5 a1,1 0 0 1 1,1 v3.5 a1,1 0 0 1 -1,1 h-3.5 a1,1 0 0 1 -1,-1 v-3.5 a1,1 0 0 1 1,-1 z" />
+    <!-- Key 2 -->
+    <path
+        android:fillColor="#00F5D4"
+        android:pathData="M10.25,5 h3.5 a1,1 0 0 1 1,1 v3.5 a1,1 0 0 1 -1,1 h-3.5 a1,1 0 0 1 -1,-1 v-3.5 a1,1 0 0 1 1,-1 z" />
+    <!-- Key 3 -->
+    <path
+        android:fillColor="#FF5400"
+        android:pathData="M16,5 h3.5 a1,1 0 0 1 1,1 v3.5 a1,1 0 0 1 -1,1 h-3.5 a1,1 0 0 1 -1,-1 v-3.5 a1,1 0 0 1 1,-1 z" />
+    <!-- Key 4 -->
+    <path
+        android:fillColor="#FF007F"
+        android:pathData="M4.5,13.5 h3.5 a1,1 0 0 1 1,1 v3.5 a1,1 0 0 1 -1,1 h-3.5 a1,1 0 0 1 -1,-1 v-3.5 a1,1 0 0 1 1,-1 z" />
+    <!-- Key 5 -->
+    <path
+        android:fillColor="#7B2CBF"
+        android:pathData="M10.25,13.5 h3.5 a1,1 0 0 1 1,1 v3.5 a1,1 0 0 1 -1,1 h-3.5 a1,1 0 0 1 -1,-1 v-3.5 a1,1 0 0 1 1,-1 z" />
+    <!-- Key 6 -->
+    <path
+        android:fillColor="#FFE600"
+        android:pathData="M16,13.5 h3.5 a1,1 0 0 1 1,1 v3.5 a1,1 0 0 1 -1,1 h-3.5 a1,1 0 0 1 -1,-1 v-3.5 a1,1 0 0 1 1,-1 z" />
+</vector>
