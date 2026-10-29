@@ -792,7 +792,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 }
                 layoutParams = lp
                 setOnClickListener {
-                    SleepTimerDialog.show(childFragmentManager)
+                    SleepTimerDialog.newInstance((activity as? MainActivity)?.getSleepTimerTimeLeft() ?: 0).show(childFragmentManager, null)
                 }
             }
             header.addView(sleepBtn)
@@ -1127,7 +1127,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 // Bottom: Quality Selector Pills with REAL ACTIVE QUALITY detection
                 val available = listOf(autoLabel) + latestPlayback[identity]?.availableQualities.orEmpty()
                 val overrideQuality = latestState.qualityOverrides[identity]
-                val activePlayingQuality = latestPlayback[identity]?.activeQuality
+                val activePlayingQuality = latestPlayback[identity]?.qualityLabel
 
                 val qualityScroll = android.widget.HorizontalScrollView(context).apply {
                     isHorizontalScrollBarEnabled = false
@@ -1142,11 +1142,12 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 fun updatePills(activeQualTag: String) {
                     pillViews.forEach { pill ->
                         val pillTag = pill.tag as? String ?: ""
+                        val playingLabel = activePlayingQuality.orEmpty()
                         val isSelected = when {
                             pillTag == activeQualTag -> true
                             overrideQuality != null && pillTag == overrideQuality -> true
-                            overrideQuality == null && activePlayingQuality != null && (pillTag.contains(activePlayingQuality) || activePlayingQuality.contains(pillTag)) -> true
-                            overrideQuality == null && activePlayingQuality == null && pillTag == autoLabel -> true
+                            overrideQuality == null && playingLabel.isNotBlank() && (pillTag.contains(playingLabel, ignoreCase = true) || playingLabel.contains(pillTag, ignoreCase = true)) -> true
+                            overrideQuality == null && playingLabel.isBlank() && pillTag == autoLabel -> true
                             else -> false
                         }
                         val pillBg = android.graphics.drawable.GradientDrawable().apply {
@@ -1194,8 +1195,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     qualityRow.addView(pill)
                 }
 
+                val playingLabel = activePlayingQuality.orEmpty()
                 val defaultActiveTag = overrideQuality
-                    ?: available.firstOrNull { activePlayingQuality != null && (it.contains(activePlayingQuality) || activePlayingQuality.contains(it)) }
+                    ?: available.firstOrNull { playingLabel.isNotBlank() && (it.contains(playingLabel, ignoreCase = true) || playingLabel.contains(it, ignoreCase = true)) }
                     ?: autoLabel
                 updatePills(defaultActiveTag)
 
@@ -1267,7 +1269,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             return scroll
         }
 
-        dialog = android.app.Dialog(context, R.style.ThemeOverlay_MaterialComponents_Dialog).apply {
+        dialog = android.app.Dialog(context, R.style.MaterialBottomSheet).apply {
             requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
             setContentView(buildContent())
             window?.apply {
@@ -1283,6 +1285,51 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
         dialog.show()
     }
+    private fun showSlotQualityMenu(identity: String, slot: MultiviewSlotView) {
+        val stream = slot.stream ?: return
+        val autoLabel = getString(R.string.multiview_quality_auto)
+        val qualities = listOf(autoLabel) + latestPlayback[identity]
+            ?.availableQualities.orEmpty()
+        lockControls()
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(getString(R.string.multiview_quality_for, displayName(stream)))
+            .setItems(qualities.toTypedArray()) { _, which ->
+                viewModel.setQualityOverride(identity, qualities[which].takeUnless { it == autoLabel })
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .setOnDismissListener { unlockControls(slot) }
+            .show()
+    }
+
+    private fun showSlotMenu(slot: MultiviewSlotView) {
+        val identity = slot.identity
+        val stream = slot.stream ?: return
+        lockControls()
+        PopupMenu(requireContext(), slot.actionsAnchor, Gravity.END).apply {
+            menu.add(R.string.multiview_quality).setOnMenuItemClickListener {
+                showSlotQualityMenu(identity, slot)
+                true
+            }
+            menu.add(R.string.multiview_volume).setOnMenuItemClickListener {
+                showVolumeDialog(identity, stream)
+                true
+            }
+            menu.add(
+                if (viewModel.audioVolume(identity) > 0f) R.string.multiview_mute
+                else R.string.multiview_unmute,
+            ).setOnMenuItemClickListener {
+                viewModel.toggleAudio(identity)
+                true
+            }
+            menu.add(R.string.multiview_remove).setOnMenuItemClickListener {
+                viewModel.remove(identity)
+                true
+            }
+            setOnDismissListener { unlockControls(slot) }
+            show()
+        }
+    }
+
     private fun showVolumeDialog(identity: String, stream: Stream) {
         lockControls()
         val volumeBinding = PlayerVolumeBinding.inflate(layoutInflater)
