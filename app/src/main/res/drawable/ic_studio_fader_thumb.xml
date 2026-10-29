@@ -1,0 +1,20 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="14dp"
+    android:height="24dp"
+    android:viewportWidth="14"
+    android:viewportHeight="24">
+    <!-- Fader cap body -->
+    <path
+        android:fillColor="#1C1E2E"
+        android:strokeColor="#00F5D4"
+        android:strokeWidth="1"
+        android:pathData="M2,1 h10 a1,1 0 0 1 1,1 v20 a1,1 0 0 1 -1,1 h-10 a1,1 0 0 1 -1,-1 v-20 a1,1 0 0 1 1,-1 z" />
+    <!-- Bevel grip lines -->
+    <path
+        android:fillColor="#2F334A"
+        android:pathData="M3,4 h8 v2 h-8 z M3,18 h8 v2 h-8 z" />
+    <!-- Center illuminated position indicator slit -->
+    <path
+        android:fillColor="#00F5D4"
+        android:pathData="M1,11 h12 v2 h-12 z" />
+</vector>

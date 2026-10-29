@@ -136,15 +136,7 @@
                 android:src="@drawable/ic_hw_pumpkin_layout"
                  />
 
-            <ImageButton
-                android:id="@+id/moreButton"
-                android:layout_width="56dp"
-                android:layout_height="56dp"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:contentDescription="@string/multiview_more_options"
-                android:padding="14dp"
-                android:src="@drawable/ic_hw_skulls_overflow"
-                 />
+
         </LinearLayout>
     </FrameLayout>
 
