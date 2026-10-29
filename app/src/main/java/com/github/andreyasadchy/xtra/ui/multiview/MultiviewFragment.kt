@@ -1104,6 +1104,49 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 }
                 topRow.addView(nameView)
 
+                // Hardware 5-segment LED VU level meter
+                val vuMeter = LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(6), 0, dp(6), 0)
+                }
+                val ledSegments = (0 until 5).map { ledIndex ->
+                    android.view.View(context).apply {
+                        val lp = LinearLayout.LayoutParams(dp(5), dp(12)).apply {
+                            marginEnd = dp(2)
+                        }
+                        layoutParams = lp
+                    }
+                }
+                ledSegments.forEach { vuMeter.addView(it) }
+
+                fun updateVuMeter(volume: Float) {
+                    val litCount = when {
+                        volume <= 0.01f -> 0
+                        volume < 0.25f -> 1
+                        volume < 0.50f -> 2
+                        volume < 0.75f -> 3
+                        volume < 0.90f -> 4
+                        else -> 5
+                    }
+                    ledSegments.forEachIndexed { idx, led ->
+                        val isLit = idx < litCount
+                        val colorHex = when (idx) {
+                            0, 1, 2 -> if (isLit) "#00F5D4" else "#142523" // Green LED
+                            3 -> if (isLit) "#FFD600" else "#2b2513"       // Amber LED
+                            else -> if (isLit) "#FF1744" else "#2d161a"    // Red Peak LED
+                        }
+                        val bg = android.graphics.drawable.GradientDrawable().apply {
+                            setColor(android.graphics.Color.parseColor(colorHex))
+                            cornerRadius = dp(2).toFloat()
+                        }
+                        led.background = bg
+                    }
+                }
+                var vol = viewModel.audioVolume(identity)
+                updateVuMeter(vol)
+                topRow.addView(vuMeter)
+
                 // Reorder ▲
                 val upBtn = android.widget.TextView(context).apply {
                     text = "▲"
@@ -1134,7 +1177,6 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 }
                 topRow.addView(downBtn)
 
-                var vol = viewModel.audioVolume(identity)
                 val percentView = android.widget.TextView(context).apply {
                     text = "${(vol * 100).roundToInt()}%"
                     setTextColor(android.graphics.Color.WHITE)
@@ -1162,6 +1204,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                         if (fromUser) {
                             val newVol = value / 100f
                             viewModel.setAudioVolume(identity, newVol)
+                            updateVuMeter(newVol)
                             percentView.text = "${value.roundToInt()}%"
                             muteBtn.setImageResource(if (newVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
                             muteBtn.setColorFilter(if (newVol > 0f) android.graphics.Color.parseColor("#00F5D4") else android.graphics.Color.parseColor("#FF5400"))
@@ -1173,6 +1216,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     val currentVol = viewModel.audioVolume(identity)
                     val targetVol = if (currentVol > 0f) 0f else viewModel.defaultAudioVolume().takeIf { it > 0f } ?: 1f
                     viewModel.setAudioVolume(identity, targetVol)
+                    updateVuMeter(targetVol)
                     slider.value = targetVol * 100f
                     percentView.text = "${(targetVol * 100).roundToInt()}%"
                     muteBtn.setImageResource(if (targetVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
