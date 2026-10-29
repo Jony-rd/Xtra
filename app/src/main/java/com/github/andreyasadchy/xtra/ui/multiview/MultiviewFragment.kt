@@ -1107,7 +1107,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     }
                     rulerLayout.addView(spacer)
                     val tick = View(context).apply {
-                        val lp = LinearLayout.LayoutParams(dp(1.5f), dp(5)).apply {
+                        val lp = LinearLayout.LayoutParams(dp(2), dp(5)).apply {
                             gravity = Gravity.CENTER_VERTICAL
                         }
                         layoutParams = lp
@@ -1137,7 +1137,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     }
                     rulerLayout.addView(spacer)
                     val tick = View(context).apply {
-                        val lp = LinearLayout.LayoutParams(dp(1.5f), dp(5)).apply {
+                        val lp = LinearLayout.LayoutParams(dp(2), dp(5)).apply {
                             gravity = Gravity.CENTER_VERTICAL
                         }
                         layoutParams = lp
