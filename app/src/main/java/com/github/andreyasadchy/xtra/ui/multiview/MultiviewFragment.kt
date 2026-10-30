@@ -1056,6 +1056,23 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 topRow.addView(muteBtn)
                 topRow.addView(percentView)
 
+                // Open in Single Player [⛶] button
+                val openPlayerBtn = android.widget.ImageView(context).apply {
+                    layoutParams = LinearLayout.LayoutParams(dp(22), dp(22)).apply {
+                        marginStart = dp(6)
+                        marginEnd = dp(2)
+                    }
+                    setImageResource(R.drawable.ic_pref_fullscreen)
+                    setColorFilter(android.graphics.Color.parseColor("#00F5D4"))
+                    setPadding(dp(2), dp(2), dp(2), dp(2))
+                    contentDescription = getString(R.string.multiview_open_player)
+                    setOnClickListener {
+                        dialog?.dismiss()
+                        openNormalPlayer(identity)
+                    }
+                }
+                topRow.addView(openPlayerBtn)
+
                 // Remove Stream [✕] button
                 val removeStreamBtn = android.widget.TextView(context).apply {
                     text = "✕"
@@ -1394,6 +1411,10 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 else R.string.multiview_unmute,
             ).setOnMenuItemClickListener {
                 viewModel.toggleAudio(identity)
+                true
+            }
+            menu.add(R.string.multiview_open_player).setOnMenuItemClickListener {
+                openNormalPlayer(identity)
                 true
             }
             menu.add(R.string.multiview_remove_stream).setOnMenuItemClickListener {
