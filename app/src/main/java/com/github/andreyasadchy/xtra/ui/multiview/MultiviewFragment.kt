@@ -729,653 +729,638 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         if (latestState.streams.isEmpty()) return
         lockControls()
 
-        var dialog: android.app.Dialog? = null
+        try {
+            var dialog: androidx.appcompat.app.AppCompatDialog? = null
 
-        // 3D Floating Hardware Chassis (Sticker on screen: 90% width, crisp 8dp corners, 2dp purple border)
-        val chassis = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            val p = dp(14)
-            setPadding(p, p, p, p)
-            val bg = android.graphics.drawable.GradientDrawable().apply {
-                setColor(android.graphics.Color.parseColor("#0e0f18"))
-                cornerRadius = dp(8).toFloat() // Crisp 8dp hardware corners!
-                setStroke(dp(2), android.graphics.Color.parseColor("#9146FF")) // Glowing 2dp purple border
-            }
-            background = bg
-            elevation = dp(24).toFloat()
-            clipToOutline = true
-        }
-
-        // Top Header: [:::] STREAM DECK STUDIO      [⏱️ SLEEP]   [✕]
-        val header = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 0, 0, dp(10))
-        }
-        val deckIcon = android.widget.ImageView(context).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(22), dp(22))
-            setImageResource(R.drawable.ic_hw_stream_deck)
-        }
-        header.addView(deckIcon)
-
-        val titleView = android.widget.TextView(context).apply {
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginStart = dp(8)
-            }
-            text = "STREAM DECK STUDIO"
-            setTextColor(android.graphics.Color.parseColor("#A970FF"))
-            textSize = 14f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-        }
-        header.addView(titleView)
-
-        // Sleep Timer button
-        val sleepBtn = android.widget.TextView(context).apply {
-            text = "⏱️ SLEEP"
-            textSize = 11f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setTextColor(android.graphics.Color.WHITE)
-            val bg = android.graphics.drawable.GradientDrawable().apply {
-                setColor(android.graphics.Color.parseColor("#1c1d2b"))
-                cornerRadius = dp(6).toFloat()
-                setStroke(dp(1), android.graphics.Color.parseColor("#34364e"))
-            }
-            background = bg
-            setPadding(dp(8), dp(4), dp(8), dp(4))
-            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                marginEnd = dp(8)
-            }
-            layoutParams = lp
-            setOnClickListener {
-                SleepTimerDialog.newInstance((activity as? MainActivity)?.getSleepTimerTimeLeft() ?: 0).show(childFragmentManager, null)
-            }
-        }
-        header.addView(sleepBtn)
-
-        // Close [✕] button
-        val closeBtn = android.widget.TextView(context).apply {
-            text = "✕"
-            textSize = 16f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setTextColor(android.graphics.Color.parseColor("#A0A2B8"))
-            setPadding(dp(6), dp(2), dp(6), dp(2))
-            setOnClickListener { dialog?.dismiss() }
-        }
-        header.addView(closeBtn)
-        chassis.addView(header)
-
-        val autoLabel = getString(R.string.multiview_quality_auto)
-
-        // MASTER GLOBAL QUALITY BAR
-        val masterCard = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(8), dp(6), dp(8), dp(6))
-            val bg = android.graphics.drawable.GradientDrawable().apply {
-                setColor(android.graphics.Color.parseColor("#141522"))
-                cornerRadius = dp(6).toFloat()
-                setStroke(dp(1), android.graphics.Color.parseColor("#00F5D4"))
-            }
-            background = bg
-            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = dp(10)
-            }
-            layoutParams = lp
-        }
-
-        val masterLabel = android.widget.TextView(context).apply {
-            text = "⚡ MASTER:"
-            textSize = 11f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setTextColor(android.graphics.Color.parseColor("#00F5D4"))
-            setPadding(0, 0, dp(8), 0)
-        }
-        masterCard.addView(masterLabel)
-
-        val masterScroll = android.widget.HorizontalScrollView(context).apply {
-            isHorizontalScrollBarEnabled = false
-        }
-        val masterRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-
-        val cardPillUpdaters = mutableListOf<() -> Unit>()
-
-        val standardQualities = listOf(autoLabel, "1080p", "720p", "480p", "360p", "160p")
-        standardQualities.forEach { qual ->
-            val pill = android.widget.TextView(context).apply {
-                text = if (qual == autoLabel) "Auto" else qual
-                textSize = 11f
-                typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(android.graphics.Color.WHITE)
+            // 3D Floating Hardware Chassis (90% width, crisp 8dp Elgato hardware corners, 2dp purple border)
+            val chassis = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                val p = dp(14)
+                setPadding(p, p, p, p)
                 val bg = android.graphics.drawable.GradientDrawable().apply {
-                    setColor(android.graphics.Color.parseColor("#1e2030"))
-                    cornerRadius = dp(4).toFloat()
-                    setStroke(dp(1), android.graphics.Color.parseColor("#3a3e5e"))
+                    setColor(android.graphics.Color.parseColor("#0e0f18"))
+                    cornerRadius = dp(8).toFloat()
+                    setStroke(dp(2), android.graphics.Color.parseColor("#9146FF"))
                 }
                 background = bg
-                setPadding(dp(7), dp(3), dp(7), dp(3))
-                val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    marginEnd = dp(4)
-                }
-                layoutParams = lp
-                setOnClickListener {
-                    latestState.streams.forEach { stream ->
-                        val id = MultiviewSessionReducer.stableIdentity(stream) ?: return@forEach
-                        val targetLabel = if (qual == autoLabel) {
-                            null
-                        } else {
-                            latestPlayback[id]?.availableQualities?.firstOrNull { it.contains(qual) } ?: qual
-                        }
-                        viewModel.setQualityOverride(id, targetLabel)
-                    }
-                    cardPillUpdaters.forEach { it.invoke() }
-                }
+                elevation = dp(24).toFloat()
+                clipToOutline = true
             }
-            masterRow.addView(pill)
-        }
-        masterScroll.addView(masterRow)
-        masterCard.addView(masterScroll)
-        chassis.addView(masterCard)
 
-        // Stream Rows Container (ScrollView)
-        val streamScroll = android.widget.ScrollView(context).apply {
-            isFillViewport = true
-            val maxH = (context.resources.displayMetrics.heightPixels * 0.52f).toInt()
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
-                // Constrain max height so it never exceeds screen bounds
+            // Top Header: [:::] STREAM DECK+ [PRO]       [⏱️ SLEEP]   [✕]
+            val header = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, 0, 0, dp(10))
             }
-        }
-        val streamListLayout = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-        streamScroll.addView(streamListLayout)
-
-        fun populateCards() {
-            streamListLayout.removeAllViews()
-            cardPillUpdaters.clear()
-            val streams = latestState.streams
-
-            streams.forEachIndexed { index, stream ->
-                val identity = MultiviewSessionReducer.stableIdentity(stream) ?: return@forEachIndexed
-
-                val card = LinearLayout(context).apply {
-                    orientation = LinearLayout.VERTICAL
-                    setPadding(dp(10), dp(8), dp(10), dp(10))
-                    val bg = android.graphics.drawable.GradientDrawable().apply {
-                        setColor(android.graphics.Color.parseColor("#151623"))
-                        cornerRadius = dp(6).toFloat()
-                        setStroke(dp(1), android.graphics.Color.parseColor("#2a2b3d"))
-                    }
-                    background = bg
-                    val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                        bottomMargin = dp(10)
-                    }
-                    layoutParams = lp
-                }
-
-                // Top row: [#1] [Avatar] [Streamer Name] [VU] [▲] [▼] [MUTE] [%] [✕]
-                val topRow = LinearLayout(context).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                }
-
-                // Slot badge
-                val slotBadge = android.widget.TextView(context).apply {
-                    text = "#${index + 1}"
-                    setTextColor(android.graphics.Color.parseColor("#00F5D4"))
-                    textSize = 12f
-                    typeface = android.graphics.Typeface.DEFAULT_BOLD
-                    val badgeBg = android.graphics.drawable.GradientDrawable().apply {
-                        setColor(android.graphics.Color.parseColor("#1a2b2f"))
-                        cornerRadius = dp(4).toFloat()
-                        setStroke(dp(1), android.graphics.Color.parseColor("#00F5D4"))
-                    }
-                    background = badgeBg
-                    setPadding(dp(5), dp(1), dp(5), dp(1))
-                }
-                topRow.addView(slotBadge)
-
-                // Avatar
-                val avatar = android.widget.ImageView(context).apply {
-                    layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply {
-                        marginStart = dp(6)
-                    }
-                    scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
-                    clipToOutline = true
-                    outlineProvider = object : android.view.ViewOutlineProvider() {
-                        override fun getOutline(view: View, outline: android.graphics.Outline) {
-                            outline.setRoundRect(0, 0, view.width, view.height, dp(4).toFloat())
-                        }
-                    }
-                    setImageResource(R.drawable.ic_person_placeholder)
-                }
-                com.github.andreyasadchy.xtra.ui.common.loadStreamProfileImage(context, avatar, stream)
-                topRow.addView(avatar)
-
-                // Streamer Name
-                val nameView = android.widget.TextView(context).apply {
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                        marginStart = dp(6)
-                    }
-                    text = displayName(stream)
-                    setTextColor(android.graphics.Color.WHITE)
-                    textSize = 13f
-                    typeface = android.graphics.Typeface.DEFAULT_BOLD
-                    maxLines = 1
-                    ellipsize = android.text.TextUtils.TruncateAt.END
-                }
-                topRow.addView(nameView)
-
-                // Hardware 5-segment LED VU level meter
-                val vuMeter = LinearLayout(context).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    setPadding(dp(4), 0, dp(4), 0)
-                }
-                val ledSegments = (0 until 5).map {
-                    android.view.View(context).apply {
-                        val lp = LinearLayout.LayoutParams(dp(4), dp(11)).apply {
-                            marginEnd = dp(2)
-                        }
-                        layoutParams = lp
-                    }
-                }
-                ledSegments.forEach { vuMeter.addView(it) }
-
-                fun updateVuMeter(volume: Float) {
-                    val litCount = when {
-                        volume <= 0.01f -> 0
-                        volume < 0.25f -> 1
-                        volume < 0.50f -> 2
-                        volume < 0.75f -> 3
-                        volume < 0.90f -> 4
-                        else -> 5
-                    }
-                    ledSegments.forEachIndexed { idx, led ->
-                        val isLit = idx < litCount
-                        val colorHex = when (idx) {
-                            0, 1, 2 -> if (isLit) "#00F5D4" else "#142523"
-                            3 -> if (isLit) "#FFD600" else "#2b2513"
-                            else -> if (isLit) "#FF1744" else "#2d161a"
-                        }
-                        val bg = android.graphics.drawable.GradientDrawable().apply {
-                            setColor(android.graphics.Color.parseColor(colorHex))
-                            cornerRadius = dp(2).toFloat()
-                        }
-                        led.background = bg
-                    }
-                }
-                var vol = viewModel.audioVolume(identity)
-                updateVuMeter(vol)
-                topRow.addView(vuMeter)
-
-                // Reorder ▲
-                val upBtn = android.widget.TextView(context).apply {
-                    text = "▲"
-                    setTextColor(if (index > 0) android.graphics.Color.parseColor("#A970FF") else android.graphics.Color.parseColor("#444654"))
-                    textSize = 14f
-                    setPadding(dp(6), dp(2), dp(4), dp(2))
-                    if (index > 0) {
-                        setOnClickListener {
-                            viewModel.reorder(identity, index - 1)
-                            populateCards()
-                        }
-                    }
-                }
-                topRow.addView(upBtn)
-
-                // Reorder ▼
-                val downBtn = android.widget.TextView(context).apply {
-                    text = "▼"
-                    setTextColor(if (index < streams.lastIndex) android.graphics.Color.parseColor("#A970FF") else android.graphics.Color.parseColor("#444654"))
-                    textSize = 14f
-                    setPadding(dp(4), dp(2), dp(6), dp(2))
-                    if (index < streams.lastIndex) {
-                        setOnClickListener {
-                            viewModel.reorder(identity, index + 1)
-                            populateCards()
-                        }
-                    }
-                }
-                topRow.addView(downBtn)
-
-                val percentView = android.widget.TextView(context).apply {
-                    text = "${(vol * 100).roundToInt()}%"
-                    setTextColor(android.graphics.Color.WHITE)
-                    textSize = 12f
-                    setPadding(dp(2), 0, dp(2), 0)
-                }
-
-                val muteBtn = android.widget.ImageButton(context).apply {
-                    layoutParams = LinearLayout.LayoutParams(dp(26), dp(26))
-                    background = null
-                    setImageResource(if (vol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
-                    setColorFilter(if (vol > 0f) android.graphics.Color.parseColor("#00F5D4") else android.graphics.Color.parseColor("#FF5400"))
-                }
-                topRow.addView(muteBtn)
-                topRow.addView(percentView)
-
-                // Open in Single Player [⛶] button
-                val openPlayerBtn = android.widget.ImageView(context).apply {
-                    layoutParams = LinearLayout.LayoutParams(dp(22), dp(22)).apply {
-                        marginStart = dp(6)
-                        marginEnd = dp(2)
-                    }
-                    setImageResource(R.drawable.ic_pref_fullscreen)
-                    setColorFilter(android.graphics.Color.parseColor("#00F5D4"))
-                    setPadding(dp(2), dp(2), dp(2), dp(2))
-                    contentDescription = getString(R.string.multiview_open_player)
-                    setOnClickListener {
-                        dialog?.dismiss()
-                        openNormalPlayer(identity)
-                    }
-                }
-                topRow.addView(openPlayerBtn)
-
-                // Remove Stream [✕] button
-                val removeStreamBtn = android.widget.TextView(context).apply {
-                    text = "✕"
-                    setTextColor(android.graphics.Color.parseColor("#FF5400"))
-                    textSize = 14f
-                    typeface = android.graphics.Typeface.DEFAULT_BOLD
-                    setPadding(dp(8), dp(2), dp(2), dp(2))
-                    setOnClickListener {
-                        viewModel.remove(identity)
-                        if (latestState.streams.size <= 1) {
-                            dialog?.dismiss()
-                        } else {
-                            populateCards()
-                        }
-                    }
-                }
-                topRow.addView(removeStreamBtn)
-
-                card.addView(topRow)
-
-                // Middle: Pro Studio Fader Section with 0 - 50 - 100 ruler notches
-                val faderLayout = LinearLayout(context).apply {
-                    orientation = LinearLayout.VERTICAL
-                    setPadding(0, dp(6), 0, dp(2))
-                }
-
-                val rulerLayout = LinearLayout(context).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    setPadding(dp(16), dp(2), dp(16), 0)
-                }
-
-                // 0 label
-                val label0 = android.widget.TextView(context).apply {
-                    text = "0"
-                    textSize = 9f
-                    setTextColor(android.graphics.Color.parseColor("#00F5D4"))
-                    typeface = android.graphics.Typeface.MONOSPACE
-                }
-                rulerLayout.addView(label0)
-
-                for (t in 1..4) {
-                    val spacer = View(context).apply {
-                        layoutParams = LinearLayout.LayoutParams(0, dp(1), 1f)
-                    }
-                    rulerLayout.addView(spacer)
-                    val tick = View(context).apply {
-                        val lp = LinearLayout.LayoutParams(dp(2), dp(5)).apply {
-                            gravity = Gravity.CENTER_VERTICAL
-                        }
-                        layoutParams = lp
-                        setBackgroundColor(android.graphics.Color.parseColor("#4E5275"))
-                    }
-                    rulerLayout.addView(tick)
-                }
-
-                val spacerMid1 = View(context).apply {
-                    layoutParams = LinearLayout.LayoutParams(0, dp(1), 1f)
-                }
-                rulerLayout.addView(spacerMid1)
-
-                // 50 center label
-                val label50 = android.widget.TextView(context).apply {
-                    text = "50"
-                    textSize = 9f
-                    setTextColor(android.graphics.Color.parseColor("#A970FF"))
-                    typeface = android.graphics.Typeface.MONOSPACE
-                }
-                rulerLayout.addView(label50)
-
-                for (t in 6..9) {
-                    val spacer = View(context).apply {
-                        layoutParams = LinearLayout.LayoutParams(0, dp(1), 1f)
-                    }
-                    rulerLayout.addView(spacer)
-                    val tick = View(context).apply {
-                        val lp = LinearLayout.LayoutParams(dp(2), dp(5)).apply {
-                            gravity = Gravity.CENTER_VERTICAL
-                        }
-                        layoutParams = lp
-                        setBackgroundColor(android.graphics.Color.parseColor("#4E5275"))
-                    }
-                    rulerLayout.addView(tick)
-                }
-
-                val spacerMid2 = View(context).apply {
-                    layoutParams = LinearLayout.LayoutParams(0, dp(1), 1f)
-                }
-                rulerLayout.addView(spacerMid2)
-
-                // 100 label
-                val label100 = android.widget.TextView(context).apply {
-                    text = "100"
-                    textSize = 9f
-                    setTextColor(android.graphics.Color.parseColor("#00F5D4"))
-                    typeface = android.graphics.Typeface.MONOSPACE
-                }
-                rulerLayout.addView(label100)
-                faderLayout.addView(rulerLayout)
-
-                // Pro Studio Slider (Crash-proof native slider with cyan knob and purple track)
-                val slider = Slider(context).apply {
-                    valueFrom = 0f
-                    valueTo = 100f
-                    stepSize = 5f
-                    isTickVisible = false
-                    trackHeight = dp(6)
-                    thumbRadius = dp(8)
-                    trackActiveTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#9146FF"))
-                    trackInactiveTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#1c1d2c"))
-                    thumbTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#00F5D4"))
-                    value = (vol * 100f).coerceIn(0f, 100f)
-                    addOnChangeListener { _, value, fromUser ->
-                        if (fromUser) {
-                            val newVol = value / 100f
-                            viewModel.setAudioVolume(identity, newVol)
-                            updateVuMeter(newVol)
-                            percentView.text = "${value.roundToInt()}%"
-                            muteBtn.setImageResource(if (newVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
-                            muteBtn.setColorFilter(if (newVol > 0f) android.graphics.Color.parseColor("#00F5D4") else android.graphics.Color.parseColor("#FF5400"))
-                        }
-                    }
-                }
-
-                muteBtn.setOnClickListener {
-                    val currentVol = viewModel.audioVolume(identity)
-                    val targetVol = if (currentVol > 0f) 0f else viewModel.defaultAudioVolume().takeIf { it > 0f } ?: 1f
-                    viewModel.setAudioVolume(identity, targetVol)
-                    updateVuMeter(targetVol)
-                    slider.value = targetVol * 100f
-                    percentView.text = "${(targetVol * 100).roundToInt()}%"
-                    muteBtn.setImageResource(if (targetVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
-                    muteBtn.setColorFilter(if (targetVol > 0f) android.graphics.Color.parseColor("#00F5D4") else android.graphics.Color.parseColor("#FF5400"))
-                }
-                faderLayout.addView(slider)
-                card.addView(faderLayout)
-
-                // Bottom: Quality Selector Pills with REAL ACTIVE QUALITY detection
-                val available = listOf(autoLabel) + latestPlayback[identity]?.availableQualities.orEmpty()
-                val qualityScroll = android.widget.HorizontalScrollView(context).apply {
-                    isHorizontalScrollBarEnabled = false
-                }
-                val qualityRow = LinearLayout(context).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    setPadding(0, dp(2), 0, dp(2))
-                }
-
-                val pillViews = mutableListOf<android.widget.TextView>()
-
-                fun refreshThisPills() {
-                    val overrideQuality = latestState.qualityOverrides[identity]
-                    val activePlayingQuality = latestPlayback[identity]?.qualityLabel
-                    val playingLabel = activePlayingQuality.orEmpty()
-                    val targetTag = overrideQuality
-                        ?: available.firstOrNull { playingLabel.isNotBlank() && (it.contains(playingLabel, ignoreCase = true) || playingLabel.contains(it, ignoreCase = true)) }
-                        ?: autoLabel
-
-                    pillViews.forEach { pill ->
-                        val pillTag = pill.tag as? String ?: ""
-                        val isSelected = when {
-                            pillTag == targetTag -> true
-                            overrideQuality != null && pillTag == overrideQuality -> true
-                            overrideQuality == null && playingLabel.isNotBlank() && (pillTag.contains(playingLabel, ignoreCase = true) || playingLabel.contains(pillTag, ignoreCase = true)) -> true
-                            overrideQuality == null && playingLabel.isBlank() && pillTag == autoLabel -> true
-                            else -> false
-                        }
-                        val pillBg = android.graphics.drawable.GradientDrawable().apply {
-                            cornerRadius = dp(4).toFloat()
-                            if (isSelected) {
-                                setColor(android.graphics.Color.parseColor("#9146FF"))
-                                setStroke(dp(1), android.graphics.Color.parseColor("#D3B3FF"))
-                            } else {
-                                setColor(android.graphics.Color.parseColor("#1c1d2b"))
-                                setStroke(dp(1), android.graphics.Color.parseColor("#34364e"))
-                            }
-                        }
-                        pill.background = pillBg
-                        pill.setTextColor(if (isSelected) android.graphics.Color.WHITE else android.graphics.Color.parseColor("#A0A2B8"))
-                    }
-                }
-                cardPillUpdaters.add(::refreshThisPills)
-
-                available.forEach { qual ->
-                    val shortName = when {
-                        qual == autoLabel -> "Auto"
-                        qual.contains("1080") -> "1080p"
-                        qual.contains("720") -> "720p"
-                        qual.contains("480") -> "480p"
-                        qual.contains("360") -> "360p"
-                        qual.contains("160") -> "160p"
-                        else -> qual.split(" ").firstOrNull() ?: qual
-                    }
-
-                    val pill = android.widget.TextView(context).apply {
-                        tag = qual
-                        text = shortName
-                        textSize = 11f
-                        typeface = android.graphics.Typeface.DEFAULT_BOLD
-                        setPadding(dp(8), dp(4), dp(8), dp(4))
-                        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                            marginEnd = dp(4)
-                        }
-                        layoutParams = lp
-                        setOnClickListener {
-                            viewModel.setQualityOverride(identity, qual.takeUnless { it == autoLabel })
-                            refreshThisPills()
-                        }
-                    }
-                    pillViews.add(pill)
-                    qualityRow.addView(pill)
-                }
-
-                refreshThisPills()
-                qualityScroll.addView(qualityRow)
-                card.addView(qualityScroll)
-
-                streamListLayout.addView(card)
+            val deckIcon = android.widget.ImageView(context).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(22), dp(22))
+                setImageResource(R.drawable.ic_hw_stream_deck)
             }
-        }
+            header.addView(deckIcon)
 
-        populateCards()
-        chassis.addView(streamScroll)
+            val titleView = android.widget.TextView(context).apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    marginStart = dp(8)
+                }
+                text = "STREAM DECK+"
+                setTextColor(android.graphics.Color.parseColor("#A970FF"))
+                textSize = 14f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+            }
+            header.addView(titleView)
 
-        // Bottom Macro Actions: [MUTE ALL] [EQUALIZE] [SOLO ACTIVE]
-        val bottomMacros = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            setPadding(0, dp(6), 0, dp(2))
-        }
+            val proBadge = android.widget.TextView(context).apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginStart = dp(6)
+                }
+                text = "STUDIO"
+                setTextColor(android.graphics.Color.parseColor("#00F5D4"))
+                textSize = 10f
+                typeface = android.graphics.Typeface.MONOSPACE
+            }
+            header.addView(proBadge)
 
-        fun createMacroBtn(label: String, colorHex: String, onClick: () -> Unit): android.widget.TextView {
-            return android.widget.TextView(context).apply {
-                text = label
+            // Sleep Timer button
+            val sleepBtn = android.widget.TextView(context).apply {
+                text = "⏱️ SLEEP"
                 textSize = 11f
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
                 setTextColor(android.graphics.Color.WHITE)
-                setPadding(dp(10), dp(6), dp(10), dp(6))
                 val bg = android.graphics.drawable.GradientDrawable().apply {
                     setColor(android.graphics.Color.parseColor("#1c1d2b"))
                     cornerRadius = dp(6).toFloat()
-                    setStroke(dp(1), android.graphics.Color.parseColor(colorHex))
+                    setStroke(dp(1), android.graphics.Color.parseColor("#34364e"))
                 }
                 background = bg
-                val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                    marginStart = dp(3)
-                    marginEnd = dp(3)
+                setPadding(dp(8), dp(4), dp(8), dp(4))
+                val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    marginEnd = dp(8)
                 }
                 layoutParams = lp
-                gravity = Gravity.CENTER
                 setOnClickListener {
-                    onClick()
-                    populateCards()
+                    SleepTimerDialog.newInstance((activity as? MainActivity)?.getSleepTimerTimeLeft() ?: 0).show(childFragmentManager, null)
                 }
             }
+            header.addView(sleepBtn)
+
+            // Close [✕] button
+            val closeBtn = android.widget.TextView(context).apply {
+                text = "✕"
+                textSize = 16f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(android.graphics.Color.parseColor("#A0A2B8"))
+                setPadding(dp(6), dp(2), dp(6), dp(2))
+                setOnClickListener { dialog?.dismiss() }
+            }
+            header.addView(closeBtn)
+            chassis.addView(header)
+
+            val autoLabel = getString(R.string.multiview_quality_auto)
+
+            // MASTER GLOBAL QUALITY BAR
+            val masterCard = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(8), dp(6), dp(8), dp(6))
+                val bg = android.graphics.drawable.GradientDrawable().apply {
+                    setColor(android.graphics.Color.parseColor("#141522"))
+                    cornerRadius = dp(6).toFloat()
+                    setStroke(dp(1), android.graphics.Color.parseColor("#00F5D4"))
+                }
+                background = bg
+                val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    bottomMargin = dp(10)
+                }
+                layoutParams = lp
+            }
+
+            val masterLabel = android.widget.TextView(context).apply {
+                text = "⚡ MASTER:"
+                textSize = 11f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(android.graphics.Color.parseColor("#00F5D4"))
+                setPadding(0, 0, dp(8), 0)
+            }
+            masterCard.addView(masterLabel)
+
+            val masterScroll = android.widget.HorizontalScrollView(context).apply {
+                isHorizontalScrollBarEnabled = false
+            }
+            val masterRow = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+
+            val cardPillUpdaters = mutableListOf<() -> Unit>()
+
+            val standardQualities = listOf(autoLabel, "1080p", "720p", "480p", "360p", "160p")
+            standardQualities.forEach { qual ->
+                val pill = android.widget.TextView(context).apply {
+                    text = if (qual == autoLabel) "Auto" else qual
+                    textSize = 11f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    setTextColor(android.graphics.Color.WHITE)
+                    val bg = android.graphics.drawable.GradientDrawable().apply {
+                        setColor(android.graphics.Color.parseColor("#1e2030"))
+                        cornerRadius = dp(4).toFloat()
+                        setStroke(dp(1), android.graphics.Color.parseColor("#3a3e5e"))
+                    }
+                    background = bg
+                    setPadding(dp(7), dp(3), dp(7), dp(3))
+                    val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        marginEnd = dp(4)
+                    }
+                    layoutParams = lp
+                    setOnClickListener {
+                        latestState.streams.forEach { stream ->
+                            val id = MultiviewSessionReducer.stableIdentity(stream) ?: return@forEach
+                            val targetLabel = if (qual == autoLabel) {
+                                null
+                            } else {
+                                latestPlayback[id]?.availableQualities?.firstOrNull { it.contains(qual) } ?: qual
+                            }
+                            viewModel.setQualityOverride(id, targetLabel)
+                        }
+                        cardPillUpdaters.forEach { it.invoke() }
+                    }
+                }
+                masterRow.addView(pill)
+            }
+            masterScroll.addView(masterRow)
+            masterCard.addView(masterScroll)
+            chassis.addView(masterCard)
+
+            // Stream Rows Container (ScrollView)
+            val streamScroll = android.widget.ScrollView(context).apply {
+                isFillViewport = true
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            }
+            val streamListLayout = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+            streamScroll.addView(streamListLayout)
+
+            fun populateCards() {
+                streamListLayout.removeAllViews()
+                cardPillUpdaters.clear()
+                val streams = latestState.streams.toList()
+
+                streams.forEachIndexed { index, stream ->
+                    val identity = MultiviewSessionReducer.stableIdentity(stream) ?: return@forEachIndexed
+
+                    val card = LinearLayout(context).apply {
+                        orientation = LinearLayout.VERTICAL
+                        setPadding(dp(10), dp(8), dp(10), dp(10))
+                        val bg = android.graphics.drawable.GradientDrawable().apply {
+                            setColor(android.graphics.Color.parseColor("#151623"))
+                            cornerRadius = dp(6).toFloat()
+                            setStroke(dp(1), android.graphics.Color.parseColor("#2a2b3d"))
+                        }
+                        background = bg
+                        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                            bottomMargin = dp(10)
+                        }
+                        layoutParams = lp
+                    }
+
+                    // Top row: [#1] [Avatar] [Streamer Name] [VU] [▲] [▼] [MUTE] [%] [⛶] [✕]
+                    val topRow = LinearLayout(context).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                    }
+
+                    // Slot badge
+                    val slotBadge = android.widget.TextView(context).apply {
+                        text = "#${index + 1}"
+                        setTextColor(android.graphics.Color.parseColor("#00F5D4"))
+                        textSize = 12f
+                        typeface = android.graphics.Typeface.DEFAULT_BOLD
+                        val badgeBg = android.graphics.drawable.GradientDrawable().apply {
+                            setColor(android.graphics.Color.parseColor("#1a2b2f"))
+                            cornerRadius = dp(4).toFloat()
+                            setStroke(dp(1), android.graphics.Color.parseColor("#00F5D4"))
+                        }
+                        background = badgeBg
+                        setPadding(dp(5), dp(1), dp(5), dp(1))
+                    }
+                    topRow.addView(slotBadge)
+
+                    // Avatar
+                    val avatar = android.widget.ImageView(context).apply {
+                        layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply {
+                            marginStart = dp(6)
+                        }
+                        scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+                        clipToOutline = true
+                        outlineProvider = object : android.view.ViewOutlineProvider() {
+                            override fun getOutline(view: View, outline: android.graphics.Outline) {
+                                outline.setRoundRect(0, 0, view.width, view.height, dp(4).toFloat())
+                            }
+                        }
+                        setImageResource(R.drawable.ic_person_placeholder)
+                    }
+                    try {
+                        com.github.andreyasadchy.xtra.ui.common.loadStreamProfileImage(context, avatar, stream)
+                    } catch (_: Exception) {}
+                    topRow.addView(avatar)
+
+                    // Streamer Name
+                    val nameView = android.widget.TextView(context).apply {
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                            marginStart = dp(6)
+                        }
+                        text = displayName(stream)
+                        setTextColor(android.graphics.Color.WHITE)
+                        textSize = 13f
+                        typeface = android.graphics.Typeface.DEFAULT_BOLD
+                        maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                    }
+                    topRow.addView(nameView)
+
+                    // Hardware 5-segment LED VU level meter
+                    val vuMeter = LinearLayout(context).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        setPadding(dp(4), 0, dp(4), 0)
+                    }
+                    val ledSegments = (0 until 5).map {
+                        android.view.View(context).apply {
+                            val lp = LinearLayout.LayoutParams(dp(4), dp(11)).apply {
+                                marginEnd = dp(2)
+                            }
+                            layoutParams = lp
+                        }
+                    }
+                    ledSegments.forEach { vuMeter.addView(it) }
+
+                    fun updateVuMeter(volume: Float) {
+                        val litCount = when {
+                            volume <= 0.01f -> 0
+                            volume < 0.25f -> 1
+                            volume < 0.50f -> 2
+                            volume < 0.75f -> 3
+                            volume < 0.90f -> 4
+                            else -> 5
+                        }
+                        ledSegments.forEachIndexed { idx, led ->
+                            val isLit = idx < litCount
+                            val colorHex = when (idx) {
+                                0, 1, 2 -> if (isLit) "#00F5D4" else "#142523"
+                                3 -> if (isLit) "#FFD600" else "#2b2513"
+                                else -> if (isLit) "#FF1744" else "#2d161a"
+                            }
+                            val bg = android.graphics.drawable.GradientDrawable().apply {
+                                setColor(android.graphics.Color.parseColor(colorHex))
+                                cornerRadius = dp(2).toFloat()
+                            }
+                            led.background = bg
+                        }
+                    }
+                    var vol = viewModel.audioVolume(identity)
+                    updateVuMeter(vol)
+                    topRow.addView(vuMeter)
+
+                    // Reorder ▲
+                    val upBtn = android.widget.TextView(context).apply {
+                        text = "▲"
+                        setTextColor(if (index > 0) android.graphics.Color.parseColor("#A970FF") else android.graphics.Color.parseColor("#444654"))
+                        textSize = 14f
+                        setPadding(dp(6), dp(2), dp(4), dp(2))
+                        if (index > 0) {
+                            setOnClickListener {
+                                viewModel.reorder(identity, index - 1)
+                                populateCards()
+                            }
+                        }
+                    }
+                    topRow.addView(upBtn)
+
+                    // Reorder ▼
+                    val downBtn = android.widget.TextView(context).apply {
+                        text = "▼"
+                        setTextColor(if (index < streams.lastIndex) android.graphics.Color.parseColor("#A970FF") else android.graphics.Color.parseColor("#444654"))
+                        textSize = 14f
+                        setPadding(dp(4), dp(2), dp(6), dp(2))
+                        if (index < streams.lastIndex) {
+                            setOnClickListener {
+                                viewModel.reorder(identity, index + 1)
+                                populateCards()
+                            }
+                        }
+                    }
+                    topRow.addView(downBtn)
+
+                    val percentView = android.widget.TextView(context).apply {
+                        text = "${(vol * 100).roundToInt()}%"
+                        setTextColor(android.graphics.Color.WHITE)
+                        textSize = 12f
+                        setPadding(dp(2), 0, dp(2), 0)
+                    }
+
+                    val muteBtn = android.widget.ImageButton(context).apply {
+                        layoutParams = LinearLayout.LayoutParams(dp(26), dp(26))
+                        background = null
+                        setImageResource(if (vol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
+                        setColorFilter(if (vol > 0f) android.graphics.Color.parseColor("#00F5D4") else android.graphics.Color.parseColor("#FF5400"))
+                    }
+                    topRow.addView(muteBtn)
+                    topRow.addView(percentView)
+
+                    // Open in Single Player [⛶] button
+                    val openPlayerBtn = android.widget.ImageView(context).apply {
+                        layoutParams = LinearLayout.LayoutParams(dp(22), dp(22)).apply {
+                            marginStart = dp(6)
+                            marginEnd = dp(2)
+                        }
+                        setImageResource(R.drawable.ic_pref_fullscreen)
+                        setColorFilter(android.graphics.Color.parseColor("#00F5D4"))
+                        setPadding(dp(2), dp(2), dp(2), dp(2))
+                        contentDescription = getString(R.string.multiview_open_player)
+                        setOnClickListener {
+                            dialog?.dismiss()
+                            openNormalPlayer(identity)
+                        }
+                    }
+                    topRow.addView(openPlayerBtn)
+
+                    // Remove Stream [✕] button
+                    val removeStreamBtn = android.widget.TextView(context).apply {
+                        text = "✕"
+                        setTextColor(android.graphics.Color.parseColor("#FF5400"))
+                        textSize = 14f
+                        typeface = android.graphics.Typeface.DEFAULT_BOLD
+                        setPadding(dp(8), dp(2), dp(2), dp(2))
+                        setOnClickListener {
+                            viewModel.remove(identity)
+                            if (latestState.streams.size <= 1) {
+                                dialog?.dismiss()
+                            } else {
+                                populateCards()
+                            }
+                        }
+                    }
+                    topRow.addView(removeStreamBtn)
+
+                    card.addView(topRow)
+
+                    // Middle: Pro Studio Fader with Exact Step Calibration
+                    val faderLayout = LinearLayout(context).apply {
+                        orientation = LinearLayout.VERTICAL
+                        setPadding(0, dp(6), 0, dp(2))
+                    }
+
+                    // Calibration scale labels (0% • 50% • 100%)
+                    val rulerLayout = LinearLayout(context).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        setPadding(dp(12), dp(2), dp(12), 0)
+                    }
+
+                    val label0 = android.widget.TextView(context).apply {
+                        text = "0%"
+                        textSize = 9f
+                        setTextColor(android.graphics.Color.parseColor("#00F5D4"))
+                        typeface = android.graphics.Typeface.MONOSPACE
+                    }
+                    rulerLayout.addView(label0)
+
+                    val spacer1 = View(context).apply {
+                        layoutParams = LinearLayout.LayoutParams(0, dp(1), 1f)
+                    }
+                    rulerLayout.addView(spacer1)
+
+                    val label50 = android.widget.TextView(context).apply {
+                        text = "50%"
+                        textSize = 9f
+                        setTextColor(android.graphics.Color.parseColor("#A970FF"))
+                        typeface = android.graphics.Typeface.MONOSPACE
+                    }
+                    rulerLayout.addView(label50)
+
+                    val spacer2 = View(context).apply {
+                        layoutParams = LinearLayout.LayoutParams(0, dp(1), 1f)
+                    }
+                    rulerLayout.addView(spacer2)
+
+                    val label100 = android.widget.TextView(context).apply {
+                        text = "100%"
+                        textSize = 9f
+                        setTextColor(android.graphics.Color.parseColor("#00F5D4"))
+                        typeface = android.graphics.Typeface.MONOSPACE
+                    }
+                    rulerLayout.addView(label100)
+                    faderLayout.addView(rulerLayout)
+
+                    // Pixel-Perfect Studio Fader with Native Hardware Step Ticks (10% increments)
+                    val slider = Slider(context).apply {
+                        valueFrom = 0f
+                        valueTo = 100f
+                        stepSize = 10f // Clean, functional 10% steps
+                        isTickVisible = true // Draws mathematically exact tick notches on the track!
+                        trackHeight = dp(6)
+                        thumbRadius = dp(8)
+                        trackActiveTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#9146FF"))
+                        trackInactiveTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#1c1d2c"))
+                        thumbTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#00F5D4"))
+                        tickActiveTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#C89BFF"))
+                        tickInactiveTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#34364E"))
+                        value = (vol * 100f).coerceIn(0f, 100f)
+                        addOnChangeListener { _, value, fromUser ->
+                            if (fromUser) {
+                                val newVol = value / 100f
+                                viewModel.setAudioVolume(identity, newVol)
+                                updateVuMeter(newVol)
+                                percentView.text = "${value.roundToInt()}%"
+                                muteBtn.setImageResource(if (newVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
+                                muteBtn.setColorFilter(if (newVol > 0f) android.graphics.Color.parseColor("#00F5D4") else android.graphics.Color.parseColor("#FF5400"))
+                            }
+                        }
+                    }
+
+                    muteBtn.setOnClickListener {
+                        val currentVol = viewModel.audioVolume(identity)
+                        val targetVol = if (currentVol > 0f) 0f else viewModel.defaultAudioVolume().takeIf { it > 0f } ?: 1f
+                        viewModel.setAudioVolume(identity, targetVol)
+                        updateVuMeter(targetVol)
+                        slider.value = targetVol * 100f
+                        percentView.text = "${(targetVol * 100).roundToInt()}%"
+                        muteBtn.setImageResource(if (targetVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
+                        muteBtn.setColorFilter(if (targetVol > 0f) android.graphics.Color.parseColor("#00F5D4") else android.graphics.Color.parseColor("#FF5400"))
+                    }
+                    faderLayout.addView(slider)
+                    card.addView(faderLayout)
+
+                    // Bottom: Quality Selector Pills with REAL ACTIVE QUALITY detection
+                    val available = listOf(autoLabel) + latestPlayback[identity]?.availableQualities.orEmpty()
+                    val qualityScroll = android.widget.HorizontalScrollView(context).apply {
+                        isHorizontalScrollBarEnabled = false
+                    }
+                    val qualityRow = LinearLayout(context).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        setPadding(0, dp(2), 0, dp(2))
+                    }
+
+                    val pillViews = mutableListOf<android.widget.TextView>()
+
+                    fun refreshThisPills() {
+                        val overrideQuality = latestState.qualityOverrides[identity]
+                        val activePlayingQuality = latestPlayback[identity]?.qualityLabel
+                        val playingLabel = activePlayingQuality.orEmpty()
+                        val targetTag = overrideQuality
+                            ?: available.firstOrNull { playingLabel.isNotBlank() && (it.contains(playingLabel, ignoreCase = true) || playingLabel.contains(it, ignoreCase = true)) }
+                            ?: autoLabel
+
+                        pillViews.forEach { pill ->
+                            val pillTag = pill.tag as? String ?: ""
+                            val isSelected = when {
+                                pillTag == targetTag -> true
+                                overrideQuality != null && pillTag == overrideQuality -> true
+                                overrideQuality == null && playingLabel.isNotBlank() && (pillTag.contains(playingLabel, ignoreCase = true) || playingLabel.contains(pillTag, ignoreCase = true)) -> true
+                                overrideQuality == null && playingLabel.isBlank() && pillTag == autoLabel -> true
+                                else -> false
+                            }
+                            val pillBg = android.graphics.drawable.GradientDrawable().apply {
+                                cornerRadius = dp(4).toFloat()
+                                if (isSelected) {
+                                    setColor(android.graphics.Color.parseColor("#9146FF"))
+                                    setStroke(dp(1), android.graphics.Color.parseColor("#D3B3FF"))
+                                } else {
+                                    setColor(android.graphics.Color.parseColor("#1c1d2b"))
+                                    setStroke(dp(1), android.graphics.Color.parseColor("#34364e"))
+                                }
+                            }
+                            pill.background = pillBg
+                            pill.setTextColor(if (isSelected) android.graphics.Color.WHITE else android.graphics.Color.parseColor("#A0A2B8"))
+                        }
+                    }
+                    cardPillUpdaters.add(::refreshThisPills)
+
+                    available.forEach { qual ->
+                        val shortName = when {
+                            qual == autoLabel -> "Auto"
+                            qual.contains("1080") -> "1080p"
+                            qual.contains("720") -> "720p"
+                            qual.contains("480") -> "480p"
+                            qual.contains("360") -> "360p"
+                            qual.contains("160") -> "160p"
+                            else -> qual.split(" ").firstOrNull() ?: qual
+                        }
+
+                        val pill = android.widget.TextView(context).apply {
+                            tag = qual
+                            text = shortName
+                            textSize = 11f
+                            typeface = android.graphics.Typeface.DEFAULT_BOLD
+                            setPadding(dp(8), dp(4), dp(8), dp(4))
+                            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                                marginEnd = dp(4)
+                            }
+                            layoutParams = lp
+                            setOnClickListener {
+                                viewModel.setQualityOverride(identity, qual.takeUnless { it == autoLabel })
+                                refreshThisPills()
+                            }
+                        }
+                        pillViews.add(pill)
+                        qualityRow.addView(pill)
+                    }
+
+                    refreshThisPills()
+                    qualityScroll.addView(qualityRow)
+                    card.addView(qualityScroll)
+
+                    streamListLayout.addView(card)
+                }
+            }
+
+            populateCards()
+            chassis.addView(streamScroll)
+
+            // Bottom Macro Actions: [MUTE ALL] [EQUALIZE] [SOLO ACTIVE]
+            val bottomMacros = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+                setPadding(0, dp(6), 0, dp(2))
+            }
+
+            fun createMacroBtn(label: String, colorHex: String, onClick: () -> Unit): android.widget.TextView {
+                return android.widget.TextView(context).apply {
+                    text = label
+                    textSize = 11f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    setTextColor(android.graphics.Color.WHITE)
+                    setPadding(dp(10), dp(6), dp(10), dp(6))
+                    val bg = android.graphics.drawable.GradientDrawable().apply {
+                        setColor(android.graphics.Color.parseColor("#1c1d2b"))
+                        cornerRadius = dp(6).toFloat()
+                        setStroke(dp(1), android.graphics.Color.parseColor(colorHex))
+                    }
+                    background = bg
+                    val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                        marginStart = dp(3)
+                        marginEnd = dp(3)
+                    }
+                    layoutParams = lp
+                    gravity = Gravity.CENTER
+                    setOnClickListener {
+                        onClick()
+                        populateCards()
+                    }
+                }
+            }
+
+            bottomMacros.addView(createMacroBtn("MUTE ALL", "#FF5400") {
+                latestState.streams.forEach { stream ->
+                    MultiviewSessionReducer.stableIdentity(stream)?.let { id ->
+                        viewModel.setAudioVolume(id, 0f)
+                    }
+                }
+            })
+
+            bottomMacros.addView(createMacroBtn("EQUALIZE", "#00F5D4") {
+                latestState.streams.forEach { stream ->
+                    MultiviewSessionReducer.stableIdentity(stream)?.let { id ->
+                        viewModel.setAudioVolume(id, 0.5f)
+                    }
+                }
+            })
+
+            bottomMacros.addView(createMacroBtn("SOLO ACTIVE", "#9146FF") {
+                val active = latestState.activeIdentity
+                latestState.streams.forEach { stream ->
+                    MultiviewSessionReducer.stableIdentity(stream)?.let { id ->
+                        viewModel.setAudioVolume(id, if (id.equals(active, true)) 1f else 0f)
+                    }
+                }
+            })
+
+            chassis.addView(bottomMacros)
+
+            // AppCompatDialog ensures full Material and AppCompat theme support on all Android versions
+            dialog = androidx.appcompat.app.AppCompatDialog(context, androidx.appcompat.R.style.Theme_AppCompat_Dialog).apply {
+                supportRequestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+                setContentView(chassis)
+                window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+                window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                setOnShowListener {
+                    window?.let { win ->
+                        val displayWidth = context.resources.displayMetrics.widthPixels
+                        val cardWidth = (displayWidth * 0.90f).toInt()
+                        win.setLayout(cardWidth, ViewGroup.LayoutParams.WRAP_CONTENT)
+                        val params = win.attributes
+                        params.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                        params.y = dp(50)
+                        win.attributes = params
+                    }
+                }
+                setOnDismissListener { unlockControls() }
+            }
+
+            dialog?.show()
+        } catch (_: Exception) {
+            unlockControls()
         }
-
-        bottomMacros.addView(createMacroBtn("MUTE ALL", "#FF5400") {
-            latestState.streams.forEach { stream ->
-                MultiviewSessionReducer.stableIdentity(stream)?.let { id ->
-                    viewModel.setAudioVolume(id, 0f)
-                }
-            }
-        })
-
-        bottomMacros.addView(createMacroBtn("EQUALIZE", "#00F5D4") {
-            latestState.streams.forEach { stream ->
-                MultiviewSessionReducer.stableIdentity(stream)?.let { id ->
-                    viewModel.setAudioVolume(id, 0.5f)
-                }
-            }
-        })
-
-        bottomMacros.addView(createMacroBtn("SOLO ACTIVE", "#9146FF") {
-            val active = latestState.activeIdentity
-            latestState.streams.forEach { stream ->
-                MultiviewSessionReducer.stableIdentity(stream)?.let { id ->
-                    viewModel.setAudioVolume(id, if (id.equals(active, true)) 1f else 0f)
-                }
-            }
-        })
-
-        chassis.addView(bottomMacros)
-
-        // Pure 3D Floating Dialog - 90% screen width, detached from all edges, vertically lower-center
-        val themedContext = androidx.appcompat.view.ContextThemeWrapper(context, androidx.appcompat.R.style.Theme_AppCompat_Dialog)
-        dialog = android.app.Dialog(themedContext).apply {
-            requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
-            setContentView(chassis)
-            window?.apply {
-                setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
-                clearFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND) // Zero black backdrop box!
-                setGravity(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
-                val displayWidth = context.resources.displayMetrics.widthPixels
-                val cardWidth = (displayWidth * 0.90f).toInt() // Exact 45/50 sticker ratio!
-                setLayout(cardWidth, ViewGroup.LayoutParams.WRAP_CONTENT)
-                attributes = attributes.apply {
-                    y = dp(50) // Lifted up by 50dp from bottom edge (vertical center dot at ~40% of screen)
-                }
-            }
-            setOnDismissListener { unlockControls() }
-        }
-
-        dialog.show()
     }
     private fun showSlotQualityMenu(identity: String, slot: MultiviewSlotView) {
         val stream = slot.stream ?: return
