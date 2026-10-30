@@ -730,7 +730,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         lockControls()
 
         try {
-            var dialog: androidx.appcompat.app.AppCompatDialog? = null
+            var dialog: android.app.Dialog? = null
 
             // 3D Floating Hardware Chassis (90% width, crisp 8dp Elgato hardware corners, 2dp purple border)
             val chassis = LinearLayout(context).apply {
@@ -747,12 +747,13 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 clipToOutline = true
             }
 
-            // Top Header: [:::] STREAM DECK+ [PRO]       [⏱️ SLEEP]   [✕]
+            // Top Header: [:::] STREAM DECK+ [STUDIO]       [⏱️ SLEEP]   [✕]
             val header = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(0, 0, 0, dp(10))
             }
+
             val deckIcon = android.widget.ImageView(context).apply {
                 layoutParams = LinearLayout.LayoutParams(dp(22), dp(22))
                 setImageResource(R.drawable.ic_hw_stream_deck)
@@ -799,7 +800,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 }
                 layoutParams = lp
                 setOnClickListener {
-                    SleepTimerDialog.newInstance((activity as? MainActivity)?.getSleepTimerTimeLeft() ?: 0).show(childFragmentManager, null)
+                    try {
+                        SleepTimerDialog.newInstance((activity as? MainActivity)?.getSleepTimerTimeLeft() ?: 0).show(childFragmentManager, null)
+                    } catch (_: Throwable) {}
                 }
             }
             header.addView(sleepBtn)
@@ -811,7 +814,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
                 setTextColor(android.graphics.Color.parseColor("#A0A2B8"))
                 setPadding(dp(6), dp(2), dp(6), dp(2))
-                setOnClickListener { dialog?.dismiss() }
+                setOnClickListener {
+                    try { dialog?.dismiss() } catch (_: Throwable) {}
+                }
             }
             header.addView(closeBtn)
             chassis.addView(header)
@@ -852,7 +857,6 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             }
 
             val cardPillUpdaters = mutableListOf<() -> Unit>()
-
             val standardQualities = listOf(autoLabel, "1080p", "720p", "480p", "360p", "160p")
             standardQualities.forEach { qual ->
                 val pill = android.widget.TextView(context).apply {
@@ -877,7 +881,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                             val targetLabel = if (qual == autoLabel) {
                                 null
                             } else {
-                                latestPlayback[id]?.availableQualities?.firstOrNull { it.contains(qual) } ?: qual
+                                latestPlayback[id]?.availableQualities?.firstOrNull { it.contains(qual, ignoreCase = true) } ?: qual
                             }
                             viewModel.setQualityOverride(id, targetLabel)
                         }
@@ -890,11 +894,18 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             masterCard.addView(masterScroll)
             chassis.addView(masterCard)
 
-            // Stream Rows Container (ScrollView)
-            val streamScroll = android.widget.ScrollView(context).apply {
+            // Stream Rows Container (ScrollView safely bounded to max 50% screen height)
+            val streamScroll = object : android.widget.ScrollView(context) {
+                override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                    val maxH = (resources.displayMetrics.heightPixels * 0.50f).toInt()
+                    val customHeightSpec = MeasureSpec.makeMeasureSpec(maxH, MeasureSpec.AT_MOST)
+                    super.onMeasure(widthMeasureSpec, customHeightSpec)
+                }
+            }.apply {
                 isFillViewport = true
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             }
+
             val streamListLayout = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
             }
@@ -961,7 +972,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     }
                     try {
                         com.github.andreyasadchy.xtra.ui.common.loadStreamProfileImage(context, avatar, stream)
-                    } catch (_: Exception) {}
+                    } catch (_: Throwable) {}
                     topRow.addView(avatar)
 
                     // Streamer Name
@@ -1017,7 +1028,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                             led.background = bg
                         }
                     }
-                    var vol = viewModel.audioVolume(identity)
+
+                    var vol = viewModel.audioVolume(identity).coerceIn(0f, 1f)
                     updateVuMeter(vol)
                     topRow.addView(vuMeter)
 
@@ -1078,7 +1090,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                         setPadding(dp(2), dp(2), dp(2), dp(2))
                         contentDescription = getString(R.string.multiview_open_player)
                         setOnClickListener {
-                            dialog?.dismiss()
+                            try { dialog?.dismiss() } catch (_: Throwable) {}
                             openNormalPlayer(identity)
                         }
                     }
@@ -1094,7 +1106,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                         setOnClickListener {
                             viewModel.remove(identity)
                             if (latestState.streams.size <= 1) {
-                                dialog?.dismiss()
+                                try { dialog?.dismiss() } catch (_: Throwable) {}
                             } else {
                                 populateCards()
                             }
@@ -1114,9 +1126,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     val rulerLayout = LinearLayout(context).apply {
                         orientation = LinearLayout.HORIZONTAL
                         gravity = Gravity.CENTER_VERTICAL
-                        setPadding(dp(12), dp(2), dp(12), 0)
+                        setPadding(dp(14), 0, dp(14), 0)
                     }
-
                     val label0 = android.widget.TextView(context).apply {
                         text = "0%"
                         textSize = 9f
@@ -1150,45 +1161,31 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                         typeface = android.graphics.Typeface.MONOSPACE
                     }
                     rulerLayout.addView(label100)
+
                     faderLayout.addView(rulerLayout)
 
-                    // Pixel-Perfect Studio Fader with Native Hardware Step Ticks (10% increments)
-                    val slider = Slider(context).apply {
-                        valueFrom = 0f
-                        valueTo = 100f
-                        stepSize = 10f // Clean, functional 10% steps
-                        isTickVisible = true // Draws mathematically exact tick notches on the track!
-                        trackHeight = dp(6)
-                        thumbRadius = dp(8)
-                        trackActiveTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#9146FF"))
-                        trackInactiveTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#1c1d2c"))
-                        thumbTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#00F5D4"))
-                        tickActiveTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#C89BFF"))
-                        tickInactiveTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#34364E"))
-                        value = (vol * 100f).coerceIn(0f, 100f)
-                        addOnChangeListener { _, value, fromUser ->
-                            if (fromUser) {
-                                val newVol = value / 100f
-                                viewModel.setAudioVolume(identity, newVol)
-                                updateVuMeter(newVol)
-                                percentView.text = "${value.roundToInt()}%"
-                                muteBtn.setImageResource(if (newVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
-                                muteBtn.setColorFilter(if (newVol > 0f) android.graphics.Color.parseColor("#00F5D4") else android.graphics.Color.parseColor("#FF5400"))
-                            }
-                        }
+                    // Custom Rock-Solid DJ Deck Volume Fader (100% crash-immune, perfectly aligned ticks)
+                    var fader: DjFaderView? = null
+                    fader = DjFaderView(context, vol) { newVol ->
+                        viewModel.setAudioVolume(identity, newVol)
+                        updateVuMeter(newVol)
+                        percentView.text = "${(newVol * 100).roundToInt()}%"
+                        muteBtn.setImageResource(if (newVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
+                        muteBtn.setColorFilter(if (newVol > 0f) android.graphics.Color.parseColor("#00F5D4") else android.graphics.Color.parseColor("#FF5400"))
                     }
 
                     muteBtn.setOnClickListener {
-                        val currentVol = viewModel.audioVolume(identity)
+                        val currentVol = fader?.getVolume() ?: viewModel.audioVolume(identity)
                         val targetVol = if (currentVol > 0f) 0f else viewModel.defaultAudioVolume().takeIf { it > 0f } ?: 1f
+                        fader?.setVolume(targetVol)
                         viewModel.setAudioVolume(identity, targetVol)
                         updateVuMeter(targetVol)
-                        slider.value = targetVol * 100f
                         percentView.text = "${(targetVol * 100).roundToInt()}%"
                         muteBtn.setImageResource(if (targetVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
                         muteBtn.setColorFilter(if (targetVol > 0f) android.graphics.Color.parseColor("#00F5D4") else android.graphics.Color.parseColor("#FF5400"))
                     }
-                    faderLayout.addView(slider)
+
+                    faderLayout.addView(fader)
                     card.addView(faderLayout)
 
                     // Bottom: Quality Selector Pills with REAL ACTIVE QUALITY detection
@@ -1234,6 +1231,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                             pill.setTextColor(if (isSelected) android.graphics.Color.WHITE else android.graphics.Color.parseColor("#A0A2B8"))
                         }
                     }
+
                     cardPillUpdaters.add(::refreshThisPills)
 
                     available.forEach { qual ->
@@ -1246,7 +1244,6 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                             qual.contains("160") -> "160p"
                             else -> qual.split(" ").firstOrNull() ?: qual
                         }
-
                         val pill = android.widget.TextView(context).apply {
                             tag = qual
                             text = shortName
@@ -1337,28 +1334,26 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
             chassis.addView(bottomMacros)
 
-            // AppCompatDialog ensures full Material and AppCompat theme support on all Android versions
-            dialog = androidx.appcompat.app.AppCompatDialog(context, androidx.appcompat.R.style.Theme_AppCompat_Dialog).apply {
-                supportRequestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+            // Pure Floating Dialog - Zero black box, 90% width, lower-center placement
+            val themedContext = androidx.appcompat.view.ContextThemeWrapper(context, R.style.MaterialDialog)
+            dialog = android.app.Dialog(themedContext).apply {
+                requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
                 setContentView(chassis)
-                window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
-                window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-                setOnShowListener {
-                    window?.let { win ->
-                        val displayWidth = context.resources.displayMetrics.widthPixels
-                        val cardWidth = (displayWidth * 0.90f).toInt()
-                        win.setLayout(cardWidth, ViewGroup.LayoutParams.WRAP_CONTENT)
-                        val params = win.attributes
-                        params.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                        params.y = dp(50)
-                        win.attributes = params
-                    }
+                window?.apply {
+                    setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+                    clearFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                    setGravity(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
+                    val displayWidth = context.resources.displayMetrics.widthPixels
+                    val cardWidth = (displayWidth * 0.90f).toInt()
+                    setLayout(cardWidth, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    val p = attributes
+                    p.y = dp(50)
+                    attributes = p
                 }
                 setOnDismissListener { unlockControls() }
             }
-
             dialog?.show()
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             unlockControls()
         }
     }
@@ -1909,5 +1904,156 @@ private inline fun <reified T : Parcelable> Bundle.parcelableArrayList(key: Stri
     } else {
         @Suppress("DEPRECATION")
         getParcelableArrayList(key)
+    }
+}
+
+class DjFaderView(
+    context: android.content.Context,
+    initialVolume: Float,
+    private val onVolumeChanged: (Float) -> Unit,
+) : android.view.View(context) {
+
+    private var volume: Float = initialVolume.coerceIn(0f, 1f)
+
+    private val trackPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.parseColor("#0A0B14")
+        style = android.graphics.Paint.Style.FILL
+    }
+    private val trackBorderPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.parseColor("#25283D")
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = 2f
+    }
+    private val majorTickPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.parseColor("#00F5D4")
+        strokeWidth = 3f
+    }
+    private val midTickPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.parseColor("#A970FF")
+        strokeWidth = 3f
+    }
+    private val minorTickPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.parseColor("#424560")
+        strokeWidth = 2f
+    }
+    private val capBodyPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.parseColor("#1C1E2D")
+        style = android.graphics.Paint.Style.FILL
+    }
+    private val capBorderPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.parseColor("#5A5E82")
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = 2f
+    }
+    private val capGlowPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.parseColor("#00F5D4")
+        strokeWidth = 4f
+    }
+
+    private val capWidth = dpToPx(16f)
+    private val capHeight = dpToPx(24f)
+    private val capRadius = dpToPx(3f)
+
+    private fun dpToPx(dp: Float): Float = dp * resources.displayMetrics.density
+
+    fun setVolume(newVol: Float) {
+        volume = newVol.coerceIn(0f, 1f)
+        invalidate()
+    }
+
+    fun getVolume(): Float = volume
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val h = dpToPx(34f).toInt()
+        val w = android.view.View.getDefaultSize(suggestedMinimumWidth, widthMeasureSpec)
+        setMeasuredDimension(w, h)
+    }
+
+    override fun onDraw(canvas: android.graphics.Canvas) {
+        super.onDraw(canvas)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val pad = capWidth / 2f + dpToPx(6f)
+        val trackW = w - (pad * 2f)
+        if (trackW <= 0) return
+
+        val centerY = h / 2f
+        val trackTop = centerY - dpToPx(3f)
+        val trackBottom = centerY + dpToPx(3f)
+
+        // 1. Draw 11 Hardware Calibration Ticks (Exact 10% steps)
+        val tickTopMajor = centerY - dpToPx(13f)
+        val tickBottomMajor = centerY - dpToPx(5f)
+        val tickTopMinor = centerY - dpToPx(10f)
+        val tickBottomMinor = centerY - dpToPx(5f)
+
+        for (i in 0..10) {
+            val tickX = pad + (trackW * (i / 10f))
+            val paint = when (i) {
+                0, 10 -> majorTickPaint
+                5 -> midTickPaint
+                else -> minorTickPaint
+            }
+            val tTop = if (i == 0 || i == 5 || i == 10) tickTopMajor else tickTopMinor
+            canvas.drawLine(tickX, tTop, tickX, tickBottomMinor, paint)
+        }
+
+        // 2. Draw Recessed Fader Track
+        val trackRect = android.graphics.RectF(pad, trackTop, pad + trackW, trackBottom)
+        canvas.drawRoundRect(trackRect, dpToPx(2f), dpToPx(2f), trackPaint)
+        canvas.drawRoundRect(trackRect, dpToPx(2f), dpToPx(2f), trackBorderPaint)
+
+        // 3. Draw DJ Fader Cap
+        val knobCenterX = pad + (trackW * volume)
+        val knobLeft = knobCenterX - (capWidth / 2f)
+        val knobRight = knobCenterX + (capWidth / 2f)
+        val knobTop = centerY - (capHeight / 2f) + dpToPx(2f)
+        val knobBottom = knobTop + capHeight
+
+        val knobRect = android.graphics.RectF(knobLeft, knobTop, knobRight, knobBottom)
+        canvas.drawRoundRect(knobRect, capRadius, capRadius, capBodyPaint)
+        canvas.drawRoundRect(knobRect, capRadius, capRadius, capBorderPaint)
+
+        // Center Indicator Stripe
+        canvas.drawLine(knobCenterX, knobTop + dpToPx(3f), knobCenterX, knobBottom - dpToPx(3f), capGlowPaint)
+    }
+
+    override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
+        val pad = capWidth / 2f + dpToPx(6f)
+        val trackW = width.toFloat() - (pad * 2f)
+        if (trackW <= 0) return super.onTouchEvent(event)
+
+        when (event.action) {
+            android.view.MotionEvent.ACTION_DOWN -> {
+                parent?.requestDisallowInterceptTouchEvent(true)
+                updateFromTouch(event.x, pad, trackW, snap = false)
+                return true
+            }
+            android.view.MotionEvent.ACTION_MOVE -> {
+                updateFromTouch(event.x, pad, trackW, snap = false)
+                return true
+            }
+            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                parent?.requestDisallowInterceptTouchEvent(false)
+                updateFromTouch(event.x, pad, trackW, snap = true)
+                return true
+            }
+        }
+        return super.onTouchEvent(event)
+    }
+
+    private fun updateFromTouch(touchX: Float, pad: Float, trackW: Float, snap: Boolean) {
+        var rawRatio = ((touchX - pad) / trackW).coerceIn(0f, 1f)
+        // Gentle magnetic snap near every 10% step (within +- 3.5%)
+        val nearestStep = Math.round(rawRatio * 10f) / 10f
+        if (snap || Math.abs(rawRatio - nearestStep) <= 0.035f) {
+            rawRatio = nearestStep
+        }
+        val rounded = Math.round(rawRatio * 100f) / 100f
+        if (rounded != volume) {
+            volume = rounded
+            invalidate()
+            onVolumeChanged(volume)
+        }
     }
 }
