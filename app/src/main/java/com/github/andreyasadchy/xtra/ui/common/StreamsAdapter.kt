@@ -498,7 +498,8 @@ class StreamsAdapter(
         }
 
         private fun openStream(stream: Stream) {
-            if (recordSearchHistory) SearchHistoryRecorder.channel(fragment.requireContext(), stream)
+            val ctx = fragment.context ?: return
+            if (recordSearchHistory) SearchHistoryRecorder.channel(ctx, stream)
             if (onStreamClick != null) {
                 onStreamClick.invoke(stream)
             } else {
@@ -507,7 +508,8 @@ class StreamsAdapter(
         }
 
         private fun openChannel(stream: Stream) {
-            if (recordSearchHistory) SearchHistoryRecorder.channel(fragment.requireContext(), stream)
+            val ctx = fragment.context ?: return
+            if (recordSearchHistory) SearchHistoryRecorder.channel(ctx, stream)
             if (onStreamClick != null) {
                 onStreamClick.invoke(stream)
             } else {
@@ -525,7 +527,8 @@ class StreamsAdapter(
 
         private fun openGame(stream: Stream) {
             if (showGame && !stream.gameName.isNullOrBlank()) {
-                if (recordSearchHistory) SearchHistoryRecorder.game(fragment.requireContext(), stream)
+                val ctx = fragment.context ?: return
+                if (recordSearchHistory) SearchHistoryRecorder.game(ctx, stream)
                 if (onStreamClick != null) {
                     onStreamClick.invoke(stream)
                 } else {

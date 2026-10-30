@@ -1582,13 +1582,19 @@ class MainActivity : AppCompatActivity() {
         val transaction = supportFragmentManager.beginTransaction()
             .setReorderingAllowed(true)
             .replace(R.id.playerContainer, fragment)
-        if (supportFragmentManager.findFragmentById(R.id.playerContainer) != null) {
-            // A player can be minimized when the next stream is selected. Commit the replacement
-            // synchronously so the transformed old player cannot draw one more frame over the
-            // new player's handoff cover.
-            transaction.commitNow()
-        } else {
-            transaction.commit()
+        try {
+            if (!supportFragmentManager.isStateSaved && supportFragmentManager.findFragmentById(R.id.playerContainer) != null) {
+                transaction.commitNowAllowingStateLoss()
+            } else {
+                transaction.commitAllowingStateLoss()
+            }
+        } catch (_: Exception) {
+            try {
+                supportFragmentManager.beginTransaction()
+                    .setReorderingAllowed(true)
+                    .replace(R.id.playerContainer, fragment)
+                    .commitAllowingStateLoss()
+            } catch (_: Exception) {}
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
             packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE) &&
