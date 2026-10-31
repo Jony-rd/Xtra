@@ -1505,12 +1505,17 @@ class MainActivity : AppCompatActivity() {
 
 //Navigation listeners
 
-    fun startStream(stream: Stream, openChat: Boolean = false, audioOnly: Boolean = false) {
+    fun startStream(stream: Stream?, openChat: Boolean = false, audioOnly: Boolean = false) {
+        if (stream == null) return
         val tapElapsedMs = SystemClock.elapsedRealtime()
-        (application as XtraApp).xtraModule.streamPreloadCoordinator.onStreamSelected(stream)
-        onPlayerEnteredPlayback(isLive = true, channelLogin = stream.channelLogin)
-        (application as XtraApp).xtraModule.streamPreloadCoordinator.onPlaybackEntered()
-        (playerFragment as? Media3PlayerFragment)?.close()
+        try {
+            (application as? XtraApp)?.xtraModule?.streamPreloadCoordinator?.onStreamSelected(stream)
+            onPlayerEnteredPlayback(isLive = true, channelLogin = stream.channelLogin)
+            (application as? XtraApp)?.xtraModule?.streamPreloadCoordinator?.onPlaybackEntered()
+        } catch (_: Throwable) {}
+        try {
+            (playerFragment as? Media3PlayerFragment)?.close()
+        } catch (_: Throwable) {}
         val fragment = Media3Fragment.newInstance(stream, tapElapsedMs)
         startPlayer(fragment)
         if (openChat) binding.root.postDelayed({ (playerFragment as? Media3PlayerFragment)?.showChat() }, 500L)
@@ -1635,7 +1640,7 @@ class MainActivity : AppCompatActivity() {
                         clipToOutline = true
                         outlineProvider = object : android.view.ViewOutlineProvider() {
                             override fun getOutline(view: View, outline: android.graphics.Outline) {
-                                outline.setRoundRect(0, 0, view.width, view.height, cornerRadius)
+                                outline.setRoundRect(0, 0, view.width.coerceAtLeast(1), view.height.coerceAtLeast(1), cornerRadius)
                             }
                         }
                     }

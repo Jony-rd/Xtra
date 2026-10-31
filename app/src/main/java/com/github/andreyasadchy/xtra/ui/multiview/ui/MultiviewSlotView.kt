@@ -82,7 +82,7 @@ class MultiviewSlotView(context: Context) : FrameLayout(context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             val rectOutlineProvider = object : android.view.ViewOutlineProvider() {
                 override fun getOutline(view: View, outline: android.graphics.Outline) {
-                    outline.setRect(0, 0, view.width, view.height)
+                    outline.setRect(0, 0, view.width.coerceAtLeast(1), view.height.coerceAtLeast(1))
                 }
             }
             outlineProvider = rectOutlineProvider

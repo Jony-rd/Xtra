@@ -52,7 +52,8 @@ object MultiviewLayoutManager {
             when (mode) {
                 MultiviewLayoutMode.FOCUS -> focusPortrait(ids, primary)
                 MultiviewLayoutMode.TIERED -> tieredPortrait(ids)
-                MultiviewLayoutMode.AUTO, MultiviewLayoutMode.GRID -> stackedPortrait(ids)
+                MultiviewLayoutMode.AUTO -> autoPortrait(ids, primary)
+                MultiviewLayoutMode.GRID -> gridPortrait(ids)
             }
         }
     }
