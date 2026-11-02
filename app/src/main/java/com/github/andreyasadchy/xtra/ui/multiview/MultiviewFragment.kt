@@ -176,7 +176,14 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     MultiviewSessionReducer.stableIdentity(it).equals(identity, true)
                 }
             ) {
-                viewModel.addStreams(listOf(stream))
+                if (viewModel.state.value.streams.size >= 4) {
+                    val targetIdentity = viewModel.state.value.identities.lastOrNull()
+                    if (targetIdentity != null) {
+                        viewModel.replaceStream(targetIdentity, stream)
+                    }
+                } else {
+                    viewModel.addStreams(listOf(stream))
+                }
             }
         }
         viewModel.startRaidMonitoring()
@@ -731,11 +738,12 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
         try {
             var dialog: android.app.Dialog? = null
+            val isLandscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
 
             // 3D Floating Hardware Chassis (90% width, crisp 8dp Elgato hardware corners, 2dp purple border)
             val chassis = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
-                val p = dp(14)
+                val p = if (isLandscape) dp(8) else dp(14)
                 setPadding(p, p, p, p)
                 val bg = android.graphics.drawable.GradientDrawable().apply {
                     setColor(android.graphics.Color.parseColor("#0e0f18"))
@@ -751,7 +759,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             val header = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, 0, 0, dp(10))
+                setPadding(0, 0, 0, if (isLandscape) dp(4) else dp(10))
             }
 
             val deckIcon = android.widget.ImageView(context).apply {
@@ -827,7 +835,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             val masterCard = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(8), dp(6), dp(8), dp(6))
+                setPadding(dp(8), if (isLandscape) dp(3) else dp(6), dp(8), if (isLandscape) dp(3) else dp(6))
                 val bg = android.graphics.drawable.GradientDrawable().apply {
                     setColor(android.graphics.Color.parseColor("#141522"))
                     cornerRadius = dp(6).toFloat()
@@ -835,7 +843,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 }
                 background = bg
                 val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    bottomMargin = dp(10)
+                    bottomMargin = if (isLandscape) dp(4) else dp(8)
                 }
                 layoutParams = lp
             }
@@ -894,15 +902,87 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             masterCard.addView(masterScroll)
             chassis.addView(masterCard)
 
+            // MASTER GLOBAL VOLUME BAR (direct synchronized control)
+            val cardVolumeUpdaters = mutableMapOf<String, (Float) -> Unit>()
+            val masterVolCard = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(8), if (isLandscape) dp(3) else dp(6), dp(8), if (isLandscape) dp(3) else dp(6))
+                val bg = android.graphics.drawable.GradientDrawable().apply {
+                    setColor(android.graphics.Color.parseColor("#141522"))
+                    cornerRadius = dp(6).toFloat()
+                    setStroke(dp(1), android.graphics.Color.parseColor("#A970FF"))
+                }
+                background = bg
+                val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    bottomMargin = if (isLandscape) dp(4) else dp(10)
+                }
+                layoutParams = lp
+            }
+            val masterVolLabel = android.widget.TextView(context).apply {
+                text = "⚡ MASTER VOL:"
+                textSize = 11f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(android.graphics.Color.parseColor("#A970FF"))
+                setPadding(0, 0, dp(6), 0)
+            }
+            masterVolCard.addView(masterVolLabel)
+            val masterMuteBtn = android.widget.ImageButton(context).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply {
+                    marginEnd = dp(4)
+                }
+                background = null
+                setImageResource(R.drawable.baseline_volume_up_black_24)
+                setColorFilter(android.graphics.Color.parseColor("#A970FF"))
+            }
+            masterVolCard.addView(masterMuteBtn)
+            val masterPercentView = android.widget.TextView(context).apply {
+                text = "100%"
+                setTextColor(android.graphics.Color.WHITE)
+                textSize = 11f
+                typeface = android.graphics.Typeface.MONOSPACE
+                setPadding(0, 0, dp(6), 0)
+            }
+            masterVolCard.addView(masterPercentView)
+            var masterVol = latestState.streams.firstOrNull()?.let { s ->
+                MultiviewSessionReducer.stableIdentity(s)?.let { viewModel.audioVolume(it) }
+            } ?: 1f
+            masterPercentView.text = "${(masterVol * 100).roundToInt()}%"
+            val masterFader = DjFaderView(context, masterVol) { newVol ->
+                masterVol = newVol
+                masterPercentView.text = "${(newVol * 100).roundToInt()}%"
+                masterMuteBtn.setImageResource(if (newVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
+                masterMuteBtn.setColorFilter(if (newVol > 0f) android.graphics.Color.parseColor("#A970FF") else android.graphics.Color.parseColor("#FF5400"))
+                latestState.streams.forEach { stream ->
+                    val id = MultiviewSessionReducer.stableIdentity(stream) ?: return@forEach
+                    viewModel.setAudioVolume(id, newVol)
+                    cardVolumeUpdaters[id]?.invoke(newVol)
+                }
+            }
+            masterVolCard.addView(masterFader)
+            masterMuteBtn.setOnClickListener {
+                val target = if (masterVol > 0f) 0f else viewModel.defaultAudioVolume().takeIf { it > 0f } ?: 1f
+                masterFader.setVolume(target)
+            }
+            chassis.addView(masterVolCard)
+
             // Stream Rows Container (ScrollView safely bounded to max 50% screen height)
             val streamScroll = object : android.widget.ScrollView(context) {
                 override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-                    val maxH = (resources.displayMetrics.heightPixels * 0.50f).toInt()
+                    val maxH = if (isLandscape) {
+                        (resources.displayMetrics.heightPixels * 0.70f).toInt()
+                    } else {
+                        (resources.displayMetrics.heightPixels * 0.50f).toInt()
+                    }
                     val customHeightSpec = MeasureSpec.makeMeasureSpec(maxH, MeasureSpec.AT_MOST)
                     super.onMeasure(widthMeasureSpec, customHeightSpec)
                 }
             }.apply {
                 isFillViewport = true
+                if (isLandscape) {
+                    isVerticalScrollBarEnabled = false
+                    overScrollMode = View.OVER_SCROLL_NEVER
+                }
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             }
 
@@ -914,14 +994,48 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             fun populateCards() {
                 streamListLayout.removeAllViews()
                 cardPillUpdaters.clear()
+                cardVolumeUpdaters.clear()
                 val streams = latestState.streams.toList()
+
+                val col1 = if (isLandscape && streams.size > 1) {
+                    LinearLayout(context).apply {
+                        orientation = LinearLayout.VERTICAL
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                            marginEnd = dp(4)
+                        }
+                    }
+                } else null
+
+                val col2 = if (isLandscape && streams.size > 1) {
+                    LinearLayout(context).apply {
+                        orientation = LinearLayout.VERTICAL
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                            marginStart = dp(4)
+                        }
+                    }
+                } else null
+
+                if (col1 != null && col2 != null) {
+                    val gridRow = LinearLayout(context).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    }
+                    gridRow.addView(col1)
+                    gridRow.addView(col2)
+                    streamListLayout.addView(gridRow)
+                }
 
                 streams.forEachIndexed { index, stream ->
                     val identity = MultiviewSessionReducer.stableIdentity(stream) ?: return@forEachIndexed
 
                     val card = LinearLayout(context).apply {
                         orientation = LinearLayout.VERTICAL
-                        setPadding(dp(10), dp(8), dp(10), dp(10))
+                        setPadding(
+                            if (isLandscape) dp(6) else dp(10),
+                            if (isLandscape) dp(4) else dp(8),
+                            if (isLandscape) dp(6) else dp(10),
+                            if (isLandscape) dp(4) else dp(10)
+                        )
                         val bg = android.graphics.drawable.GradientDrawable().apply {
                             setColor(android.graphics.Color.parseColor("#151623"))
                             cornerRadius = dp(6).toFloat()
@@ -929,7 +1043,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                         }
                         background = bg
                         val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                            bottomMargin = dp(10)
+                            bottomMargin = if (isLandscape) dp(4) else dp(10)
                         }
                         layoutParams = lp
                     }
@@ -1162,12 +1276,22 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     }
                     rulerLayout.addView(label100)
 
+                    if (isLandscape) rulerLayout.visibility = View.GONE
                     faderLayout.addView(rulerLayout)
 
                     // Custom Rock-Solid DJ Deck Volume Fader (100% crash-immune, perfectly aligned ticks)
                     var fader: DjFaderView? = null
                     fader = DjFaderView(context, vol) { newVol ->
+                        vol = newVol
                         viewModel.setAudioVolume(identity, newVol)
+                        updateVuMeter(newVol)
+                        percentView.text = "${(newVol * 100).roundToInt()}%"
+                        muteBtn.setImageResource(if (newVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
+                        muteBtn.setColorFilter(if (newVol > 0f) android.graphics.Color.parseColor("#00F5D4") else android.graphics.Color.parseColor("#FF5400"))
+                    }
+                    cardVolumeUpdaters[identity] = { newVol ->
+                        vol = newVol
+                        fader?.setVolume(newVol)
                         updateVuMeter(newVol)
                         percentView.text = "${(newVol * 100).roundToInt()}%"
                         muteBtn.setImageResource(if (newVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
@@ -1267,7 +1391,11 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     qualityScroll.addView(qualityRow)
                     card.addView(qualityScroll)
 
-                    streamListLayout.addView(card)
+                    if (col1 != null && col2 != null) {
+                        if (index % 2 == 0) col1.addView(card) else col2.addView(card)
+                    } else {
+                        streamListLayout.addView(card)
+                    }
                 }
             }
 
@@ -1278,7 +1406,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             val bottomMacros = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER
-                setPadding(0, dp(6), 0, dp(2))
+                setPadding(0, if (isLandscape) dp(2) else dp(6), 0, dp(2))
             }
 
             fun createMacroBtn(label: String, colorHex: String, onClick: () -> Unit): android.widget.TextView {
@@ -1344,10 +1472,10 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     clearFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
                     setGravity(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
                     val displayWidth = context.resources.displayMetrics.widthPixels
-                    val cardWidth = (displayWidth * 0.90f).toInt()
+                    val cardWidth = if (isLandscape) (displayWidth * 0.94f).toInt() else (displayWidth * 0.90f).toInt()
                     setLayout(cardWidth, ViewGroup.LayoutParams.WRAP_CONTENT)
                     val p = attributes
-                    p.y = dp(50)
+                    p.y = if (isLandscape) dp(10) else dp(50)
                     attributes = p
                 }
                 setOnDismissListener { unlockControls() }
