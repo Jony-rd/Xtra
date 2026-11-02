@@ -124,7 +124,7 @@ class TwitchChatCatalogSource(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Throwable) {
-                    null
+                    ChatCatalogProviderUpdate(emptyMap())
                 }
             }
             val cheermotes = async { previous?.cheermotes ?: provider {
