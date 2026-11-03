@@ -607,18 +607,20 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         val showChat = state.chatVisible || specialTwoStreamChat
 
         if (!showChat) {
-            if (renderedChatKey == null && childFragmentManager.fragments.none { it.id == R.id.chatContent }) {
+            if (renderedChatKey == null && childFragmentManager.findFragmentById(R.id.chatContent) == null) {
                 return
             }
             renderedChatKey = null
-            childFragmentManager.beginTransaction().apply {
-                childFragmentManager.fragments
-                    .filter { it.id == R.id.chatContent }
-                    .forEach { fragment ->
-                        releaseChatFragment(fragment)
-                        remove(fragment)
-                    }
-            }.commit()
+            childFragmentManager.fragments
+                .filter { it.id == R.id.chatContent }
+                .forEach { fragment ->
+                    releaseChatFragment(fragment)
+                }
+            childFragmentManager.findFragmentById(R.id.chatContent)?.let { current ->
+                childFragmentManager.beginTransaction()
+                    .remove(current)
+                    .commitNowAllowingStateLoss()
+            }
             return
         }
 
@@ -631,32 +633,26 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         }
 
         val key = "single:$chatIdentity"
-        if (key == renderedChatKey) return
+        val existing = childFragmentManager.findFragmentById(R.id.chatContent)
+        val targetTag = "$SINGLE_CHAT_TAG$chatIdentity"
+        if (key == renderedChatKey && existing != null && existing.tag == targetTag) return
         renderedChatKey = key
 
-        val transaction = childFragmentManager.beginTransaction()
-        val targetTag = "$SINGLE_CHAT_TAG$chatIdentity"
-        val existingTarget = childFragmentManager.findFragmentByTag(targetTag)
         childFragmentManager.fragments
             .filter { it.id == R.id.chatContent }
-            .filterNot { it === existingTarget }
             .forEach { fragment ->
                 releaseChatFragment(fragment)
-                transaction.remove(fragment)
             }
 
-        val tag = targetTag
-        val fragment = existingTarget
-            ?: ChatFragment.newInstance(
-                singleStream.channelId,
-                singleStream.channelLogin,
-                displayName(singleStream),
-                singleStream.id,
-            ).also {
-                transaction.add(R.id.chatContent, it, tag)
-            }
-        transaction.show(fragment)
-        transaction.commit()
+        val fragment = ChatFragment.newInstance(
+            singleStream.channelId,
+            singleStream.channelLogin,
+            displayName(singleStream),
+            singleStream.id,
+        )
+        childFragmentManager.beginTransaction()
+            .replace(R.id.chatContent, fragment, targetTag)
+            .commitNowAllowingStateLoss()
     }
 
     private fun releaseChatFragment(fragment: Fragment) {

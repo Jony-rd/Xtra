@@ -24,7 +24,8 @@
         android:id="@+id/chatContentColumn"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:animateLayoutChanges="true"
+        android:clipChildren="true"
+        android:clipToPadding="true"
         android:background="?attr/colorSurface"
         android:orientation="vertical"
         tools:visibility="visible">
@@ -33,7 +34,9 @@
             android:id="@+id/chatViewportFrame"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="1">
+            android:layout_weight="1"
+            android:clipChildren="true"
+            android:clipToPadding="true">
 
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/recyclerView"
@@ -264,6 +267,8 @@
             android:layout_width="match_parent"
             android:layout_height="34dp"
             android:minHeight="34dp"
+            android:background="?attr/colorSurface"
+            android:elevation="2dp"
             android:baselineAligned="false"
             android:orientation="horizontal"
             android:visibility="gone"
