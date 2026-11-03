@@ -415,9 +415,15 @@ class TwitchChatCatalogSource(
         )
 
     private fun isExpectedMissingChannel(error: Throwable): Boolean =
+        // Permanent "this channel simply has none" outcomes return an empty
+        // success so the picker instantly shows global/personal emotes instead
+        // of retrying forever. Transient failures (timeouts, HTTP 5xx/429, IO)
+        // still surface as ScopeUpdate.Failed so the repository retry ladder
+        // keeps running and can succeed later.
         generateSequence(error) { it.cause }.any {
-            (it as? NetworkUtils.HttpStatusException)?.statusCode == 404
-        }
+            val code = (it as? NetworkUtils.HttpStatusException)?.statusCode
+            code == 404 || code == 400 || code == 422 || code == 204
+        } || error is kotlinx.serialization.SerializationException || error is org.json.JSONException
 
     private suspend fun <T> provider(block: suspend () -> T): ChatCatalogProviderUpdate<T>? = try {
         ChatCatalogProviderUpdate(block())
