@@ -643,7 +643,7 @@ class MultiviewPlaybackCoordinator(
         slot.retryJob?.cancel()
         slot.bufferingWatchdogJob?.cancel()
         if (!hasValidatedNetwork()) {
-            handleFailure(slot, error, isOffline = false)
+            handleFailure(slot, error ?: IOException("Network unavailable"), isOffline = false)
         } else if (slot.hasMediaSource && !slot.reloadRequired) {
             slot.lastResponseCode = null
             slot.lastMasterResponseCode = null
