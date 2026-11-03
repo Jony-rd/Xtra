@@ -747,11 +747,19 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 orientation = LinearLayout.VERTICAL
                 val p = if (isFloatingOrCompact) dp(6) else dp(14)
                 setPadding(p, p, p, p)
-                val bg = android.graphics.drawable.GradientDrawable().apply {
-                    setColor(android.graphics.Color.parseColor("#0e0f18"))
-                    cornerRadius = dp(8).toFloat()
-                    setStroke(dp(2), android.graphics.Color.parseColor("#9146FF"))
-                }
+                // Layered hardware chassis: solid body + purple outer ring + cyan inner hairline
+                val bg = android.graphics.drawable.LayerDrawable(arrayOf(
+                    android.graphics.drawable.GradientDrawable().apply {
+                        setColor(android.graphics.Color.parseColor("#0e0f18"))
+                        cornerRadius = dp(8).toFloat()
+                        setStroke(dp(2), android.graphics.Color.parseColor("#9146FF"))
+                    },
+                    android.graphics.drawable.GradientDrawable().apply {
+                        setColor(android.graphics.Color.TRANSPARENT)
+                        cornerRadius = dp(7).toFloat()
+                        setStroke(dp(1), android.graphics.Color.parseColor("#00F5D4"))
+                    },
+                )).apply { setLayerInset(1, dp(3), dp(3), dp(3), dp(3)) }
                 background = bg
                 elevation = dp(24).toFloat()
                 clipToOutline = true
@@ -829,6 +837,33 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 }
             }
             header.addView(closeBtn)
+
+            // Cyberpunk gradient strip: a single static layer, zero runtime cost
+            val neonStrip = android.view.View(context).apply {
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(2)
+                ).apply { bottomMargin = dp(10) }
+                background = android.graphics.drawable.GradientDrawable(
+                    android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT,
+                    intArrayOf(
+                        android.graphics.Color.parseColor("#00F5D4"),
+                        android.graphics.Color.parseColor("#00E5FF"),
+                        android.graphics.Color.parseColor("#A970FF"),
+                        android.graphics.Color.parseColor("#FF2D55"),
+                    ),
+                ).apply { cornerRadius = dp(1).toFloat() }
+            }
+            chassis.addView(neonStrip)
+
+            // Soft press feedback for deck controls (standard RippleDrawable, no custom drawing)
+            fun deckRipple(base: android.graphics.drawable.Drawable): android.graphics.drawable.Drawable =
+                android.graphics.drawable.RippleDrawable(
+                    android.content.res.ColorStateList.valueOf(
+                        android.graphics.Color.parseColor("#33A970FF")),
+                    base,
+                    null,
+                )
+
             chassis.addView(header)
 
             val autoLabel = getString(R.string.multiview_quality_auto)
@@ -879,7 +914,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                         cornerRadius = dp(4).toFloat()
                         setStroke(dp(1), android.graphics.Color.parseColor("#3a3e5e"))
                     }
-                    background = bg
+                    background = deckRipple(bg)
                     setPadding(dp(7), dp(3), dp(7), dp(3))
                     val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                         marginEnd = dp(4)
@@ -1043,7 +1078,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                             cornerRadius = dp(6).toFloat()
                             setStroke(dp(1), android.graphics.Color.parseColor("#2a2b3d"))
                         }
-                        background = bg
+                        background = deckRipple(bg)
                         val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                             bottomMargin = if (isFloatingOrCompact) dp(3) else dp(10)
                         }
@@ -1353,7 +1388,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                                     setStroke(dp(1), android.graphics.Color.parseColor("#34364e"))
                                 }
                             }
-                            pill.background = pillBg
+                            pill.background = deckRipple(pillBg)
                             pill.setTextColor(if (isSelected) android.graphics.Color.WHITE else android.graphics.Color.parseColor("#A0A2B8"))
                         }
                     }
@@ -1397,6 +1432,14 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                         if (index % 2 == 0) col1.addView(card) else col2.addView(card)
                     } else {
                         streamListLayout.addView(card)
+
+                        // One-shot staggered pop-in (single ViewPropertyAnimator per card)
+                        card.alpha = 0f
+                        card.translationY = dp(10).toFloat()
+                        card.animate().alpha(1f).translationY(0f)
+                            .setDuration(170L)
+                            .setStartDelay((index * 40L).coerceAtMost(400L))
+                            .start()
                     }
                 }
             }
@@ -1423,7 +1466,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                         cornerRadius = dp(6).toFloat()
                         setStroke(dp(1), android.graphics.Color.parseColor(colorHex))
                     }
-                    background = bg
+                    background = deckRipple(bg)
                     val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                         marginStart = dp(3)
                         marginEnd = dp(3)
@@ -1483,6 +1526,18 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 setOnDismissListener { unlockControls() }
             }
             dialog?.show()
+
+            // One-shot pop-in for the whole deck (a single cheap ViewPropertyAnimator)
+            chassis.post {
+                chassis.alpha = 0f
+                chassis.scaleX = 0.94f
+                chassis.scaleY = 0.94f
+                chassis.translationY = dp(24).toFloat()
+                chassis.animate().alpha(1f).scaleX(1f).scaleY(1f).translationY(0f)
+                    .setDuration(200L)
+                    .setInterpolator(android.view.animation.OvershootInterpolator(0.6f))
+                    .start()
+            }
         } catch (_: Throwable) {
             unlockControls()
         }
