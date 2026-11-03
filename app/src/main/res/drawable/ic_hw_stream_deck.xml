@@ -3,35 +3,65 @@
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
-    <!-- Stream Deck outer hardware body -->
+    <!-- Stream Deck Pro Hardware Chassis -->
     <path
-        android:fillColor="#241938"
-        android:strokeColor="#A970FF"
+        android:fillColor="#121420"
+        android:strokeColor="#00F5D4"
         android:strokeWidth="1.2"
         android:pathData="M3,3 h18 a2,2 0 0 1 2,2 v14 a2,2 0 0 1 -2,2 h-18 a2,2 0 0 1 -2,-2 v-14 a2,2 0 0 1 2,-2 z" />
-    <!-- 6 Illuminated LCD Stream Deck Keys -->
-    <!-- Key 1 -->
+    <!-- 6 Pro Glass OLED Stream Deck Keys -->
+    <!-- Key 1 (Top Left) -->
     <path
-        android:fillColor="#9146FF"
-        android:pathData="M4.5,5 h3.5 a1,1 0 0 1 1,1 v3.5 a1,1 0 0 1 -1,1 h-3.5 a1,1 0 0 1 -1,-1 v-3.5 a1,1 0 0 1 1,-1 z" />
-    <!-- Key 2 -->
+        android:fillColor="#1B1E30"
+        android:strokeColor="#383E5E"
+        android:strokeWidth="0.6"
+        android:pathData="M4.5,5 h3.6 a0.8,0.8 0 0 1 0.8,0.8 v3.6 a0.8,0.8 0 0 1 -0.8,0.8 h-3.6 a0.8,0.8 0 0 1 -0.8,-0.8 v-3.6 a0.8,0.8 0 0 1 0.8,-0.8 z" />
     <path
         android:fillColor="#00F5D4"
-        android:pathData="M10.25,5 h3.5 a1,1 0 0 1 1,1 v3.5 a1,1 0 0 1 -1,1 h-3.5 a1,1 0 0 1 -1,-1 v-3.5 a1,1 0 0 1 1,-1 z" />
-    <!-- Key 3 -->
+        android:pathData="M5.5,6.5 h2 v0.8 h-2 z M5.5,8 h1.2 v0.8 h-1.2 z" />
+    <!-- Key 2 (Top Center) -->
+    <path
+        android:fillColor="#1B1E30"
+        android:strokeColor="#383E5E"
+        android:strokeWidth="0.6"
+        android:pathData="M10.2,5 h3.6 a0.8,0.8 0 0 1 0.8,0.8 v3.6 a0.8,0.8 0 0 1 -0.8,0.8 h-3.6 a0.8,0.8 0 0 1 -0.8,-0.8 v-3.6 a0.8,0.8 0 0 1 0.8,-0.8 z" />
+    <path
+        android:fillColor="#A970FF"
+        android:pathData="M11.2,6.5 h1.6 v2.3 h-1.6 z" />
+    <!-- Key 3 (Top Right - Rotary Encoder Dial) -->
+    <path
+        android:fillColor="#1B1E30"
+        android:strokeColor="#00F5D4"
+        android:strokeWidth="0.8"
+        android:pathData="M17.7,7.2 m-2.2,0 a2.2,2.2 0 1,1 4.4,0 a2.2,2.2 0 1,1 -4.4,0" />
+    <path
+        android:fillColor="#00F5D4"
+        android:pathData="M17.3,5.5 h0.8 v1.6 h-0.8 z" />
+    <!-- Key 4 (Bottom Left) -->
+    <path
+        android:fillColor="#1B1E30"
+        android:strokeColor="#383E5E"
+        android:strokeWidth="0.6"
+        android:pathData="M4.5,13.8 h3.6 a0.8,0.8 0 0 1 0.8,0.8 v3.6 a0.8,0.8 0 0 1 -0.8,0.8 h-3.6 a0.8,0.8 0 0 1 -0.8,-0.8 v-3.6 a0.8,0.8 0 0 1 0.8,-0.8 z" />
     <path
         android:fillColor="#FF5400"
-        android:pathData="M16,5 h3.5 a1,1 0 0 1 1,1 v3.5 a1,1 0 0 1 -1,1 h-3.5 a1,1 0 0 1 -1,-1 v-3.5 a1,1 0 0 1 1,-1 z" />
-    <!-- Key 4 -->
+        android:pathData="M5.5,16.5 l1.8,-1.8 l0,3.6 z" />
+    <!-- Key 5 (Bottom Center) -->
     <path
-        android:fillColor="#FF007F"
-        android:pathData="M4.5,13.5 h3.5 a1,1 0 0 1 1,1 v3.5 a1,1 0 0 1 -1,1 h-3.5 a1,1 0 0 1 -1,-1 v-3.5 a1,1 0 0 1 1,-1 z" />
-    <!-- Key 5 -->
+        android:fillColor="#1B1E30"
+        android:strokeColor="#383E5E"
+        android:strokeWidth="0.6"
+        android:pathData="M10.2,13.8 h3.6 a0.8,0.8 0 0 1 0.8,0.8 v3.6 a0.8,0.8 0 0 1 -0.8,0.8 h-3.6 a0.8,0.8 0 0 1 -0.8,-0.8 v-3.6 a0.8,0.8 0 0 1 0.8,-0.8 z" />
     <path
-        android:fillColor="#7B2CBF"
-        android:pathData="M10.25,13.5 h3.5 a1,1 0 0 1 1,1 v3.5 a1,1 0 0 1 -1,1 h-3.5 a1,1 0 0 1 -1,-1 v-3.5 a1,1 0 0 1 1,-1 z" />
-    <!-- Key 6 -->
+        android:fillColor="#00F5D4"
+        android:pathData="M11.2,16.5 m-1,0 a1,1 0 1,1 2,0 a1,1 0 1,1 -2,0" />
+    <!-- Key 6 (Bottom Right) -->
     <path
-        android:fillColor="#FFE600"
-        android:pathData="M16,13.5 h3.5 a1,1 0 0 1 1,1 v3.5 a1,1 0 0 1 -1,1 h-3.5 a1,1 0 0 1 -1,-1 v-3.5 a1,1 0 0 1 1,-1 z" />
+        android:fillColor="#1B1E30"
+        android:strokeColor="#383E5E"
+        android:strokeWidth="0.6"
+        android:pathData="M15.9,13.8 h3.6 a0.8,0.8 0 0 1 0.8,0.8 v3.6 a0.8,0.8 0 0 1 -0.8,0.8 h-3.6 a0.8,0.8 0 0 1 -0.8,-0.8 v-3.6 a0.8,0.8 0 0 1 0.8,-0.8 z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M16.8,15.2 h1.8 v0.7 h-1.8 z M16.8,16.4 h1.8 v0.7 h-1.8 z M16.8,17.6 h1.2 v0.7 h-1.2 z" />
 </vector>
