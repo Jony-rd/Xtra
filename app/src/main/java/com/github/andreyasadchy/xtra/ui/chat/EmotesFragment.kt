@@ -331,7 +331,11 @@ class EmotesFragment : Fragment() {
         }
         itemTouchHelper.attachToRecyclerView(binding.emotesRecyclerView)
         fun updateFavorites() {
-            val emotes = pickerCatalog?.let(viewModel::availableFavoriteEmotesFor) ?: availableEmotes
+            val catalogEmotes = pickerCatalog?.let(viewModel::availableFavoriteEmotesFor)?.takeIf { it.isNotEmpty() }
+            val emotes = catalogEmotes
+                ?: viewModel.availableFavoriteEmotes.value.takeIf { it.isNotEmpty() }
+                ?: availableEmotes.takeIf { it.isNotEmpty() }
+                ?: viewModel.currentPickerEmotes()
             val items = favoritePickerItems(favoriteEmotes, emotes, EmojiPickerCatalog.items)
             if (favoriteDragActive) {
                 pendingFavoriteItems = items
@@ -516,14 +520,24 @@ class EmotesFragment : Fragment() {
     ) {
         val list = when (section) {
             EmotePickerSection.RECENTS -> {
-                val current = pickerCatalog?.all ?: viewModel.currentPickerEmotes()
+                val current = pickerCatalog?.all?.takeIf { it.isNotEmpty() } ?: viewModel.currentPickerEmotes()
                 recentEmotes.mapNotNull { recent -> current.find { it.name == recent.name } }
             }
-            EmotePickerSection.TWITCH -> pickerCatalog?.twitch ?: viewModel.twitchPickerEmotes()
-            EmotePickerSection.THIRD_PARTY -> when (val state = thirdPartyPickerState) {
-                is ChatViewModel.ThirdPartyPickerState.Ready -> state.emotes
-                null -> viewModel.thirdPartyPickerEmotes()
-                else -> emptyList()
+            EmotePickerSection.TWITCH -> {
+                val catalogTwitch = pickerCatalog?.twitch
+                if (!catalogTwitch.isNullOrEmpty()) catalogTwitch else viewModel.twitchPickerEmotes()
+            }
+            EmotePickerSection.THIRD_PARTY -> {
+                val stateEmotes = when (val state = thirdPartyPickerState) {
+                    is ChatViewModel.ThirdPartyPickerState.Ready -> state.emotes
+                    else -> emptyList()
+                }
+                if (stateEmotes.isNotEmpty()) {
+                    stateEmotes
+                } else {
+                    val catalogThirdParty = pickerCatalog?.thirdParty
+                    if (!catalogThirdParty.isNullOrEmpty()) catalogThirdParty else viewModel.thirdPartyPickerEmotes()
+                }
             }
             EmotePickerSection.EMOJI -> emptyList()
             EmotePickerSection.FAVORITES -> emptyList()
@@ -561,6 +575,10 @@ class EmotesFragment : Fragment() {
         section: EmotePickerSection,
         list: List<Emote>,
     ) {
+        if (list.isNotEmpty()) {
+            binding.emptyState.isVisible = false
+            return
+        }
         if (section == EmotePickerSection.THIRD_PARTY) {
             if (thirdPartyPickerState == null) {
                 binding.emptyState.isVisible = false

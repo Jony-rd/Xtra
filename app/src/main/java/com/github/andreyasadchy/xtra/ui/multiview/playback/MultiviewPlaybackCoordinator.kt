@@ -3,6 +3,7 @@ package com.github.andreyasadchy.xtra.ui.multiview.playback
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.Network
 import android.util.Log
 import android.annotation.SuppressLint
 import com.github.andreyasadchy.xtra.BuildConfig
@@ -173,6 +174,7 @@ class MultiviewPlaybackCoordinator(
 
     fun onStart() {
         lifecycleStarted = true
+        ensureNetworkCallback()
         foreground = true
         backgroundPlayback = false
         slots.values.forEach { slot ->
@@ -217,6 +219,7 @@ class MultiviewPlaybackCoordinator(
     }
 
     fun releaseAll() {
+        unregisterNetworkCallback()
         scope.coroutineContext[Job]?.cancel()
         slots.values.forEach { slot ->
             releaseViewingStats(slot)
@@ -309,8 +312,23 @@ class MultiviewPlaybackCoordinator(
                                 applyQuality(slot)
                             }
                             publish(slot, MultiviewSlotStatus.BUFFERING)
+                            slot.bufferingWatchdogJob?.cancel()
+                            slot.bufferingWatchdogJob = scope.launch {
+                                delay(WATCHDOG_BUFFERING_TIMEOUT_MS)
+                                if (!isActive || slots[slot.identity] !== slot) return@launch
+                                if (slot.player.playbackState == Player.STATE_BUFFERING) {
+                                    Log.i(TAG, "channel=${slot.identity} watchdog triggered after buffering timeout, recovering")
+                                    if (hasValidatedNetwork()) {
+                                        recoverSlot(slot, null)
+                                    } else {
+                                        publish(slot, MultiviewSlotStatus.RECONNECTING, retryAvailable = true)
+                                    }
+                                }
+                            }
                         }
                         Player.STATE_READY -> {
+                            slot.bufferingWatchdogJob?.cancel()
+                            slot.bufferingWatchdogJob = null
                             slot.markReady()
                             slot.retryCount = 0
                             slot.manualRetry = false
@@ -318,8 +336,15 @@ class MultiviewPlaybackCoordinator(
                             logSelectedFormat(slot, player.videoFormat)
                             scheduleStableQualityRecovery(slot)
                         }
-                        Player.STATE_ENDED -> publish(slot, MultiviewSlotStatus.OFFLINE)
-                        Player.STATE_IDLE -> Unit
+                        Player.STATE_ENDED -> {
+                            slot.bufferingWatchdogJob?.cancel()
+                            slot.bufferingWatchdogJob = null
+                            publish(slot, MultiviewSlotStatus.OFFLINE)
+                        }
+                        Player.STATE_IDLE -> {
+                            slot.bufferingWatchdogJob?.cancel()
+                            slot.bufferingWatchdogJob = null
+                        }
                     }
                 }
 
@@ -614,7 +639,9 @@ class MultiviewPlaybackCoordinator(
         }
     }
 
-    private fun recoverSlot(slot: MultiviewPlayerSlot, error: Throwable) {
+    private fun recoverSlot(slot: MultiviewPlayerSlot, error: Throwable?) {
+        slot.retryJob?.cancel()
+        slot.bufferingWatchdogJob?.cancel()
         if (!hasValidatedNetwork()) {
             handleFailure(slot, error, isOffline = false)
         } else if (slot.hasMediaSource && !slot.reloadRequired) {
@@ -625,6 +652,56 @@ class MultiviewPlaybackCoordinator(
         } else {
             slot.reloadRequired = false
             start(slot)
+        }
+    }
+
+    private var networkCallbackRegistered = false
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            onNetworkValidated()
+        }
+        override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+            if (networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            ) {
+                onNetworkValidated()
+            }
+        }
+    }
+
+    private fun ensureNetworkCallback() {
+        if (networkCallbackRegistered) return
+        val cm = applicationContext.getSystemService(ConnectivityManager::class.java) ?: return
+        try {
+            cm.registerDefaultNetworkCallback(networkCallback)
+            networkCallbackRegistered = true
+        } catch (_: Throwable) {}
+    }
+
+    private fun unregisterNetworkCallback() {
+        if (!networkCallbackRegistered) return
+        val cm = applicationContext.getSystemService(ConnectivityManager::class.java) ?: return
+        try {
+            cm.unregisterNetworkCallback(networkCallback)
+            networkCallbackRegistered = false
+        } catch (_: Throwable) {}
+    }
+
+    private fun onNetworkValidated() {
+        scope.launch(Dispatchers.Main) {
+            slots.values.forEach { slot ->
+                val needsRecovery = slot.player.playbackState == Player.STATE_BUFFERING ||
+                    slot.status == MultiviewSlotStatus.RECONNECTING ||
+                    slot.status == MultiviewSlotStatus.BUFFERING ||
+                    slot.retryJob?.isActive == true
+                if (needsRecovery) {
+                    Log.i(TAG, "Network validated: recovering slot ${slot.identity}")
+                    slot.bufferingWatchdogJob?.cancel()
+                    slot.retryJob?.cancel()
+                    slot.reloadRequired = true
+                    recoverSlot(slot, null)
+                }
+            }
         }
     }
 
@@ -1164,6 +1241,7 @@ class MultiviewPlaybackCoordinator(
         var stableRecoveryJob: Job? = null
         var vaftAvoidanceJob: Job? = null
         var primaryRestoreJob: Job? = null
+        var bufferingWatchdogJob: Job? = null
         val vaftController = TwitchVaftController()
         var retryCount: Int = 0
         private var recoveryState = MultiviewQualityRecoveryState()
@@ -1231,6 +1309,8 @@ class MultiviewPlaybackCoordinator(
             stableRecoveryJob?.cancel()
             vaftAvoidanceJob?.cancel()
             primaryRestoreJob?.cancel()
+            bufferingWatchdogJob?.cancel()
+            bufferingWatchdogJob = null
             attachedView?.let { view ->
                 if (view.player === player) {
                     logVideoSurfaceBinding("multiview_detach", player, view, view.player)
@@ -1245,6 +1325,7 @@ class MultiviewPlaybackCoordinator(
     companion object {
         private const val TAG = "MultiviewPlayback"
         private const val MAX_RETRIES = 6
+        private const val WATCHDOG_BUFFERING_TIMEOUT_MS = 10_000L
         private const val NETWORK_RETRY_DELAY_MS = 15_000L
         private const val PRIMARY_RESTORE_INTERVAL_MS = 10_000L
         private const val FRAME_RATE_TOLERANCE = 0.5f
