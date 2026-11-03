@@ -25,15 +25,15 @@ import kotlin.math.roundToInt
 
 /** Shared, bounded image requests for the emote picker and its adapters. */
 internal object EmotePickerImageLoader {
-    const val INITIAL_PREFETCH_LIMIT = 64
-    const val LOOKAHEAD_PREFETCH_LIMIT = 24
-    private const val PREFETCH_TRACKER_LIMIT = 512
+    const val INITIAL_PREFETCH_LIMIT = 256
+    const val LOOKAHEAD_PREFETCH_LIMIT = 96
+    private const val PREFETCH_TRACKER_LIMIT = 1024
     /** Prefetches on the wire at once; the rest of the connections stay free for visible cells. */
-    private const val PREFETCH_CONCURRENCY = 4
-    private const val PREFETCH_PENDING_LIMIT = 48
+    private const val PREFETCH_CONCURRENCY = 16
+    private const val PREFETCH_PENDING_LIMIT = 256
     /** Background warming only ever fills idle connections and is capped so it cannot flood the disk cache. */
-    private const val WARM_PENDING_LIMIT = 320
-    private const val WARM_CONCURRENCY = 2
+    private const val WARM_PENDING_LIMIT = 640
+    private const val WARM_CONCURRENCY = 12
     private val RETRY_DELAYS_MS = longArrayOf(1_000L, 3_000L)
     private const val PREFETCH_TRACKER_TTL_MS = 15_000L
     private val prefetchedAt = LinkedHashMap<String, Long>(PREFETCH_TRACKER_LIMIT, .75f, true)
@@ -144,8 +144,6 @@ internal object EmotePickerImageLoader {
      */
     fun warm(context: Context, items: Iterable<Emote>, quality: String) {
         val appContext = context.applicationContext
-        val connectivity = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        if (connectivity == null || connectivity.isActiveNetworkMetered) return
         val batch = prefetchBatch(appContext, items, quality, WARM_PENDING_LIMIT)
         if (batch.isEmpty()) return
         val dropped = ArrayList<String>()

@@ -1,0 +1,28 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp"
+    android:height="30dp"
+    android:viewportWidth="22"
+    android:viewportHeight="30">
+    <!-- Drop shadow / outer bevel -->
+    <path
+        android:fillColor="#0C0D17"
+        android:pathData="M2,1 h18 a2,2 0 0 1 2,2 v26 a2,2 0 0 1 -2,2 h-18 a2,2 0 0 1 -2,-2 v-26 a2,2 0 0 1 2,-2 z" />
+    <!-- Metallic fader cap body -->
+    <path
+        android:fillColor="#25273B"
+        android:strokeColor="#565A84"
+        android:strokeWidth="1"
+        android:pathData="M3,2 h16 a1.5,1.5 0 0 1 1.5,1.5 v23 a1.5,1.5 0 0 1 -1.5,1.5 h-16 a1.5,1.5 0 0 1 -1.5,-1.5 v-23 a1.5,1.5 0 0 1 1.5,-1.5 z" />
+    <!-- Top and bottom beveled edges -->
+    <path
+        android:fillColor="#363A57"
+        android:pathData="M4,3 h14 v2 h-14 z M4,23 h14 v2 h-14 z" />
+    <!-- Side tactile grip ridges -->
+    <path
+        android:fillColor="#171826"
+        android:pathData="M4,8 h4 v1.5 h-4 z M14,8 h4 v1.5 h-4 z M4,12 h4 v1.5 h-4 z M14,12 h4 v1.5 h-4 z M4,16 h4 v1.5 h-4 z M14,16 h4 v1.5 h-4 z M4,20 h4 v1.5 h-4 z M14,20 h4 v1.5 h-4 z" />
+    <!-- Center fluorescent position indicator line -->
+    <path
+        android:fillColor="#00F5D4"
+        android:pathData="M10,5 h2 v20 h-2 z" />
+</vector>

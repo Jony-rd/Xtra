@@ -1,0 +1,17 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Sleek, compact neon purple phone with neon green orbit arrows -->
+    <path
+        android:fillColor="#BF00FF"
+        android:pathData="M8,5 C8,4.4 8.4,4 9,4 H15 C15.6,4 16,4.4 16,5 V19 C16,19.6 15.6,20 15,20 H9 C8.4,20 8,19.6 8,19 Z M9.5,6 V18 H14.5 V6 Z" />
+    <!-- Curved rotation arrows -->
+    <path
+        android:fillColor="#39FF14"
+        android:pathData="M18,5 L21,7.5 L18,10 V8 C19,8 20,9 20,10.5 C20,11.5 19.3,12.3 18.3,12.7 L18.8,14.1 C20.5,13.4 21.5,12 21.5,10.5 C21.5,8.2 19.8,6.5 18,6.5 Z" />
+    <path
+        android:fillColor="#39FF14"
+        android:pathData="M6,19 L3,16.5 L6,14 V16 C5,16 4,15 4,13.5 C4,12.5 4.7,11.7 5.7,11.3 L5.2,9.9 C3.5,10.6 2.5,12 2.5,13.5 C2.5,15.8 4.2,17.5 6,17.5 Z" />
+</vector>

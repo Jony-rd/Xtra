@@ -52,9 +52,14 @@ internal class ActivityBackgroundController(
 
         image.isVisible = true
         image.alpha = configuration.visibility / 100f
-        scrim.isVisible = true
         val surface = MaterialColors.getColor(root, com.google.android.material.R.attr.colorSurface)
-        scrim.setBackgroundColor(ColorUtils.setAlphaComponent(surface, 0xB8))
+        val scrimAlpha = (0xB8 * (100 - configuration.visibility) / 100).coerceIn(0, 0xB8)
+        if (scrimAlpha == 0) {
+            scrim.isGone = true
+        } else {
+            scrim.isVisible = true
+            scrim.setBackgroundColor(ColorUtils.setAlphaComponent(surface, scrimAlpha))
+        }
 
         if (requestedUri == uri && imageRequest != null) return
         imageRequest?.dispose()

@@ -1,4 +1,6 @@
 package com.github.andreyasadchy.xtra.ui.main
+import androidx.lifecycle.ViewModelProvider
+import com.github.andreyasadchy.xtra.ui.multiview.MultiviewViewModel
 
 import android.Manifest
 import android.app.ActivityOptions
@@ -22,6 +24,9 @@ import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.widget.ImageView
+import android.widget.LinearLayout
+import com.github.andreyasadchy.xtra.ui.common.loadStreamProfileImage
 import android.os.PowerManager
 import android.os.SystemClock
 import android.os.ext.SdkExtensions
@@ -238,7 +243,8 @@ class MainActivity : AppCompatActivity() {
         binding.tvNavigationContainer.isVisible = useNavigationRail && showNavigation
         val compactDropsFilter = dropsFilterKeyboardVisible &&
             configuration.orientation == Configuration.ORIENTATION_LANDSCAPE && configuration.screenHeightDp < 480
-        binding.navBarContainer.isVisible = !useNavigationRail && showNavigation && !compactDropsFilter
+        val inMultiview = currentMultiviewFragment() != null
+        binding.navBarContainer.isVisible = !inMultiview && !useNavigationRail && showNavigation && !compactDropsFilter
         updateBottomSearchVisibility()
         allToolbarViews().forEach(::updateTopSearchVisibility)
         binding.tvSearch.isVisible = isTv
@@ -1248,7 +1254,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun canMinimizeMultiview(): Boolean {
-        return !isTv && playerFragment == null &&
+        return !isTv &&
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE) &&
             prefs.getBoolean(C.PLAYER_PICTURE_IN_PICTURE, true)
@@ -1257,8 +1263,40 @@ class MainActivity : AppCompatActivity() {
     fun minimizeMultiview() {
         if (!canMinimizeMultiview()) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val mv = currentMultiviewFragment()
+        mv?.prepareForPictureInPicture()
+        val gridRatio = mv?.calculateGridAspectRatio() ?: android.util.Rational(1, 1)
+        val sourceRect = mv?.getVideoGridRect()
         runCatching {
-            enterPictureInPictureMode(PictureInPictureParams.Builder().build())
+            val builder = PictureInPictureParams.Builder()
+                .setAspectRatio(gridRatio)
+            if (sourceRect != null && sourceRect.width() > 0 && sourceRect.height() > 0) {
+                builder.setSourceRectHint(sourceRect)
+            }
+            enterPictureInPictureMode(builder.build())
+        }
+    }
+
+    fun launchFloatingWindowOrPip() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val freeformSuccess = runCatching {
+            val options = ActivityOptions.makeBasic()
+            val setWindowingMode = ActivityOptions::class.java.methods.firstOrNull {
+                it.name == "setLaunchWindowingMode" && it.parameterTypes.size == 1
+            }
+            if (setWindowingMode != null) {
+                setWindowingMode.invoke(options, 5)
+                val intent = Intent(this, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or 0x00002000)
+                    putExtra("miui.intent.extra.START_ACTIVITY_WHEN_LOCKED", true)
+                }
+                startActivity(intent, options.toBundle())
+                true
+            } else false
+        }.getOrDefault(false)
+
+        if (!freeformSuccess) {
+            minimizeMultiview()
         }
     }
 
@@ -1527,6 +1565,7 @@ class MainActivity : AppCompatActivity() {
     private fun backendForPlayerFragment(fragment: Fragment): PlaybackBackend = PlaybackBackend.MEDIA3
 
     private fun startPlayer(fragment: Fragment) {
+        stopMultiviewAudioForForegroundPlayer()
         playbackRestoreGeneration++
         val backend = backendForPlayerFragment(fragment)
         if (BuildConfig.DEBUG) {
@@ -1538,16 +1577,24 @@ class MainActivity : AppCompatActivity() {
         playerFragment = fragment
         PlaybackRuntimeDiagnostic.setActive(playbackDiagnosticOwner, backend)
         viewModel.isPlayerOpened = true
+        binding.playerContainer.visibility = View.VISIBLE
+        binding.multiviewReturnButton.visibility = View.GONE
         val transaction = supportFragmentManager.beginTransaction()
             .setReorderingAllowed(true)
             .replace(R.id.playerContainer, fragment)
-        if (supportFragmentManager.findFragmentById(R.id.playerContainer) != null) {
-            // A player can be minimized when the next stream is selected. Commit the replacement
-            // synchronously so the transformed old player cannot draw one more frame over the
-            // new player's handoff cover.
-            transaction.commitNow()
-        } else {
-            transaction.commit()
+        try {
+            if (!supportFragmentManager.isStateSaved && supportFragmentManager.findFragmentById(R.id.playerContainer) != null) {
+                transaction.commitNowAllowingStateLoss()
+            } else {
+                transaction.commitAllowingStateLoss()
+            }
+        } catch (_: Exception) {
+            try {
+                supportFragmentManager.beginTransaction()
+                    .setReorderingAllowed(true)
+                    .replace(R.id.playerContainer, fragment)
+                    .commitAllowingStateLoss()
+            } catch (_: Exception) {}
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
             packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE) &&
@@ -1561,6 +1608,45 @@ class MainActivity : AppCompatActivity() {
      * Permanently closes the foreground player. Backgrounding the activity uses
      * the lifecycle playback path instead, so background playback remains available.
      */
+    fun updateMultiviewReturnButtonVisibility() {
+        if (!::binding.isInitialized || !::navController.isInitialized) return
+        val multiviewVm = try {
+            ViewModelProvider(this, MultiviewViewModel.MultiviewViewModelFactory)[MultiviewViewModel::class.java]
+        } catch (e: Exception) { return }
+        val streams = multiviewVm.state.value.streams
+        val isInMultiview = navController.currentDestination?.id == R.id.multiviewFragment
+        val hasActiveMultiview = streams.isNotEmpty()
+        val isPlayerOpen = playerFragment != null || viewModel.isPlayerOpened || activePlayerFragment() != null || (supportFragmentManager.findFragmentById(R.id.playerContainer) != null)
+        val shouldShow = hasActiveMultiview && !isInMultiview && !isPlayerOpen
+        binding.multiviewReturnButton.isVisible = shouldShow
+        if (shouldShow) {
+            val container = binding.multiviewAvatarsContainer
+            container.removeAllViews()
+            val sizePx = (22 * resources.displayMetrics.density).toInt()
+            val marginPx = (4 * resources.displayMetrics.density).toInt()
+            val cornerRadius = 4 * resources.displayMetrics.density
+            streams.take(4).forEach { stream ->
+                val iv = ImageView(this).apply {
+                    layoutParams = LinearLayout.LayoutParams(sizePx, sizePx).apply {
+                        marginStart = marginPx
+                    }
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                        clipToOutline = true
+                        outlineProvider = object : android.view.ViewOutlineProvider() {
+                            override fun getOutline(view: View, outline: android.graphics.Outline) {
+                                outline.setRoundRect(0, 0, view.width, view.height, cornerRadius)
+                            }
+                        }
+                    }
+                    setImageResource(R.drawable.ic_person_placeholder)
+                }
+                loadStreamProfileImage(this, iv, stream)
+                container.addView(iv)
+            }
+        }
+    }
+
     fun closePlayer() {
         closePlayerInternal(null)
     }
@@ -1570,6 +1656,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun closePlayerInternal(expectedPlayer: Fragment?) {
+        binding.root.post { updateMultiviewReturnButtonVisibility() }
         if (expectedPlayer != null && playerFragment !== expectedPlayer) {
             return
         }
@@ -1584,26 +1671,31 @@ class MainActivity : AppCompatActivity() {
         onPlayerReturnedToBrowsing(playerStillOpen = false)
         supportFragmentManager.findFragmentById(R.id.playerContainer)?.let { player ->
             val transaction = supportFragmentManager.beginTransaction()
-                .setTransition(FragmentTransaction.TRANSIT_FRAGMENT_FADE)
                 .remove(player)
-            // The system PiP close action can be delivered after onSaveInstanceState().
-            // Playback has already been stopped above, so dropping this visual removal is
-            // preferable to throwing and leaving the activity in a broken state.
             if (supportFragmentManager.isStateSaved) {
                 transaction.commitAllowingStateLoss()
             } else {
-                transaction.commit()
+                transaction.commitNow()
             }
         }
         playerFragment = null
         PlaybackRuntimeDiagnostic.clear(playbackDiagnosticOwner)
         viewModel.isPlayerOpened = false
+        binding.playerContainer.removeAllViews()
+        binding.playerContainer.visibility = View.GONE
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
             setPictureInPictureParams(PictureInPictureParams.Builder().setAutoEnterEnabled(false).build())
         }
         viewModel.sleepTimer?.cancel()
         viewModel.sleepTimerEndTime = 0L
-        currentMultiviewFragment()?.resumeAfterExternalPlayer()
+        val multiviewBehindPlayer = currentMultiviewFragment()
+        if (multiviewBehindPlayer != null) {
+            multiviewBehindPlayer.resumeAfterExternalPlayer()
+        } else {
+            // A maximized player can leave the system bars hidden; bring them back.
+            androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+                .show(WindowInsetsCompat.Type.systemBars())
+        }
         if (isTv) {
             binding.root.post { restoreTvRootFocusIfNeeded() }
         }
@@ -1624,6 +1716,17 @@ class MainActivity : AppCompatActivity() {
         viewModel.isPlayerOpened = true
         (application as XtraApp).xtraModule.streamFeedRefreshCoordinator.playbackChanged(isLive)
         (application as XtraApp).xtraModule.streamPreviewCoordinator.onFullscreenPlaybackStarted()
+    }
+
+    private fun stopMultiviewAudioForForegroundPlayer() {
+        val fragment = currentMultiviewFragment()
+        if (fragment != null) {
+            fragment.pauseForExternalPlayer()
+            return
+        }
+        if (prefs.getString(C.MULTIVIEW_SESSION, null).isNullOrBlank()) return
+        ViewModelProvider(this, MultiviewViewModel.MultiviewViewModelFactory)[MultiviewViewModel::class.java]
+            .onStop(allowBackground = false)
     }
 
     private fun currentMultiviewFragment(): MultiviewFragment? {
@@ -1700,26 +1803,22 @@ class MainActivity : AppCompatActivity() {
         if (duration > 0L) {
             viewModel.sleepTimer = Timer().apply {
                 schedule(duration) {
-                    lifecycleScope.launch {
-                        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
-                            (playerFragment as? Media3PlayerFragment)?.also {
-                                if (!isTv) it.minimize()
-                                closePlayer()
-                            }
-                            if (prefs.getBoolean(C.SLEEP_TIMER_LOCK, false)) {
-                                if ((getSystemService(POWER_SERVICE) as PowerManager).isInteractive) {
-                                    try {
-                                        (getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager).lockNow()
-                                    } catch (e: SecurityException) {
-
-                                    }
-                                }
-                            }
-                        } else {
-                            withStarted {
-                                (playerFragment as? Media3PlayerFragment)?.also {
-                                    if (!isTv) it.minimize()
-                                    closePlayer()
+                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main.immediate).launch {
+                        (playerFragment as? Media3PlayerFragment)?.also {
+                            if (!isTv) it.minimize()
+                            closePlayer()
+                        }
+                        try {
+                            ViewModelProvider(this@MainActivity, MultiviewViewModel.MultiviewViewModelFactory)[MultiviewViewModel::class.java].releaseAll()
+                        } catch (e: Exception) {}
+                        if (::navController.isInitialized) {
+                            navController.popBackStack(R.id.multiviewFragment, true)
+                        }
+                        if (prefs.getBoolean(C.SLEEP_TIMER_LOCK, false)) {
+                            if ((getSystemService(POWER_SERVICE) as PowerManager).isInteractive) {
+                                try {
+                                    (getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager).lockNow()
+                                } catch (e: SecurityException) {
                                 }
                             }
                         }
@@ -1729,6 +1828,8 @@ class MainActivity : AppCompatActivity() {
             viewModel.sleepTimerEndTime = System.currentTimeMillis() + duration
         }
     }
+
+    fun currentPlayingStream(): Stream? = (playerFragment as? Media3PlayerFragment)?.currentStream()
 
     fun getSleepTimerTimeLeft(): Long {
         return viewModel.sleepTimerEndTime - System.currentTimeMillis()
@@ -1915,6 +2016,24 @@ class MainActivity : AppCompatActivity() {
 
     private fun initNavigation() {
         navController = (supportFragmentManager.findFragmentById(R.id.navHostFragment) as NavHostFragment).navController
+        val multiviewVm = ViewModelProvider(this, MultiviewViewModel.MultiviewViewModelFactory)[MultiviewViewModel::class.java]
+        lifecycleScope.launch {
+            multiviewVm.state.collectLatest {
+                updateMultiviewReturnButtonVisibility()
+            }
+        }
+        navController.addOnDestinationChangedListener { _, _, _ ->
+            updateMultiviewReturnButtonVisibility()
+        }
+        binding.multiviewReturnButton.setOnClickListener {
+            closePlayer()
+            runCatching {
+                navController.navigate(
+                    R.id.multiviewFragment,
+                    MultiviewFragment.arguments(emptyList())
+                )
+            }
+        }
         navController.setOnBackPressedDispatcher(onBackPressedDispatcher)
         val tabList = resolveNavigationTabList(
             prefs.getString(C.UI_NAVIGATION_TAB_LIST, null),

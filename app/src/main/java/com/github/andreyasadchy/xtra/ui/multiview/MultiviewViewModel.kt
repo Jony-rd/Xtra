@@ -198,11 +198,18 @@ class MultiviewViewModel(
                 ),
             )
         } else if (current.identities.any { it.equals(identity, true) }) {
+            val nextVolumes = current.audioVolumes.toMutableMap()
+            val currentVol = nextVolumes[identity] ?: 0f
+            if (currentVol <= 0.01f) {
+                nextVolumes[identity] = defaultAudioVolume()
+            }
             update(
                 current.copy(
                     focusedIdentity = identity,
                     layoutBeforeFocus = current.layoutBeforeFocus ?: current.layoutMode.takeUnless { it == MultiviewLayoutMode.FOCUS },
                     layoutMode = MultiviewLayoutMode.FOCUS,
+                    audioVolumes = nextVolumes,
+                    activeIdentity = identity,
                 ),
             )
         }
@@ -269,6 +276,7 @@ class MultiviewViewModel(
 
     fun onStart() = playbackCoordinator.onStart()
 
+    fun releaseAll() = playbackCoordinator.releaseAll()
     fun onStop(allowBackground: Boolean = true, inPictureInPicture: Boolean = false) =
         playbackCoordinator.onStop(allowBackground, inPictureInPicture)
 

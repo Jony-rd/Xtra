@@ -125,6 +125,42 @@
         </LinearLayout>
     </LinearLayout>
 
+    <!-- Multiview Quick-Return Floating Tile -->
+    <LinearLayout
+        android:id="@+id/multiviewReturnButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="12dp"
+        android:background="@drawable/bg_multiview_return"
+        android:clickable="true"
+        android:elevation="8dp"
+        android:focusable="true"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="8dp"
+        android:paddingTop="5dp"
+        android:paddingEnd="8dp"
+        android:paddingBottom="5dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@id/navBarContainer"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <ImageView
+            android:id="@+id/multiviewReturnIcon"
+            android:layout_width="22dp"
+            android:layout_height="22dp"
+            android:src="@drawable/ic_hw_pumpkin_layout" />
+
+        <LinearLayout
+            android:id="@+id/multiviewAvatarsContainer"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal" />
+    </LinearLayout>
+
     <FrameLayout
         android:id="@+id/playerContainer"
         android:layout_width="match_parent"

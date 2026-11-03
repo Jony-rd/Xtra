@@ -1,0 +1,17 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Glowing Pumpkin with 4-Pane Grid Face -->
+    <path
+        android:fillColor="#39FF14"
+        android:pathData="M11,2 C11,3 12,4 12,5 L10,5 C10,3 11,2 11,2 Z" />
+    <path
+        android:fillColor="#FF7700"
+        android:pathData="M12,5 C7,5 3,8 3,13 C3,18 7,21 12,21 C17,21 21,18 21,13 C21,8 17,5 12,5 Z" />
+    <!-- 4-Pane Carved Grid Windows (2 top, 2 bottom) -->
+    <path
+        android:fillColor="#FFFF00"
+        android:pathData="M6,9 H11 V13 H6 Z M13,9 H18 V13 H13 Z M6,14.5 H11 V18.5 H6 Z M13,14.5 H18 V18.5 H13 Z" />
+</vector>

@@ -2,6 +2,8 @@
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/multiviewSlot"
+    android:clipChildren="true"
+    android:clipToPadding="true"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@android:color/black"
@@ -86,6 +88,17 @@
             android:contentDescription="@string/multiview_stream_actions"
             android:padding="12dp"
             android:src="@drawable/baseline_more_vert_black_24"
+            android:visibility="gone"
+            app:tint="@android:color/white" />
+
+        <ImageButton
+            android:id="@+id/removeButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/multiview_remove_stream"
+            android:padding="12dp"
+            android:src="@drawable/ic_close"
             android:visibility="gone"
             app:tint="@android:color/white" />
     </LinearLayout>

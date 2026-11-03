@@ -241,12 +241,14 @@ internal class PlayerSwipeGestureController(
             feedback,
             FrameLayout.LayoutParams(dp(220), dp(82), Gravity.CENTER),
         )
+        feedback.elevation = dp(32).toFloat()
         feedback.visibility = View.GONE
         preferences.registerOnSharedPreferenceChangeListener(this)
     }
 
     fun begin(event: MotionEvent, canHandle: Boolean, interactionLocked: Boolean): Boolean {
         clearGesture(hide = false)
+        try { feedback.bringToFront() } catch (e: Exception) {}
         if (!canHandle) return false
         brightness.attach(window)
         val settings = SwipeControlsSettings.read(context)
@@ -425,6 +427,10 @@ internal class PlayerSwipeGestureController(
         }
         feedback.setContent(title, valueText, fraction)
         feedback.visibility = View.VISIBLE
+        try {
+            feedback.bringToFront()
+            feedback.elevation = dp(32).toFloat()
+        } catch (_: Exception) {}
         handler.removeCallbacks(hideFeedback)
         handler.postDelayed(hideFeedback, FEEDBACK_HIDE_DELAY_MS)
     }

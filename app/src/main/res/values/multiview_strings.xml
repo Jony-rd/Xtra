@@ -31,6 +31,7 @@
     <string name="multiview_layout_auto">Auto</string>
     <string name="multiview_layout_grid">Grid</string>
     <string name="multiview_layout_focus">Focus</string>
+    <string name="multiview_layout_tiered">Tiered</string>
     <string name="multiview_more_options">More multiview options</string>
     <string name="multiview_quality_mode">Quality</string>
     <string name="multiview_quality_auto">Auto</string>
