@@ -3,11 +3,43 @@
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
-    <!-- Glowing Neon Green Spiderweb filling 4 corners -->
+    <!-- Techy Square Keycap Housing -->
     <path
-        android:fillColor="#39FF14"
-        android:pathData="M2,2 L2,8 L4,6 L6,8 L8,6 L6,4 L8,2 Z M22,2 L16,2 L18,4 L16,6 L18,8 L20,6 L22,8 Z M2,22 L8,22 L6,20 L8,18 L6,16 L4,18 L2,16 Z M22,22 L22,16 L20,18 L18,16 L16,18 L18,20 L16,22 Z" />
+        android:fillColor="#141624"
+        android:strokeColor="#323750"
+        android:strokeWidth="1.2"
+        android:pathData="M3,3 h18 a2,2 0 0 1 2,2 v14 a2,2 0 0 1 -2,2 h-18 a2,2 0 0 1 -2,-2 v-14 a2,2 0 0 1 2,-2 z" />
+    <!-- 4 Tactical Expand Corner Brackets (Cyan) -->
+    <!-- Top-Left -->
     <path
-        android:fillColor="#FF7700"
-        android:pathData="M10,10 L14,10 L14,14 L10,14 Z" />
+        android:strokeColor="#00F5D4"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="square"
+        android:fillColor="#00000000"
+        android:pathData="M10,7 h-3 v3" />
+    <!-- Top-Right -->
+    <path
+        android:strokeColor="#00F5D4"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="square"
+        android:fillColor="#00000000"
+        android:pathData="M14,7 h3 v3" />
+    <!-- Bottom-Left -->
+    <path
+        android:strokeColor="#00F5D4"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="square"
+        android:fillColor="#00000000"
+        android:pathData="M10,17 h-3 v-3" />
+    <!-- Bottom-Right -->
+    <path
+        android:strokeColor="#00F5D4"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="square"
+        android:fillColor="#00000000"
+        android:pathData="M14,17 h3 v-3" />
+    <!-- Center Screen Dot (White) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M11,11 h2 v2 h-2 z" />
 </vector>

@@ -3,21 +3,21 @@
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
-    <!-- Spooky stone coffin outline (scaled up so the glyph fills the icon box like its neighbors) -->
-    <group
-        android:scaleX="1.35"
-        android:scaleY="1.35"
-        android:pivotX="12"
-        android:pivotY="12">
+    <!-- Techy Square Keycap Housing -->
     <path
-        android:fillColor="#503875"
-        android:pathData="M8,2 L16,2 L19,8 L17,22 L7,22 L5,8 Z" />
+        android:fillColor="#141624"
+        android:strokeColor="#323750"
+        android:strokeWidth="1.2"
+        android:pathData="M3,3 h18 a2,2 0 0 1 2,2 v14 a2,2 0 0 1 -2,2 h-18 a2,2 0 0 1 -2,-2 v-14 a2,2 0 0 1 2,-2 z" />
+    <!-- Tactile Plus Icon (Bold Electric Cyan & White) -->
     <path
-        android:fillColor="#1F1630"
-        android:pathData="M9,3.5 L15,3.5 L17.5,8 L15.5,20.5 L8.5,20.5 L6.5,8 Z" />
-    <!-- Bright toxic neon green plus on coffin lid -->
+        android:fillColor="#00F5D4"
+        android:pathData="M11,7 h2 v10 h-2 z" />
     <path
-        android:fillColor="#39FF14"
-        android:pathData="M11,7 H13 V11 H17 V13 H13 V17 H11 V13 H7 V11 H11 Z" />
-    </group>
+        android:fillColor="#00F5D4"
+        android:pathData="M7,11 h10 v2 h-10 z" />
+    <!-- Center Accent Dot -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M11,11 h2 v2 h-2 z" />
 </vector>

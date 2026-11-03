@@ -3,12 +3,35 @@
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
-    <!-- Crimson Beating Heart with Live Pulse waves -->
+    <!-- Techy Square Keycap Housing -->
     <path
-        android:fillColor="#FF0055"
-        android:pathData="M12,21.35 L10.55,20.03 C5.4,15.36 2,12.28 2,8.5 C2,5.42 4.42,3 7.5,3 C9.24,3 10.91,3.81 12,5.09 C13.09,3.81 14.76,3 16.5,3 C19.58,3 22,5.42 22,8.5 C22,12.28 18.6,15.36 13.45,20.04 L12,21.35 Z" />
-    <!-- Glowing neon live pulse EKG line across heart -->
+        android:fillColor="#141624"
+        android:strokeColor="#323750"
+        android:strokeWidth="1.2"
+        android:pathData="M3,3 h18 a2,2 0 0 1 2,2 v14 a2,2 0 0 1 -2,2 h-18 a2,2 0 0 1 -2,-2 v-14 a2,2 0 0 1 2,-2 z" />
+    <!-- Live Pulse Transmitter Core (Signal Orange) -->
     <path
-        android:fillColor="#39FF14"
-        android:pathData="M5,11 L8.5,11 L10,8 L11.5,14 L13,9 L14.5,12 L15.5,11 L19,11 L19,12.5 L16.2,12.5 L14.8,14.5 L13.2,11.5 L11.8,16.5 L9.8,9.5 L8,12.5 L5,12.5 Z" />
+        android:fillColor="#FF5400"
+        android:pathData="M12,12 m-2,0 a2,2 0 1,1 4,0 a2,2 0 1,1 -4,0" />
+    <!-- Radiating Signal Waves (Cyan) -->
+    <path
+        android:strokeColor="#00F5D4"
+        android:strokeWidth="1.2"
+        android:fillColor="#00000000"
+        android:pathData="M8.5,8.5 c1.9,-1.9 5.1,-1.9 7,0" />
+    <path
+        android:strokeColor="#00F5D4"
+        android:strokeWidth="1.2"
+        android:fillColor="#00000000"
+        android:pathData="M8.5,15.5 c1.9,1.9 5.1,1.9 7,0" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.2"
+        android:fillColor="#00000000"
+        android:pathData="M6.5,6.5 c3,-3 8,-3 11,0" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.2"
+        android:fillColor="#00000000"
+        android:pathData="M6.5,17.5 c3,3 8,3 11,0" />
 </vector>
