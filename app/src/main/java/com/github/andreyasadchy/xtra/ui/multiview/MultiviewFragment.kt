@@ -2092,7 +2092,7 @@ private inline fun <reified T : Parcelable> Bundle.parcelableArrayList(key: Stri
     }
 }
 
-class DjFaderView @JvmOverloads constructor(
+class DjFaderView(
     context: android.content.Context,
     initialVolume: Float,
     private val isCompact: Boolean = false,
