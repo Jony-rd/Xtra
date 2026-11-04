@@ -54,7 +54,7 @@
                 android:layout_marginEnd="16dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="@string/multiview_close"
-                android:padding="11dp"
+                android:padding="3dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_hw_bat_back" />
 
@@ -64,7 +64,7 @@
                 android:layout_height="56dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="Rotate multiview"
-                android:padding="11dp"
+                android:padding="3dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_hw_phone_rotate" />
 
@@ -74,7 +74,7 @@
                 android:layout_height="56dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="@string/multiview_minimize"
-                android:padding="11dp"
+                android:padding="3dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_hw_vampire_pip"
                 android:visibility="gone" />
@@ -85,7 +85,7 @@
                 android:layout_height="56dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="@string/multiview_chat"
-                android:padding="11dp"
+                android:padding="3dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_hw_phantom_chat" />
 
@@ -95,7 +95,7 @@
                 android:layout_height="56dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="Seek to live"
-                android:padding="11dp"
+                android:padding="3dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_hw_heart_live" />
 
@@ -105,7 +105,7 @@
                 android:layout_height="56dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="Stream Deck Studio Switcher"
-                android:padding="11dp"
+                android:padding="3dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_hw_stream_deck" />
 
@@ -115,7 +115,7 @@
                 android:layout_height="56dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="@string/multiview_fill"
-                android:padding="11dp"
+                android:padding="3dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_hw_spiderweb_fill"
                  />
@@ -126,7 +126,7 @@
                 android:layout_height="56dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="@string/multiview_add_stream"
-                android:padding="11dp"
+                android:padding="3dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_hw_coffin_add"
                  />
@@ -137,7 +137,7 @@
                 android:layout_height="56dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="@string/multiview_layout"
-                android:padding="11dp"
+                android:padding="3dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_hw_pumpkin_layout"
                  />

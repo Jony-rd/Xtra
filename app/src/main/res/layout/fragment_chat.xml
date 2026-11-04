@@ -7,27 +7,39 @@
 
     <ImageView
         android:id="@+id/chatBackgroundImage"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
         android:importantForAccessibility="no"
         android:scaleType="centerCrop"
-        android:visibility="gone" />
+        android:visibility="gone"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
 
     <View
         android:id="@+id/chatBackgroundScrim"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
         android:importantForAccessibility="no"
-        android:visibility="gone" />
+        android:visibility="gone"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
 
     <com.github.andreyasadchy.xtra.ui.view.FirstChildOnlyLinearLayout
         android:id="@+id/chatContentColumn"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
         android:clipChildren="true"
         android:clipToPadding="true"
         android:background="?attr/colorSurface"
         android:orientation="vertical"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
         tools:visibility="visible">
 
         <com.github.andreyasadchy.xtra.ui.view.FirstChildOnlyFrameLayout
@@ -35,14 +47,15 @@
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
-            android:clipChildren="true"
-            android:clipToPadding="true">
+            android:clipChildren="false"
+            android:clipToPadding="false">
 
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/recyclerView"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:padding="0dp"
+                android:clipToPadding="false"
+                android:paddingBottom="10dp"
                 tools:listitem="@layout/chat_list_item" />
 
             <com.github.andreyasadchy.xtra.ui.chat.ChatTopOverlayScrollView
@@ -125,7 +138,6 @@
             android:layout_margin="4dp"
             android:orientation="horizontal"
             android:visibility="gone"
-            app:layout_constraintBottom_toTopOf="@id/messageView"
             tools:visibility="visible">
 
             <TextView
@@ -267,12 +279,10 @@
             android:layout_width="match_parent"
             android:layout_height="34dp"
             android:minHeight="34dp"
-            android:background="?attr/colorSurface"
-            android:elevation="2dp"
+            android:background="@android:color/transparent"
             android:baselineAligned="false"
             android:orientation="horizontal"
             android:visibility="gone"
-            app:layout_constraintBottom_toTopOf="@id/emoteMenu"
             tools:visibility="visible">
 
             <ImageButton
@@ -405,8 +415,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:visibility="gone"
-            app:layout_constraintBottom_toBottomOf="parent">
+            android:visibility="gone">
 
             <com.google.android.material.tabs.TabLayout
                 android:id="@+id/tabLayout"
