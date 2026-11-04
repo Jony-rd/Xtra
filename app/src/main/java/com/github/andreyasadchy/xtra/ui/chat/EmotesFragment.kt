@@ -565,7 +565,7 @@ class EmotesFragment : Fragment() {
         binding.editFavorites.isVisible = visible
         binding.emotesRecyclerView.setPadding(
             binding.emotesRecyclerView.paddingLeft,
-            if (visible) resources.getDimensionPixelSize(R.dimen.emote_picker_edit_control_space) else 0,
+            0,
             binding.emotesRecyclerView.paddingRight,
             binding.emotesRecyclerView.paddingBottom,
         )
