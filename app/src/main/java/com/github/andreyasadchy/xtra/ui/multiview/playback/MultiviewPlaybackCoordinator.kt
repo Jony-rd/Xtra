@@ -167,6 +167,19 @@ class MultiviewPlaybackCoordinator(
         }
     }
 
+    fun seekAllToLive() {
+        slots.values.forEach { slot ->
+            val player = slot.player
+            if (player.isCurrentMediaItemLive || player.isCurrentMediaItemDynamic) {
+                player.playWhenReady = true
+                player.seekToDefaultPosition()
+                if (player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED) {
+                    player.prepare()
+                }
+            }
+        }
+    }
+
     private fun shouldPlayWhenReady(slot: MultiviewPlayerSlot): Boolean {
         return (slot.shouldPlay && foreground) ||
             (slot.shouldPlay && backgroundPlayback && configuredVolume(slot) > 0f)
@@ -319,6 +332,7 @@ class MultiviewPlaybackCoordinator(
                                 if (slot.player.playbackState == Player.STATE_BUFFERING) {
                                     Log.i(TAG, "channel=${slot.identity} watchdog triggered after buffering timeout, recovering")
                                     if (hasValidatedNetwork()) {
+                                        slot.reloadRequired = true
                                         recoverSlot(slot, null)
                                     } else {
                                         publish(slot, MultiviewSlotStatus.RECONNECTING, retryAvailable = true)
@@ -1325,7 +1339,7 @@ class MultiviewPlaybackCoordinator(
     companion object {
         private const val TAG = "MultiviewPlayback"
         private const val MAX_RETRIES = 6
-        private const val WATCHDOG_BUFFERING_TIMEOUT_MS = 10_000L
+        private const val WATCHDOG_BUFFERING_TIMEOUT_MS = 6_000L
         private const val NETWORK_RETRY_DELAY_MS = 15_000L
         private const val PRIMARY_RESTORE_INTERVAL_MS = 10_000L
         private const val FRAME_RATE_TOLERANCE = 0.5f

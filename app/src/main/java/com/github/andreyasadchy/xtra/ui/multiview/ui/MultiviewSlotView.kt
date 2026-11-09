@@ -51,6 +51,20 @@ class MultiviewSlotView(context: Context) : FrameLayout(context) {
 
     val actionsAnchor: View
         get() = binding.overflowButton
+    val dragHandle: View
+        get() = binding.dragHandle
+
+    fun setDragHighlight(active: Boolean) {
+        if (active) {
+            val bg = android.graphics.drawable.GradientDrawable().apply {
+                setColor(android.graphics.Color.parseColor("#4400F5D4"))
+                setStroke(dp(3), android.graphics.Color.parseColor("#00F5D4"))
+            }
+            binding.activeBorder.background = bg
+        } else {
+            binding.activeBorder.background = null
+        }
+    }
 
     var identity: String = ""
         private set
@@ -213,10 +227,11 @@ class MultiviewSlotView(context: Context) : FrameLayout(context) {
 
     fun setControlsVisible(visible: Boolean) {
         binding.infoBar.isVisible = visible
-        binding.audioIcon.isVisible = visible && width >= dp(180)
+        binding.audioIcon.isVisible = visible && width >= dp(100)
+        binding.dragHandle.isVisible = visible
         binding.overflowButton.isVisible = visible
         binding.removeButton.isVisible = visible
-        binding.qualityBadge.isVisible = visible && qualityLabelAvailable && width >= dp(240)
+        binding.qualityBadge.isVisible = visible && qualityLabelAvailable && width >= dp(140)
     }
 
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
@@ -226,8 +241,8 @@ class MultiviewSlotView(context: Context) : FrameLayout(context) {
 
     private fun updateResponsiveControls() {
         if (!isLaidOut && width == 0) return
-        binding.qualityBadge.isVisible = qualityLabelAvailable && width >= dp(240)
-        binding.audioIcon.isVisible = binding.infoBar.isVisible && width >= dp(180)
+        binding.qualityBadge.isVisible = qualityLabelAvailable && width >= dp(140)
+        binding.audioIcon.isVisible = binding.infoBar.isVisible && width >= dp(100)
     }
 
     private fun updateStatus(snapshot: MultiviewPlaybackSnapshot?) {

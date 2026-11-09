@@ -55,7 +55,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:clipToPadding="false"
-                android:paddingBottom="10dp"
+                android:paddingBottom="36dp"
                 tools:listitem="@layout/chat_list_item" />
 
             <com.github.andreyasadchy.xtra.ui.chat.ChatTopOverlayScrollView
