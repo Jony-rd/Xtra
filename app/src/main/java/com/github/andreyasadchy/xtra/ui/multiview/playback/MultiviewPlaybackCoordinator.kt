@@ -743,10 +743,22 @@ class MultiviewPlaybackCoordinator(
     }
 
     private fun extractResponseCode(error: Throwable): Int? {
-        return generateSequence(error) { it.cause }
+        val httpCode = generateSequence(error) { it.cause }
             .mapNotNull { throwable ->
                 (throwable as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode
-                    ?: (throwable as? retrofit2.HttpException)?.code()
+            }
+            .firstOrNull()
+        if (httpCode != null) return httpCode
+
+        return generateSequence(error) { it.cause }
+            .mapNotNull { throwable ->
+                val msg = throwable.message.orEmpty()
+                when {
+                    msg.contains("404") -> 404
+                    msg.contains("410") -> 410
+                    msg.contains("403") -> 403
+                    else -> null
+                }
             }
             .firstOrNull()
     }
