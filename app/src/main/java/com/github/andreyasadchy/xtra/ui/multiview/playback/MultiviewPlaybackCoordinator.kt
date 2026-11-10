@@ -43,6 +43,7 @@ import com.github.andreyasadchy.xtra.util.NetworkUtils.proxyCandidates
 import com.github.andreyasadchy.xtra.util.prefs
 import com.github.andreyasadchy.xtra.util.m3u8.TwitchVaftDetector
 import com.github.andreyasadchy.xtra.util.isVaftEnabled
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -176,6 +177,22 @@ class MultiviewPlaybackCoordinator(
                 if (player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED) {
                     player.prepare()
                 }
+            }
+        }
+    }
+
+    private fun scheduleBufferingWatchdog(slot: MultiviewPlayerSlot) {
+        slot.bufferingWatchdogJob?.cancel()
+        slot.bufferingWatchdogJob = scope.launch {
+            delay(WATCHDOG_BUFFERING_TIMEOUT_MS)
+            if (!isActive || slots[slot.identity] !== slot) return@launch
+            val isStalled = slot.player.playbackState == Player.STATE_BUFFERING ||
+                slot.status == MultiviewSlotStatus.BUFFERING ||
+                slot.status == MultiviewSlotStatus.LOADING
+            if (isStalled) {
+                Log.i(TAG, "channel=${slot.identity} watchdog triggered after buffering/loading timeout, recovering (playbackState=${slot.player.playbackState}, status=${slot.status})")
+                slot.reloadRequired = true
+                recoverSlot(slot, null)
             }
         }
     }
@@ -325,20 +342,7 @@ class MultiviewPlaybackCoordinator(
                                 applyQuality(slot)
                             }
                             publish(slot, MultiviewSlotStatus.BUFFERING)
-                            slot.bufferingWatchdogJob?.cancel()
-                            slot.bufferingWatchdogJob = scope.launch {
-                                delay(WATCHDOG_BUFFERING_TIMEOUT_MS)
-                                if (!isActive || slots[slot.identity] !== slot) return@launch
-                                if (slot.player.playbackState == Player.STATE_BUFFERING) {
-                                    Log.i(TAG, "channel=${slot.identity} watchdog triggered after buffering timeout, recovering")
-                                    if (hasValidatedNetwork()) {
-                                        slot.reloadRequired = true
-                                        recoverSlot(slot, null)
-                                    } else {
-                                        publish(slot, MultiviewSlotStatus.RECONNECTING, retryAvailable = true)
-                                    }
-                                }
-                            }
+                            scheduleBufferingWatchdog(slot)
                         }
                         Player.STATE_READY -> {
                             slot.bufferingWatchdogJob?.cancel()
@@ -470,7 +474,9 @@ class MultiviewPlaybackCoordinator(
             try {
                 val login = slot.stream.channelLogin?.trim()?.lowercase()
                     ?: throw IllegalArgumentException("missing channel login")
-                val selection = requestedSelection ?: loadPlaylistUrl(slot, login)
+                val selection = requestedSelection ?: withTimeoutOrNull(10_000L) {
+                    loadPlaylistUrl(slot, login)
+                } ?: throw IOException("Loading playlist timed out for channel $login")
                 if (!isActive || slots[slot.identity] !== slot) return@launch
                 slot.customProxy = selection.customProxy
                 slot.currentPlayerType = selection.playerType
@@ -515,6 +521,7 @@ class MultiviewPlaybackCoordinator(
                 updateAudio()
                 slot.player.prepare()
                 slot.player.playWhenReady = shouldPlayWhenReady(slot)
+                scheduleBufferingWatchdog(slot)
                 debugLog("channel=${slot.identity} playlistLoaded quality=${slot.target?.label} urlType=${if (slot.customProxy) "proxy" else "usher"} playerType=${slot.currentPlayerType ?: "custom"} alternate=${slot.usingAlternateStream} httpProxyDisabled=${slot.httpProxyDisabled}")
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -567,10 +574,7 @@ class MultiviewPlaybackCoordinator(
     private fun handlePlayerError(slot: MultiviewPlayerSlot, error: PlaybackException) {
         Log.w(TAG, "channel=${slot.identity} player error code=${error.errorCodeName}", error)
         val responseCode = slot.lastResponseCode ?: extractResponseCode(error)
-        val behindLiveWindow = error.errorCodeName.contains("BEHIND_LIVE_WINDOW", true)
-        if (behindLiveWindow) {
-            slot.reloadRequired = true
-        }
+        slot.reloadRequired = true
         // A 404 from a media playlist or segment is not authoritative evidence
         // that the channel ended. Only a failed master playlist may produce the
         // Offline state.
@@ -632,8 +636,15 @@ class MultiviewPlaybackCoordinator(
         }
 
         if (slot.retryCount >= MAX_RETRIES) {
-            slot.manualRetry = true
             publish(slot, MultiviewSlotStatus.PLAYBACK_UNAVAILABLE, retryAvailable = true)
+            slot.retryJob?.cancel()
+            slot.retryJob = scope.launch {
+                delay(10_000L)
+                if (!isActive || slots[slot.identity] !== slot) return@launch
+                debugLog("channel=${slot.identity} persistent auto-recovery after max retries")
+                slot.reloadRequired = true
+                recoverSlot(slot, null)
+            }
             return
         }
         val delayMs = RETRY_DELAYS_MS[slot.retryCount.coerceIn(0, RETRY_DELAYS_MS.lastIndex)]
@@ -663,6 +674,7 @@ class MultiviewPlaybackCoordinator(
             slot.lastMasterResponseCode = null
             slot.player.prepare()
             slot.player.playWhenReady = shouldPlayWhenReady(slot)
+            scheduleBufferingWatchdog(slot)
         } else {
             slot.reloadRequired = false
             start(slot)
@@ -721,10 +733,10 @@ class MultiviewPlaybackCoordinator(
 
     private fun hasValidatedNetwork(): Boolean {
         val connectivityManager = applicationContext.getSystemService(ConnectivityManager::class.java)
-            ?: return false
-        val capabilities = connectivityManager.getNetworkCapabilities(connectivityManager.activeNetwork)
-        return capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
-            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            ?: return true
+        val activeNetwork = connectivityManager.activeNetwork ?: return false
+        val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork) ?: return false
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
     private fun extractResponseCode(error: Throwable): Int? {

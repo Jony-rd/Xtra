@@ -1394,7 +1394,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                                 }
                                 val bg = android.graphics.drawable.GradientDrawable().apply {
                                     setColor(android.graphics.Color.parseColor(colorHex))
-                                    cornerRadius = dp(1.5f).toFloat()
+                                    cornerRadius = dp(2).toFloat()
                                 }
                                 led.background = bg
                             }
@@ -1543,8 +1543,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                         }
                         val ledSegments = (0 until 5).map {
                             android.view.View(context).apply {
-                                val lp = LinearLayout.LayoutParams(dp(3.5f), dp(10)).apply {
-                                    marginEnd = dp(1.5f)
+                                val lp = LinearLayout.LayoutParams(dp(4), dp(10)).apply {
+                                    marginEnd = dp(2)
                                 }
                                 layoutParams = lp
                             }
@@ -2297,6 +2297,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+    private fun dp(value: Float): Int = (value * resources.displayMetrics.density).toInt()
 
     suspend fun resolveManualStream(login: String): Stream? = viewModel.resolveLiveStream(login)
 
