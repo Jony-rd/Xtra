@@ -568,18 +568,19 @@ class MultiviewPlaybackCoordinator(
 
     private fun handleLoadError(slot: MultiviewPlayerSlot, error: Exception) {
         Log.w(TAG, "channel=${slot.identity} playlist load failed", error)
-        handleFailure(slot, error, isOffline = false, responseCode = extractResponseCode(error))
+        val responseCode = extractResponseCode(error)
+        val offline = !slot.customProxy && (responseCode == 404 || responseCode == 410)
+        handleFailure(slot, error, isOffline = offline, responseCode = responseCode)
     }
 
     private fun handlePlayerError(slot: MultiviewPlayerSlot, error: PlaybackException) {
         Log.w(TAG, "channel=${slot.identity} player error code=${error.errorCodeName}", error)
         val responseCode = slot.lastResponseCode ?: extractResponseCode(error)
         slot.reloadRequired = true
-        // A 404 from a media playlist or segment is not authoritative evidence
-        // that the channel ended. Only a failed master playlist may produce the
-        // Offline state.
+        // A 404 from the master playlist or Usher response is authoritative evidence that the channel ended
         val offline = !slot.customProxy &&
-            (slot.lastMasterResponseCode == 404 || slot.lastMasterResponseCode == 410)
+            (slot.lastMasterResponseCode == 404 || slot.lastMasterResponseCode == 410 ||
+             responseCode == 404 || responseCode == 410)
         val decoderFailure = error.errorCodeName.contains("DECODER", true)
         if (decoderFailure) {
             slot.markResourceFailure()
@@ -595,6 +596,8 @@ class MultiviewPlaybackCoordinator(
         responseCode: Int? = extractResponseCode(error),
     ) {
         if (isOffline) {
+            slot.retryJob?.cancel()
+            slot.bufferingWatchdogJob?.cancel()
             publish(slot, MultiviewSlotStatus.OFFLINE, retryAvailable = true)
             return
         }
@@ -743,13 +746,16 @@ class MultiviewPlaybackCoordinator(
         return generateSequence(error) { it.cause }
             .mapNotNull { throwable ->
                 (throwable as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode
+                    ?: (throwable as? retrofit2.HttpException)?.code()
             }
             .firstOrNull()
     }
 
     private fun isMasterPlaylist(slot: MultiviewPlayerSlot, uri: String): Boolean {
         return uri == slot.currentPlaylistUrl ||
-            uri.contains("/api/v2/channel/hls/", ignoreCase = true)
+            uri.contains("/api/v2/channel/hls/", ignoreCase = true) ||
+            uri.contains("/api/channel/hls/", ignoreCase = true) ||
+            uri.contains("/channel/hls/", ignoreCase = true)
     }
 
     private fun applyQuality(slot: MultiviewPlayerSlot, force: Boolean = false) {
