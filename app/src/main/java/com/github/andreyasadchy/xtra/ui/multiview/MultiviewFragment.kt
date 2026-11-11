@@ -1244,15 +1244,13 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             // ==========================================
             // STREAM CARDS CONTAINER (Dedicated 3-Row Studio Strips)
             // ==========================================
+            // Measured at its natural height on purpose. The panel is scaled down to
+            // fit the screen afterwards, so there is never an inner scrolling area:
+            // every control of every stream stays visible at once.
             val streamScroll = object : android.widget.ScrollView(context) {
                 override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-                    val maxH = if (isCompactLayout) {
-                        (resources.displayMetrics.heightPixels * 0.80f).toInt()
-                    } else {
-                        (resources.displayMetrics.heightPixels * 0.65f).toInt()
-                    }
-                    val customHeightSpec = MeasureSpec.makeMeasureSpec(maxH, MeasureSpec.AT_MOST)
-                    super.onMeasure(widthMeasureSpec, customHeightSpec)
+                    val unbounded = MeasureSpec.makeMeasureSpec(Int.MAX_VALUE shr 2, MeasureSpec.AT_MOST)
+                    super.onMeasure(widthMeasureSpec, unbounded)
                 }
             }.apply {
                 isFillViewport = true
@@ -1799,16 +1797,50 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             dialog?.show()
             resetDismissTimer()
 
-            chassis.post {
+            // ---- Fit to screen, never scroll -------------------------------------
+            // Measure the deck at its natural height and, if that is taller than the
+            // visible window (4 streams in landscape, for example), scale the whole
+            // panel down so every button is on screen at the same time.
+            fun applyFitAndAnimate(attempt: Int = 0) {
+                val widthPx = chassis.width.takeIf { it > 0 } ?: chassisContainer.measuredWidth
+                if (widthPx <= 0 && attempt < 3) {
+                    chassis.postDelayed({ applyFitAndAnimate(attempt + 1) }, 60L)
+                    return
+                }
+                val naturalHeight = try {
+                    chassis.measure(
+                        MeasureSpec.makeMeasureSpec(widthPx, MeasureSpec.EXACTLY),
+                        MeasureSpec.makeMeasureSpec(Int.MAX_VALUE shr 2, MeasureSpec.AT_MOST),
+                    )
+                    chassis.measuredHeight
+                } catch (_: Throwable) {
+                    chassisContainer.measuredHeight
+                }
+                val rect = android.graphics.Rect()
+                dialog?.window?.decorView?.getWindowVisibleDisplayFrame(rect)
+                val avail = rect.height().takeIf { it > 0 }
+                    ?: resources.displayMetrics.heightPixels
+                var fit = 1f
+                if (naturalHeight > 0 && avail > 0 && naturalHeight > avail) {
+                    fit = avail.toFloat() / naturalHeight.toFloat()
+                    chassis.pivotX = widthPx / 2f
+                    chassis.pivotY = 0f
+                    chassisContainer.layoutParams = android.widget.FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        (naturalHeight * fit).toInt(),
+                    )
+                    chassisContainer.requestLayout()
+                }
                 chassis.alpha = 0f
-                chassis.scaleX = 0.96f
-                chassis.scaleY = 0.96f
+                chassis.scaleX = 0.96f * fit
+                chassis.scaleY = 0.96f * fit
                 chassis.translationY = dp(14).toFloat()
-                chassis.animate().alpha(1f).scaleX(1f).scaleY(1f).translationY(0f)
+                chassis.animate().alpha(1f).scaleX(fit).scaleY(fit).translationY(0f)
                     .setDuration(160L)
                     .setInterpolator(android.view.animation.OvershootInterpolator(0.6f))
                     .start()
             }
+            chassis.post { applyFitAndAnimate() }
         } catch (_: Throwable) {
             unlockControls()
         }
