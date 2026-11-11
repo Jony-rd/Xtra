@@ -8,46 +8,104 @@ class MultiviewLayoutManagerTest {
     private val ids = listOf("a", "b", "c", "d")
 
     @Test
-    fun autoThreeLandscapeMakesActiveStreamPrimary() {
-        val plan = MultiviewLayoutManager.plan(ids.take(3), "c", MultiviewLayoutMode.AUTO, null, landscape = true)
-
-        assertEquals(2, plan.rowCount)
-        assertEquals(2, plan.columnCount)
-        assertEquals(TilePlacement("c", 0, 0, rowSpan = 2), plan.placements.first())
-        assertEquals(setOf("a", "b"), plan.placements.drop(1).map { it.identity }.toSet())
+    fun twoStreamLandscapeFillChatOnSplitsFiftyFifty() {
+        val plan = MultiviewLayoutManager.plan(
+            identities = ids.take(2),
+            activeIdentity = "a",
+            mode = MultiviewLayoutMode.AUTO,
+            focusedIdentity = null,
+            landscape = true,
+            chatVisible = true,
+            fillVideo = true,
+        )
+        assertEquals(2, plan.placements.size)
+        val first = plan.placements[0]
+        val second = plan.placements[1]
+        assertEquals(0f, first.left, 0.001f)
+        assertEquals(0.5f, first.right, 0.001f)
+        assertEquals(0.5f, second.left, 0.001f)
+        assertEquals(1.0f, second.right, 0.001f)
     }
 
     @Test
-    fun autoThreePortraitPlacesPrimaryAboveTwoTiles() {
-        val plan = MultiviewLayoutManager.plan(ids.take(3), "a", MultiviewLayoutMode.AUTO, null, landscape = false)
-
-        assertEquals(TilePlacement("a", 0, 0, columnSpan = 2), plan.placements.first())
-        assertTrue(plan.placements.drop(1).all { it.row == 1 })
+    fun twoStreamLandscapeFitChatOnPreservesStandardMainRight() {
+        val plan = MultiviewLayoutManager.plan(
+            identities = ids.take(2),
+            activeIdentity = "a",
+            mode = MultiviewLayoutMode.AUTO,
+            focusedIdentity = null,
+            landscape = true,
+            chatVisible = true,
+            fillVideo = false,
+        )
+        assertEquals(2, plan.placements.size)
+        val first = plan.placements[0]
+        val second = plan.placements[1]
+        assertEquals(0f, first.left, 0.001f)
+        assertEquals(0.75f, first.right, 0.001f)
+        assertEquals(0.75f, second.left, 0.001f)
+        assertEquals(1.0f, second.right, 0.001f)
     }
 
     @Test
-    fun gridTreatsFourStreamsEqually() {
-        val plan = MultiviewLayoutManager.plan(ids, "d", MultiviewLayoutMode.GRID, null, landscape = true)
-
-        assertEquals(2, plan.rowCount)
-        assertEquals(2, plan.columnCount)
-        assertTrue(plan.placements.all { it.rowSpan == 1 && it.columnSpan == 1 })
+    fun threeStreamLandscapeChatOnMainOccupiesSixtyPercentOverall() {
+        val plan = MultiviewLayoutManager.plan(
+            identities = ids.take(3),
+            activeIdentity = "a",
+            mode = MultiviewLayoutMode.AUTO,
+            focusedIdentity = null,
+            landscape = true,
+            chatVisible = true,
+            fillVideo = true,
+        )
+        assertEquals(3, plan.placements.size)
+        val main = plan.placements[0]
+        assertEquals(0f, main.left, 0.001f)
+        assertEquals(0.75f, main.right, 0.001f) // 0.75 of 80% video area = 60% of screen
+        val stack = plan.placements.drop(1)
+        assertTrue(stack.all { it.left == 0.75f && it.right == 1.0f })
+        assertEquals(0f, stack[0].top, 0.001f)
+        assertEquals(0.5f, stack[0].bottom, 0.001f)
+        assertEquals(0.5f, stack[1].top, 0.001f)
+        assertEquals(1.0f, stack[1].bottom, 0.001f)
     }
 
     @Test
-    fun focusUsesFocusedIdentityAndKeepsAllThumbnailsInBounds() {
-        val plan = MultiviewLayoutManager.plan(ids, "a", MultiviewLayoutMode.FOCUS, "d", landscape = false)
-
-        assertEquals(TilePlacement("d", 0, 0, columnSpan = 3), plan.placements.first())
-        assertTrue(plan.placements.drop(1).all { it.column in 0 until plan.columnCount })
+    fun twoStreamLandscapeChatOffPreservesSpecialLayout() {
+        val plan = MultiviewLayoutManager.plan(
+            identities = ids.take(2),
+            activeIdentity = "a",
+            mode = MultiviewLayoutMode.AUTO,
+            focusedIdentity = null,
+            landscape = true,
+            chatVisible = false,
+            fillVideo = false,
+        )
+        assertEquals(2, plan.placements.size)
+        val main = plan.placements[0]
+        val second = plan.placements[1]
+        assertEquals(0.80f, main.right, 0.001f)
+        assertEquals(0.80f, second.left, 0.001f)
+        assertEquals(1.0f, second.right, 0.001f)
+        assertEquals(0.5f, second.bottom, 0.001f)
     }
 
     @Test
-    fun focusWithOneThumbnailUsesFullWidthRows() {
-        val plan = MultiviewLayoutManager.plan(ids.take(2), "a", MultiviewLayoutMode.FOCUS, "b", landscape = true)
-
-        assertEquals(2, plan.columnCount)
-        assertEquals(TilePlacement("b", 0, 0, columnSpan = 2), plan.placements.first())
-        assertEquals(TilePlacement("a", 1, 0, columnSpan = 2), plan.placements[1])
+    fun portraitLineGridAssignsEqualHeights() {
+        val plan = MultiviewLayoutManager.plan(
+            identities = ids.take(3),
+            activeIdentity = "a",
+            mode = MultiviewLayoutMode.GRID,
+            focusedIdentity = null,
+            landscape = false,
+        )
+        assertEquals(3, plan.placements.size)
+        val expectedHeight = 1f / 3f
+        plan.placements.forEachIndexed { index, tile ->
+            assertEquals(0f, tile.left, 0.001f)
+            assertEquals(1f, tile.right, 0.001f)
+            assertEquals(index * expectedHeight, tile.top, 0.001f)
+            assertEquals((index + 1) * expectedHeight, tile.bottom, 0.001f)
+        }
     }
 }

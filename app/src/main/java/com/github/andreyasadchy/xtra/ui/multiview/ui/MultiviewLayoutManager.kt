@@ -21,7 +21,6 @@ data class MultiviewLayoutPlan(
 )
 
 object MultiviewLayoutManager {
-
     fun plan(
         identities: List<String>,
         activeIdentity: String?,
@@ -29,6 +28,7 @@ object MultiviewLayoutManager {
         focusedIdentity: String?,
         landscape: Boolean,
         chatVisible: Boolean = false,
+        fillVideo: Boolean = false,
     ): MultiviewLayoutPlan {
         val ids = identities.distinct()
         if (ids.isEmpty()) {
@@ -37,7 +37,6 @@ object MultiviewLayoutManager {
                 portraitHeightWidthRatio = 1f,
             )
         }
-
         val primary = (focusedIdentity ?: activeIdentity ?: ids.first())
             .takeIf(ids::contains)
             ?: ids.first()
@@ -47,6 +46,7 @@ object MultiviewLayoutManager {
                 ids = ids,
                 primary = primary,
                 chatVisible = chatVisible,
+                fillVideo = fillVideo,
             )
         } else {
             when (mode) {
@@ -64,19 +64,21 @@ object MultiviewLayoutManager {
      *   the videoGrid itself occupies 80% of the full landscape screen,
      *   so within videoGrid the main stream is 75% and the other-stream
      *   stack is 25%. That produces the requested 60% / 20% split overall.
+     *   Special case: 2 streams with chat ON and FILL:
+     *   split 50/50 across videoGrid (each is 40% of screen).
      *
      * Chat OFF:
      *   the videoGrid occupies the whole screen. Main is 80%, the
      *   other-stream stack is 20%.
-     *
-     * Special case: exactly two streams with chat OFF. The second stream
-     * occupies only the top half of the 20% right column. The Fragment
-     * places functional chat underneath it in the separate right column.
+     *   Special case: 2 streams with chat OFF:
+     *   Main is 80%, second stream occupies top half of 20% right column.
+     *   The Fragment places functional chat underneath it in the separate right column.
      */
     private fun landscape(
         ids: List<String>,
         primary: String,
         chatVisible: Boolean,
+        fillVideo: Boolean = false,
     ): MultiviewLayoutPlan {
         val rest = ids.filterNot { it == primary }
         if (rest.isEmpty()) {
@@ -88,35 +90,56 @@ object MultiviewLayoutManager {
             )
         }
 
-
-        val mainRight = if (chatVisible) 0.75f else 0.80f
-        val placements = mutableListOf(
-            TilePlacement(primary, 0f, 0f, mainRight, 1f),
-        )
-
-        if (!chatVisible && rest.size == 1) {
-            placements += TilePlacement(
-                rest.first(),
-                mainRight,
-                0f,
-                1f,
-                0.5f,
-            )
-        } else {
-            val count = rest.size
-            rest.forEachIndexed { index, identity ->
-                val top = index.toFloat() / count
-                val bottom = (index + 1).toFloat() / count
-                placements += TilePlacement(
-                    identity,
-                    mainRight,
-                    top,
-                    1f,
-                    bottom,
+        // Special 2-stream case:
+        if (rest.size == 1) {
+            if (chatVisible) {
+                if (fillVideo) {
+                    // Fill mode with chat ON: 50/50 split across video area
+                    return MultiviewLayoutPlan(
+                        placements = listOf(
+                            TilePlacement(primary, 0f, 0f, 0.5f, 1f),
+                            TilePlacement(rest.first(), 0.5f, 0f, 1f, 1f),
+                        ),
+                        portraitHeightWidthRatio = 1f,
+                    )
+                }
+                // Fit mode with chat ON: preserve existing layout (75% / 25% within video area)
+                return MultiviewLayoutPlan(
+                    placements = listOf(
+                        TilePlacement(primary, 0f, 0f, 0.75f, 1f),
+                        TilePlacement(rest.first(), 0.75f, 0f, 1f, 1f),
+                    ),
+                    portraitHeightWidthRatio = 1f,
+                )
+            } else {
+                // Chat OFF: preserve special layout (main 80%, top-right 20% column for second stream)
+                return MultiviewLayoutPlan(
+                    placements = listOf(
+                        TilePlacement(primary, 0f, 0f, 0.80f, 1f),
+                        TilePlacement(rest.first(), 0.80f, 0f, 1f, 0.5f),
+                    ),
+                    portraitHeightWidthRatio = 1f,
                 )
             }
         }
 
+        // 3 or 4 streams:
+        val mainRight = if (chatVisible) 0.75f else 0.80f
+        val placements = mutableListOf(
+            TilePlacement(primary, 0f, 0f, mainRight, 1f),
+        )
+        val count = rest.size
+        rest.forEachIndexed { index, identity ->
+            val top = index.toFloat() / count
+            val bottom = (index + 1).toFloat() / count
+            placements += TilePlacement(
+                identity,
+                mainRight,
+                top,
+                1f,
+                bottom,
+            )
+        }
         return MultiviewLayoutPlan(
             placements = placements,
             portraitHeightWidthRatio = 1f,
@@ -142,12 +165,8 @@ object MultiviewLayoutManager {
         val rest = ids.filterNot { it == primary }
         if (rest.isEmpty()) return singlePortrait(primary)
 
-        // With 16:9 video, the top full-width stream is 9/16 of the
-        // screen width high. The bottom row has (n-1) streams side by side,
-        // so its height is 9/16/(n-1) of the screen width.
         val bottomCount = rest.size
         val topFraction = bottomCount.toFloat() / (bottomCount + 1f)
-
         val placements = mutableListOf(
             TilePlacement(
                 identity = primary,
@@ -157,7 +176,6 @@ object MultiviewLayoutManager {
                 bottom = topFraction,
             ),
         )
-
         rest.forEachIndexed { index, identity ->
             val left = index.toFloat() / bottomCount
             val right = (index + 1).toFloat() / bottomCount
@@ -169,7 +187,6 @@ object MultiviewLayoutManager {
                 bottom = 1f,
             )
         }
-
         return MultiviewLayoutPlan(
             placements = placements,
             portraitHeightWidthRatio =
@@ -225,7 +242,6 @@ object MultiviewLayoutManager {
         val rows = (ids.size + columns - 1) / columns
         val columnWidth = 1f / columns
         val rowHeight = 1f / rows
-
         return MultiviewLayoutPlan(
             placements = ids.mapIndexed { index, identity ->
                 val row = index / columns

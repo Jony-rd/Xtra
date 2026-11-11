@@ -165,6 +165,8 @@ class MultiviewViewModel(
         _playback.value = cleanupPlaybackSnapshots(_playback.value, identity, _state.value)
     }
 
+    fun removeStream(identity: String) = remove(identity)
+
     fun remove(identity: String) {
         val current = _state.value
         val wasFocused = current.focusedIdentity.equals(identity, true)

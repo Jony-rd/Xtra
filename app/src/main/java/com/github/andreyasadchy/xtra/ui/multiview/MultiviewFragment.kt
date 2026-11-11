@@ -475,6 +475,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             focusedIdentity = state.focusedIdentity,
             landscape = landscape,
             chatVisible = state.chatVisible,
+            fillVideo = state.fillVideo,
         )
         latestLayoutPlan = plan
 
@@ -1436,7 +1437,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                         setPadding(dp(2), dp(2), dp(2), dp(2))
                         contentDescription = getString(R.string.multiview_close_stream)
                         setOnClickListener {
-                            viewModel.removeStream(identity)
+                            viewModel.remove(identity)
                             populateCards()
                         }
                     }
@@ -1633,14 +1634,15 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             ): android.widget.TextView {
                 return android.widget.TextView(context).apply {
                     text = label
-                    textSize = 10.5f
+                    textSize = 9.5f
+                    maxLines = 1
                     typeface = android.graphics.Typeface.DEFAULT_BOLD
                     setTextColor(android.graphics.Color.parseColor(textHex))
                     val bg = make3DKeycap(topHex, bottomHex, shadowHex, strokeHex, 4f, 2.5f)
                     background = deckRipple(bg)
                     val lp = LinearLayout.LayoutParams(0, dp(29), 1f).apply {
-                        marginStart = dp(3)
-                        marginEnd = dp(3)
+                        marginStart = dp(2)
+                        marginEnd = dp(2)
                     }
                     layoutParams = lp
                     gravity = Gravity.CENTER
@@ -1658,6 +1660,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     }
                 }
             })
+
+
 
             bottomMacros.addView(createMacroBtn("EQUALIZE", "#0EA5E9", "#0284C7", "#0C4A6E", "#BAE6FD", "#FFFFFF") {
                 val count = latestState.streams.size.coerceAtLeast(1)
@@ -1677,6 +1681,15 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                         viewModel.setAudioVolume(id, target)
                     }
                 }
+            })
+
+            bottomMacros.addView(createMacroBtn("REMOVE ALL", "#F43F5E", "#E11D48", "#881337", "#FDA4AF", "#FFFFFF") {
+                latestState.streams.forEach { stream ->
+                    MultiviewSessionReducer.stableIdentity(stream)?.let { id ->
+                        viewModel.remove(id)
+                    }
+                }
+                dialog?.dismiss()
             })
 
             chassis.addView(bottomMacros)
@@ -2086,7 +2099,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 setLinearParams(binding.multiviewContent, ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
                 setLinearParams(binding.chatContainer, ViewGroup.LayoutParams.MATCH_PARENT, 0, 0f)
                 // streams stuck to the very top, nothing above them
-                setFrameParams(binding.videoGrid, ViewGroup.LayoutParams.MATCH_PARENT, videoHeight)
+                val gridH = if (latestState.fillVideo) ViewGroup.LayoutParams.MATCH_PARENT else videoHeight
+                setFrameParams(binding.videoGrid, ViewGroup.LayoutParams.MATCH_PARENT, gridH)
                 moveControlsToVideo()
             }
 
