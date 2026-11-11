@@ -838,7 +838,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 autoDismissHandler.postDelayed(dismissRunnable, 4000L)
             }
 
-            // 3D tactile mechanical keycap generator with top bevel highlight and physical drop shadow
+            // 3D tactile keycap: shadow plate under the cap and a face with a lit top
+            // edge. Stateful, so the cap visibly sinks and darkens while pressed.
             fun make3DKeycap(
                 topColorHex: String,
                 bottomColorHex: String,
@@ -847,32 +848,49 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 cornerRadiusDp: Float = 4.5f,
                 shadowDepthDp: Float = 2.5f,
             ): android.graphics.drawable.Drawable {
-                val shadow = android.graphics.drawable.GradientDrawable().apply {
-                    setColor(android.graphics.Color.parseColor(shadowColorHex))
-                    cornerRadius = dp(cornerRadiusDp).toFloat()
+                fun shade(c: Int, f: Float): Int = android.graphics.Color.rgb(
+                    (android.graphics.Color.red(c) * f).toInt().coerceIn(0, 255),
+                    (android.graphics.Color.green(c) * f).toInt().coerceIn(0, 255),
+                    (android.graphics.Color.blue(c) * f).toInt().coerceIn(0, 255),
+                )
+                fun build(depthPx: Int, pressed: Boolean): android.graphics.drawable.Drawable {
+                    val shadow = android.graphics.drawable.GradientDrawable().apply {
+                        setColor(android.graphics.Color.parseColor(shadowColorHex))
+                        cornerRadius = dp(cornerRadiusDp).toFloat()
+                    }
+                    val top = android.graphics.Color.parseColor(topColorHex)
+                    val bottom = android.graphics.Color.parseColor(bottomColorHex)
+                    val cols = if (pressed) {
+                        intArrayOf(shade(top, 0.80f), shade(bottom, 0.80f))
+                    } else {
+                        intArrayOf(shade(top, 1.22f), top, bottom)
+                    }
+                    val face = android.graphics.drawable.GradientDrawable(
+                        android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                        cols,
+                    ).apply {
+                        cornerRadius = dp(cornerRadiusDp).toFloat()
+                        setStroke(
+                            dp(1),
+                            android.graphics.Color.parseColor(if (pressed) "#FFFFFF" else strokeColorHex),
+                        )
+                    }
+                    val layer = android.graphics.drawable.LayerDrawable(arrayOf(shadow, face))
+                    layer.setLayerInset(0, 0, depthPx, 0, 0)
+                    layer.setLayerInset(1, 0, 0, 0, depthPx)
+                    return layer
                 }
-                val face = android.graphics.drawable.GradientDrawable(
-                    android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
-                    intArrayOf(
-                        android.graphics.Color.parseColor(topColorHex),
-                        android.graphics.Color.parseColor(bottomColorHex),
-                    )
-                ).apply {
-                    cornerRadius = dp(cornerRadiusDp).toFloat()
-                    setStroke(dp(1), android.graphics.Color.parseColor(strokeColorHex))
+                return android.graphics.drawable.StateListDrawable().apply {
+                    addState(intArrayOf(android.R.attr.state_pressed), build(0, true))
+                    addState(intArrayOf(), build(dp(shadowDepthDp), false))
                 }
-                val layer = android.graphics.drawable.LayerDrawable(arrayOf(shadow, face))
-                val depthPx = dp(shadowDepthDp)
-                layer.setLayerInset(0, 0, depthPx, 0, 0)
-                layer.setLayerInset(1, 0, 0, 0, depthPx)
-                return layer
             }
 
             // Soft press feedback for deck controls (standard RippleDrawable)
             fun deckRipple(base: android.graphics.drawable.Drawable): android.graphics.drawable.Drawable =
                 android.graphics.drawable.RippleDrawable(
                     android.content.res.ColorStateList.valueOf(
-                        android.graphics.Color.parseColor("#44FF8A00")),
+                        android.graphics.Color.parseColor("#66C8FF00")),
                     base,
                     null,
                 )
@@ -890,10 +908,16 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 val pSide = dp(8)
                 val pTop = dp(6)
                 setPadding(pSide, pTop, pSide, pTop)
-                val bg = android.graphics.drawable.GradientDrawable().apply {
-                    setColor(android.graphics.Color.parseColor("#0F1118"))
-                    cornerRadius = dp(8).toFloat()
-                    setStroke(dp(1.2f), android.graphics.Color.parseColor("#2E344A"))
+                val bg = android.graphics.drawable.GradientDrawable(
+                    android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                    intArrayOf(
+                        android.graphics.Color.parseColor("#1B0A2F"),
+                        android.graphics.Color.parseColor("#0B0918"),
+                        android.graphics.Color.parseColor("#062028"),
+                    ),
+                ).apply {
+                    cornerRadius = dp(10).toFloat()
+                    setStroke(dp(1.4f), android.graphics.Color.parseColor("#FF2E88"))
                 }
                 background = bg
                 elevation = dp(20).toFloat()
@@ -956,7 +980,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     marginStart = dp(5)
                 }
                 text = "STUDIO"
-                setTextColor(android.graphics.Color.parseColor("#FF8A00"))
+                setTextColor(android.graphics.Color.parseColor("#FF2E88"))
                 textSize = 9.5f
                 typeface = android.graphics.Typeface.MONOSPACE
             }
@@ -969,7 +993,46 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 }
                 background = android.graphics.drawable.GradientDrawable().apply {
                     shape = android.graphics.drawable.GradientDrawable.OVAL
-                    setColor(android.graphics.Color.parseColor("#FF8A00"))
+                    setColor(android.graphics.Color.parseColor("#C8FF00"))
+                }
+            })
+
+            // Portrait slot: drop an image named sd_portrait (png/webp/jpg) into
+            // app/src/main/res/drawable and it shows up here, framed like a holo-ID.
+            val portraitRes = try {
+                resources.getIdentifier("sd_portrait", "drawable", context.packageName)
+            } catch (_: Throwable) {
+                0
+            }
+            header.addView(if (portraitRes != 0) {
+                android.widget.ImageView(context).apply {
+                    layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(7) }
+                    scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+                    clipToOutline = true
+                    setImageResource(portraitRes)
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = dp(7).toFloat()
+                        setStroke(dp(1.4f), android.graphics.Color.parseColor("#FF2E88"))
+                    }
+                }
+            } else {
+                android.widget.TextView(context).apply {
+                    layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(7) }
+                    text = "CIRI"
+                    gravity = Gravity.CENTER
+                    textSize = 8f
+                    typeface = android.graphics.Typeface.MONOSPACE
+                    setTextColor(android.graphics.Color.parseColor("#C8FF00"))
+                    background = android.graphics.drawable.GradientDrawable(
+                        android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                        intArrayOf(
+                            android.graphics.Color.parseColor("#3A0E55"),
+                            android.graphics.Color.parseColor("#06222C"),
+                        ),
+                    ).apply {
+                        cornerRadius = dp(7).toFloat()
+                        setStroke(dp(1.4f), android.graphics.Color.parseColor("#FF2E88"))
+                    }
                 }
             })
 
@@ -979,7 +1042,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 textSize = 10f
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
                 setTextColor(android.graphics.Color.parseColor("#E2E8F0"))
-                val bg = make3DKeycap("#282C3D", "#1B1D28", "#0B0C12", "#3C4258", 3.5f, 2f)
+                val bg = make3DKeycap("#2A1F3A", "#170F26", "#050308", "#5B3C8A", 3.5f, 2f)
                 background = deckRipple(bg)
                 setPadding(dp(8), dp(3), dp(8), dp(3))
                 val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(24)).apply {
@@ -1000,8 +1063,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 text = "✕"
                 textSize = 14f
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(android.graphics.Color.parseColor("#EF4444"))
-                val bg = make3DKeycap("#26181B", "#1C1215", "#0B0708", "#4A2026", 3.5f, 2f)
+                setTextColor(android.graphics.Color.parseColor("#FF4D6D"))
+                val bg = make3DKeycap("#3A0E24", "#22060F", "#0A0206", "#FF2E88", 3.5f, 2f)
                 background = deckRipple(bg)
                 val lp = LinearLayout.LayoutParams(dp(24), dp(24))
                 layoutParams = lp
@@ -1017,11 +1080,19 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
                     bottomMargin = dp(4)
                 }
-                setBackgroundColor(android.graphics.Color.parseColor("#20222C"))
+                setBackgroundColor(android.graphics.Color.parseColor("#33204F"))
             }
 
             chassis.addView(header)
             chassis.addView(divider)
+
+            // Hazard tape under the header: the one loud graphic accent of the deck.
+            chassis.addView(View(context).apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4)).apply {
+                    bottomMargin = dp(5)
+                }
+                background = HazardStripeDrawable()
+            })
 
             val autoLabel = getString(R.string.multiview_quality_auto)
             val cardVolumeUpdaters = mutableMapOf<String, (Float) -> Unit>()
@@ -1033,10 +1104,15 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             val masterCard = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(8), dp(6), dp(8), dp(6))
-                val bg = android.graphics.drawable.GradientDrawable().apply {
-                    setColor(android.graphics.Color.parseColor("#131622"))
-                    cornerRadius = dp(6).toFloat()
-                    setStroke(dp(1.2f), android.graphics.Color.parseColor("#373E56"))
+                val bg = android.graphics.drawable.GradientDrawable(
+                    android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                    intArrayOf(
+                        android.graphics.Color.parseColor("#320F4E"),
+                        android.graphics.Color.parseColor("#12081F"),
+                    ),
+                ).apply {
+                    cornerRadius = dp(8).toFloat()
+                    setStroke(dp(1.4f), android.graphics.Color.parseColor("#FF2E88"))
                 }
                 background = bg
                 val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -1057,9 +1133,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 val bg = android.graphics.drawable.GradientDrawable().apply {
-                    setColor(android.graphics.Color.parseColor("#1B160F"))
+                    setColor(android.graphics.Color.parseColor("#0B1A0B"))
                     cornerRadius = dp(3.5f).toFloat()
-                    setStroke(dp(1), android.graphics.Color.parseColor("#5A350C"))
+                    setStroke(dp(1), android.graphics.Color.parseColor("#4C6B00"))
                 }
                 background = bg
                 setPadding(dp(6), dp(2.5f), dp(7), dp(2.5f))
@@ -1067,7 +1143,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             val ledDot = android.widget.TextView(context).apply {
                 text = "●"
                 textSize = 9f
-                setTextColor(android.graphics.Color.parseColor("#FF6B00"))
+                setTextColor(android.graphics.Color.parseColor("#C8FF00"))
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                     marginEnd = dp(4)
                 }
@@ -1077,7 +1153,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 text = "MASTER BUS"
                 textSize = 9.5f
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(android.graphics.Color.parseColor("#FFA043"))
+                setTextColor(android.graphics.Color.parseColor("#C8FF00"))
             }
             masterLedBezel.addView(masterBusTitle)
             masterHeader.addView(masterLedBezel)
@@ -1090,13 +1166,13 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             // Recessed Digital OLED Readout Display Pill
             val masterPercentView = android.widget.TextView(context).apply {
                 text = "100%"
-                setTextColor(android.graphics.Color.parseColor("#FFB074"))
+                setTextColor(android.graphics.Color.parseColor("#00E5FF"))
                 textSize = 11.5f
                 typeface = android.graphics.Typeface.MONOSPACE
                 val oledBg = android.graphics.drawable.GradientDrawable().apply {
-                    setColor(android.graphics.Color.parseColor("#08090E"))
+                    setColor(android.graphics.Color.parseColor("#04070A"))
                     cornerRadius = dp(3.5f).toFloat()
-                    setStroke(dp(1), android.graphics.Color.parseColor("#3D2914"))
+                    setStroke(dp(1), android.graphics.Color.parseColor("#07505C"))
                 }
                 background = oledBg
                 setPadding(dp(8), dp(2), dp(8), dp(2))
@@ -1140,19 +1216,19 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     val isSelected = pillQual == selectedMasterQuality
                     val bg = if (isSelected) {
                         make3DKeycap(
-                            topColorHex = "#FFA043",
-                            bottomColorHex = "#FF6B00",
-                            shadowColorHex = "#8C3200",
-                            strokeColorHex = "#FFE0B2",
+                            topColorHex = "#FF3D9A",
+                            bottomColorHex = "#D10F6B",
+                            shadowColorHex = "#3A0020",
+                            strokeColorHex = "#FFC2DE",
                             cornerRadiusDp = 4.5f,
                             shadowDepthDp = 2.5f,
                         )
                     } else {
                         make3DKeycap(
-                            topColorHex = "#282C3E",
-                            bottomColorHex = "#1B1E2B",
-                            shadowColorHex = "#0C0D14",
-                            strokeColorHex = "#3F4663",
+                            topColorHex = "#2E2142",
+                            bottomColorHex = "#1A1128",
+                            shadowColorHex = "#050308",
+                            strokeColorHex = "#5A4580",
                             cornerRadiusDp = 4.5f,
                             shadowDepthDp = 2.5f,
                         )
@@ -1169,7 +1245,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     textSize = 10f
                     typeface = android.graphics.Typeface.DEFAULT_BOLD
                     gravity = Gravity.CENTER
-                    val lp = LinearLayout.LayoutParams(0, dp(27), 1f).apply {
+                    val lp = LinearLayout.LayoutParams(0, dp(31), 1f).apply {
                         if (qIdx < standardQualities.lastIndex) marginEnd = dp(4)
                     }
                     layoutParams = lp
@@ -1206,10 +1282,10 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 layoutParams = LinearLayout.LayoutParams(btnSize, btnSize).apply {
                     marginEnd = dp(6)
                 }
-                background = deckRipple(make3DKeycap("#282C3D", "#1B1D28", "#0B0C12", "#3C4258", 4f, 2f))
+                background = deckRipple(make3DKeycap("#2A1F3A", "#170F26", "#050308", "#5B3C8A", 4f, 2f))
                 setPadding(dp(3), dp(3), dp(3), dp(3))
                 setImageResource(R.drawable.baseline_volume_up_black_24)
-                setColorFilter(android.graphics.Color.parseColor("#FF9A3C"))
+                setColorFilter(android.graphics.Color.parseColor("#00E5FF"))
             }
             masterFaderRow.addView(masterMuteBtn)
 
@@ -1222,7 +1298,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 masterVol = newVol
                 masterPercentView.text = "${(newVol * 100).roundToInt()}%"
                 masterMuteBtn.setImageResource(if (newVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
-                val activeColor = if (newVol > 0f) android.graphics.Color.parseColor("#FF9A3C") else android.graphics.Color.parseColor("#EF4444")
+                val activeColor = if (newVol > 0f) android.graphics.Color.parseColor("#FF9A3C") else android.graphics.Color.parseColor("#FF4D6D")
                 masterMuteBtn.setColorFilter(activeColor)
                 latestState.streams.forEach { stream ->
                     val id = MultiviewSessionReducer.stableIdentity(stream) ?: return@forEach
@@ -1288,9 +1364,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                         val pTop = dp(5)
                         setPadding(pSide, pTop, pSide, pTop)
                         val bg = android.graphics.drawable.GradientDrawable().apply {
-                            setColor(android.graphics.Color.parseColor("#151825"))
+                            setColor(android.graphics.Color.parseColor("#170F26"))
                             cornerRadius = dp(6).toFloat()
-                            setStroke(dp(1.2f), android.graphics.Color.parseColor("#2E354C"))
+                            setStroke(dp(1.2f), android.graphics.Color.parseColor("#3E2A6B"))
                         }
                         background = bg
                         val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -1311,13 +1387,13 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     // Slot badge [#1] (Chunky EP-133 Tactile Pill)
                     val slotBadge = android.widget.TextView(context).apply {
                         text = "#${index + 1}"
-                        setTextColor(android.graphics.Color.parseColor("#FFA043"))
+                        setTextColor(android.graphics.Color.parseColor("#C8FF00"))
                         textSize = 9.5f
                         typeface = android.graphics.Typeface.DEFAULT_BOLD
                         val badgeBg = android.graphics.drawable.GradientDrawable().apply {
-                            setColor(android.graphics.Color.parseColor("#201A12"))
+                            setColor(android.graphics.Color.parseColor("#0F1A0B"))
                             cornerRadius = dp(3.5f).toFloat()
-                            setStroke(dp(1), android.graphics.Color.parseColor("#5A350C"))
+                            setStroke(dp(1), android.graphics.Color.parseColor("#4C6B00"))
                         }
                         background = badgeBg
                         setPadding(dp(5), dp(2), dp(5), dp(2))
@@ -1362,14 +1438,14 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     // Reorder ▲
                     val upBtn = android.widget.TextView(context).apply {
                         text = "▲"
-                        setTextColor(if (index > 0) android.graphics.Color.parseColor("#FFA043") else android.graphics.Color.parseColor("#3C4155"))
+                        setTextColor(if (index > 0) android.graphics.Color.parseColor("#C8FF00") else android.graphics.Color.parseColor("#3C4155"))
                         textSize = 10f
                         typeface = android.graphics.Typeface.DEFAULT_BOLD
                         gravity = Gravity.CENTER
                         val lp = LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(2) }
                         layoutParams = lp
                         if (index > 0) {
-                            background = deckRipple(make3DKeycap("#25293A", "#181A26", "#0B0C12", "#3A4059", 3f, 1.5f))
+                            background = deckRipple(make3DKeycap("#241B36", "#141021", "#050308", "#4A3B73", 3f, 1.5f))
                             setOnClickListener {
                                 viewModel.reorder(identity, index - 1)
                                 populateCards()
@@ -1381,14 +1457,14 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     // Reorder ▼
                     val downBtn = android.widget.TextView(context).apply {
                         text = "▼"
-                        setTextColor(if (index < streams.lastIndex) android.graphics.Color.parseColor("#FFA043") else android.graphics.Color.parseColor("#3C4155"))
+                        setTextColor(if (index < streams.lastIndex) android.graphics.Color.parseColor("#C8FF00") else android.graphics.Color.parseColor("#3C4155"))
                         textSize = 10f
                         typeface = android.graphics.Typeface.DEFAULT_BOLD
                         gravity = Gravity.CENTER
                         val lp = LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(3) }
                         layoutParams = lp
                         if (index < streams.lastIndex) {
-                            background = deckRipple(make3DKeycap("#25293A", "#181A26", "#0B0C12", "#3A4059", 3f, 1.5f))
+                            background = deckRipple(make3DKeycap("#241B36", "#141021", "#050308", "#4A3B73", 3f, 1.5f))
                             setOnClickListener {
                                 viewModel.reorder(identity, index + 1)
                                 populateCards()
@@ -1428,7 +1504,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                             val colorHex = when (idx) {
                                 0, 1 -> if (isLit) "#10B981" else "#10261E"
                                 2 -> if (isLit) "#F59E0B" else "#2A1E0D"
-                                else -> if (isLit) "#EF4444" else "#2E1214"
+                                else -> if (isLit) "#FF4D6D" else "#2E1214"
                             }
                             val bg = android.graphics.drawable.GradientDrawable().apply {
                                 setColor(android.graphics.Color.parseColor(colorHex))
@@ -1448,7 +1524,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                         }
                         background = null
                         setImageResource(if (vol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
-                        setColorFilter(if (vol > 0f) android.graphics.Color.parseColor("#FFA043") else android.graphics.Color.parseColor("#EF4444"))
+                        setColorFilter(if (vol > 0f) android.graphics.Color.parseColor("#C8FF00") else android.graphics.Color.parseColor("#FF4D6D"))
                     }
                     row1.addView(muteBtn)
 
@@ -1459,7 +1535,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                         textSize = 10f
                         typeface = android.graphics.Typeface.MONOSPACE
                         val oledBg = android.graphics.drawable.GradientDrawable().apply {
-                            setColor(android.graphics.Color.parseColor("#08090E"))
+                            setColor(android.graphics.Color.parseColor("#04070A"))
                             cornerRadius = dp(3).toFloat()
                             setStroke(dp(1), android.graphics.Color.parseColor("#382613"))
                         }
@@ -1494,7 +1570,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     val closeStreamBtn = android.widget.ImageView(context).apply {
                         layoutParams = LinearLayout.LayoutParams(dp(20), dp(20))
                         setImageResource(R.drawable.ic_close)
-                        setColorFilter(android.graphics.Color.parseColor("#EF4444"))
+                        setColorFilter(android.graphics.Color.parseColor("#FF4D6D"))
                         setPadding(dp(2), dp(2), dp(2), dp(2))
                         contentDescription = "Remove stream"
                         setOnClickListener {
@@ -1535,7 +1611,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                         updateVuMeter(newVol)
                         percentView.text = "${(newVol * 100).roundToInt()}%"
                         muteBtn.setImageResource(if (newVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
-                        muteBtn.setColorFilter(if (newVol > 0f) android.graphics.Color.parseColor("#FFA043") else android.graphics.Color.parseColor("#EF4444"))
+                        muteBtn.setColorFilter(if (newVol > 0f) android.graphics.Color.parseColor("#C8FF00") else android.graphics.Color.parseColor("#FF4D6D"))
                     }.apply {
                         layoutParams = LinearLayout.LayoutParams(0, dp(18), 1f)
                     }
@@ -1559,7 +1635,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                         updateVuMeter(newVol)
                         percentView.text = "${(newVol * 100).roundToInt()}%"
                         muteBtn.setImageResource(if (newVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
-                        muteBtn.setColorFilter(if (newVol > 0f) android.graphics.Color.parseColor("#FFA043") else android.graphics.Color.parseColor("#EF4444"))
+                        muteBtn.setColorFilter(if (newVol > 0f) android.graphics.Color.parseColor("#C8FF00") else android.graphics.Color.parseColor("#FF4D6D"))
                     }
 
                     muteBtn.setOnClickListener {
@@ -1571,7 +1647,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                         updateVuMeter(targetVol)
                         percentView.text = "${(targetVol * 100).roundToInt()}%"
                         muteBtn.setImageResource(if (targetVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
-                        muteBtn.setColorFilter(if (targetVol > 0f) android.graphics.Color.parseColor("#FFA043") else android.graphics.Color.parseColor("#EF4444"))
+                        muteBtn.setColorFilter(if (targetVol > 0f) android.graphics.Color.parseColor("#C8FF00") else android.graphics.Color.parseColor("#FF4D6D"))
                     }
                     card.addView(row2)
 
@@ -1608,19 +1684,19 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                             }
                             val pillBg = if (isSelected) {
                                 make3DKeycap(
-                                    topColorHex = "#FFA043",
-                                    bottomColorHex = "#FF6B00",
-                                    shadowColorHex = "#8C3200",
-                                    strokeColorHex = "#FFE0B2",
+                                    topColorHex = "#D8FF3D",
+                                    bottomColorHex = "#A6DE00",
+                                    shadowColorHex = "#2F3A00",
+                                    strokeColorHex = "#F4FFC2",
                                     cornerRadiusDp = 4f,
                                     shadowDepthDp = 2.5f,
                                 )
                             } else {
                                 make3DKeycap(
-                                    topColorHex = "#282C3E",
-                                    bottomColorHex = "#1B1E2B",
-                                    shadowColorHex = "#0C0D14",
-                                    strokeColorHex = "#3F4663",
+                                    topColorHex = "#241B36",
+                                    bottomColorHex = "#141021",
+                                    shadowColorHex = "#050308",
+                                    strokeColorHex = "#4A3B73",
                                     cornerRadiusDp = 4f,
                                     shadowDepthDp = 2.5f,
                                 )
@@ -1684,9 +1760,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 setPadding(dp(4), dp(6), dp(4), dp(4))
                 // Recessed key tray under the macro keys.
                 background = android.graphics.drawable.GradientDrawable().apply {
-                    setColor(android.graphics.Color.parseColor("#101320"))
+                    setColor(android.graphics.Color.parseColor("#160B26"))
                     cornerRadius = dp(6).toFloat()
-                    setStroke(dp(1), android.graphics.Color.parseColor("#262B3C"))
+                    setStroke(dp(1), android.graphics.Color.parseColor("#3E2A6B"))
                 }
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                     topMargin = dp(4)
@@ -1710,7 +1786,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     setTextColor(android.graphics.Color.parseColor(textHex))
                     val bg = make3DKeycap(topHex, bottomHex, shadowHex, strokeHex, 4f, 2.5f)
                     background = deckRipple(bg)
-                    val lp = LinearLayout.LayoutParams(0, dp(29), 1f).apply {
+                    val lp = LinearLayout.LayoutParams(0, dp(33), 1f).apply {
                         marginStart = dp(2)
                         marginEnd = dp(2)
                     }
@@ -1723,7 +1799,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 }
             }
 
-            bottomMacros.addView(createMacroBtn("MUTE ALL", "#EF4444", "#DC2626", "#7F1D1D", "#FCA5A5", "#FFFFFF") {
+            bottomMacros.addView(createMacroBtn("MUTE ALL", "#FF2E63", "#C40E42", "#3A0014", "#FFB0C2", "#12060A") {
                 latestState.streams.forEach { stream ->
                     MultiviewSessionReducer.stableIdentity(stream)?.let { id ->
                         viewModel.setAudioVolume(id, 0f)
@@ -1733,7 +1809,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
 
 
-            bottomMacros.addView(createMacroBtn("EQUALIZE", "#0EA5E9", "#0284C7", "#0C4A6E", "#BAE6FD", "#FFFFFF") {
+            bottomMacros.addView(createMacroBtn("EQUALIZE", "#00E5FF", "#0090C2", "#00303D", "#B4F6FF", "#04141A") {
                 val count = latestState.streams.size.coerceAtLeast(1)
                 val equalVol = (1.0f / count).coerceIn(0.15f, 1f)
                 latestState.streams.forEach { stream ->
@@ -1743,7 +1819,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 }
             })
 
-            bottomMacros.addView(createMacroBtn("SOLO ACTIVE", "#FBBF24", "#D97706", "#78350F", "#FEF3C7", "#000000") {
+            bottomMacros.addView(createMacroBtn("SOLO ACTIVE", "#C8FF00", "#8FC400", "#2A3300", "#F0FFB0", "#0E1400") {
                 val active = latestState.activeIdentity ?: latestState.streams.firstOrNull()?.let { MultiviewSessionReducer.stableIdentity(it) }
                 latestState.streams.forEach { stream ->
                     MultiviewSessionReducer.stableIdentity(stream)?.let { id ->
@@ -1753,7 +1829,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 }
             })
 
-            bottomMacros.addView(createMacroBtn("REMOVE ALL", "#F43F5E", "#E11D48", "#881337", "#FDA4AF", "#FFFFFF") {
+            bottomMacros.addView(createMacroBtn("REMOVE ALL", "#FF2E88", "#B00F5C", "#3A0020", "#FFB4D4", "#12060A") {
                 latestState.streams.forEach { stream ->
                     MultiviewSessionReducer.stableIdentity(stream)?.let { id ->
                         viewModel.remove(id)
@@ -2590,4 +2666,35 @@ class DjFaderView(
             onVolumeChanged(volume)
         }
     }
+}
+
+
+/** Diagonal hazard tape used as the deck's graphic accent. */
+private class HazardStripeDrawable : android.graphics.drawable.Drawable() {
+    private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+
+    override fun draw(canvas: android.graphics.Canvas) {
+        val w = bounds.width().toFloat()
+        val h = bounds.height().toFloat()
+        if (w <= 0f || h <= 0f) return
+        paint.color = android.graphics.Color.parseColor("#C8FF00")
+        canvas.drawRect(bounds, paint)
+        paint.color = android.graphics.Color.parseColor("#0B0918")
+        val step = h * 1.5f
+        var x = -h
+        while (x < w + h) {
+            val path = android.graphics.Path()
+            path.moveTo(x, h)
+            path.lineTo(x + step * 0.42f, h)
+            path.lineTo(x + step * 0.42f + h, 0f)
+            path.lineTo(x + h, 0f)
+            path.close()
+            canvas.drawPath(path, paint)
+            x += step
+        }
+    }
+
+    override fun setAlpha(alpha: Int) {}
+    override fun setColorFilter(colorFilter: android.graphics.ColorFilter?) {}
+    override fun getOpacity(): Int = android.graphics.PixelFormat.OPAQUE
 }
