@@ -1495,10 +1495,10 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     // Close Stream [✕]
                     val closeStreamBtn = android.widget.ImageView(context).apply {
                         layoutParams = LinearLayout.LayoutParams(dp(20), dp(20))
-                        setImageResource(R.drawable.baseline_close_black_24)
+                        setImageResource(R.drawable.ic_close)
                         setColorFilter(android.graphics.Color.parseColor("#EF4444"))
                         setPadding(dp(2), dp(2), dp(2), dp(2))
-                        contentDescription = getString(R.string.multiview_close_stream)
+                        contentDescription = "Remove stream"
                         setOnClickListener {
                             viewModel.remove(identity)
                             populateCards()
