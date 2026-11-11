@@ -913,7 +913,18 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             val header = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(2), 0, dp(2), dp(4))
+                setPadding(dp(8), dp(4), dp(6), dp(4))
+                // Brushed-metal top plate: a lighter face inset into the dark chassis.
+                background = android.graphics.drawable.GradientDrawable(
+                    android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                    intArrayOf(
+                        android.graphics.Color.parseColor("#1B1F2C"),
+                        android.graphics.Color.parseColor("#141722"),
+                    ),
+                ).apply {
+                    cornerRadius = dp(6).toFloat()
+                    setStroke(dp(1), android.graphics.Color.parseColor("#2E344A"))
+                }
             }
 
             header.addView(createRivet().apply {
@@ -950,6 +961,17 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 typeface = android.graphics.Typeface.MONOSPACE
             }
             header.addView(proBadge)
+
+            // Power LED: a static dot, nothing redrawing
+            header.addView(android.view.View(context).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(5), dp(5)).apply {
+                    marginEnd = dp(7)
+                }
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    shape = android.graphics.drawable.GradientDrawable.OVAL
+                    setColor(android.graphics.Color.parseColor("#FF8A00"))
+                }
+            })
 
             // Sleep Timer button
             val sleepBtn = android.widget.TextView(context).apply {
@@ -1236,6 +1258,14 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 isFillViewport = true
                 overScrollMode = View.OVER_SCROLL_NEVER
                 isVerticalScrollBarEnabled = false
+                // Recessed display well the channel strips sit in.
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    setColor(android.graphics.Color.parseColor("#0A0B11"))
+                    cornerRadius = dp(5).toFloat()
+                    setStroke(dp(1), android.graphics.Color.parseColor("#1D2130"))
+                }
+                setPadding(dp(4), dp(4), dp(4), dp(4))
+                clipToOutline = true
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             }
 
@@ -1653,7 +1683,16 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             val bottomMacros = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER
-                setPadding(0, dp(6), 0, dp(2))
+                setPadding(dp(4), dp(6), dp(4), dp(4))
+                // Recessed key tray under the macro keys.
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    setColor(android.graphics.Color.parseColor("#101320"))
+                    cornerRadius = dp(6).toFloat()
+                    setStroke(dp(1), android.graphics.Color.parseColor("#262B3C"))
+                }
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    topMargin = dp(4)
+                }
             }
 
             fun createMacroBtn(
