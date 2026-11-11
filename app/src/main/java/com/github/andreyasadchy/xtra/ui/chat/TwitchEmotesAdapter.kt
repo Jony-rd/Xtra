@@ -114,7 +114,7 @@ internal class TwitchEmotesAdapter(
 
     private fun rebuildItems() {
         if (!compactEnabled) {
-            items = emotes.filter { !it.name.isNullOrBlank() }.map(Item::EmoteItem)
+            items = emotes.map(Item::EmoteItem)
             return
         }
         val grouped = emotes

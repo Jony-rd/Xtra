@@ -539,9 +539,7 @@ class MultiviewPlaybackCoordinator(
             try {
                 val login = slot.stream.channelLogin?.trim()?.lowercase()
                     ?: throw IllegalArgumentException("missing channel login")
-                val selection = requestedSelection ?: withTimeoutOrNull(10_000L) {
-                    loadPlaylistUrl(slot, login)
-                } ?: throw IOException("Loading playlist timed out for channel $login")
+                val selection = requestedSelection ?: loadPlaylistUrl(slot, login)
                 if (!isActive || slots[slot.identity] !== slot) return@launch
                 slot.customProxy = selection.customProxy
                 slot.currentPlayerType = selection.playerType

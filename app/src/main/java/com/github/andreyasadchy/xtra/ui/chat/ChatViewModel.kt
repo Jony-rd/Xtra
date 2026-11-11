@@ -226,12 +226,9 @@ internal fun matchesV2PickerSession(
     active: com.github.andreyasadchy.xtra.ui.chat.v2.session.LiveChatSessionSpec?,
     expectedChannelId: String?,
     expectedChannelLogin: String?,
-): Boolean {
-    if (active == null) return false
-    val loginMatches = expectedChannelLogin.isNullOrBlank() || active.channelLogin.equals(expectedChannelLogin, ignoreCase = true)
-    val idMatches = expectedChannelId.isNullOrBlank() || active.channelId == expectedChannelId
-    return loginMatches && idMatches
-}
+): Boolean = active != null &&
+        active.channelId == expectedChannelId &&
+        active.channelLogin.equals(expectedChannelLogin, ignoreCase = true)
 
 internal fun mergePickerThirdPartyEmotes(
     personalEmotes: List<Emote>,

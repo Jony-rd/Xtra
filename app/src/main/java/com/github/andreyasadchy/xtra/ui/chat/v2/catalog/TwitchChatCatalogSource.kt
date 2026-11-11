@@ -124,7 +124,7 @@ class TwitchChatCatalogSource(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Throwable) {
-                    ChatCatalogProviderUpdate(emptyMap())
+                    null
                 }
             }
             val cheermotes = async { previous?.cheermotes ?: provider {
@@ -178,32 +178,21 @@ class TwitchChatCatalogSource(
             playerRepository.loadSTVEmoteSet(response, useWebp, true).second
         }.map { emoteMap(it, ChatAssetProvider.SEVEN_TV, ChatEmoteScope.GLOBAL) }
         val channel = previous?.channel?.takeIf { it is ScopeUpdate.Success } ?: scopeUpdate(channel = true, emptyValue = emptyList()) {
-            if (channelId.isBlank()) return@scopeUpdate emptyList()
-            val userResponse = try {
-                playerRepository.loadSTVUserResponse(network, channelId, throwOnHttpError = true)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Throwable) {
-                return@scopeUpdate emptyList()
-            }
-            val user = playerRepository.loadSTVUser(userResponse, useWebp)
+            val user = playerRepository.loadSTVUser(
+                playerRepository.loadSTVUserResponse(network, channelId, throwOnHttpError = true),
+                useWebp,
+            )
             channelSetId = user.first
             user.second ?: if (!user.first.isNullOrBlank()) {
-                try {
-                    playerRepository.loadSTVEmoteSet(
-                        playerRepository.loadSTVEmoteSetResponse(
-                            network,
-                            user.first!!,
-                            throwOnHttpError = true,
-                        ),
-                        useWebp,
-                        false,
-                    ).second
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Throwable) {
-                    emptyList()
-                }
+                playerRepository.loadSTVEmoteSet(
+                    playerRepository.loadSTVEmoteSetResponse(
+                        network,
+                        user.first!!,
+                        throwOnHttpError = true,
+                    ),
+                    useWebp,
+                    false,
+                ).second
             } else emptyList()
         }.map { emoteMap(it, ChatAssetProvider.SEVEN_TV, ChatEmoteScope.CHANNEL) }
         var viewerPersonalSetIds = previous?.viewerPersonalSetIds.orEmpty()
@@ -259,21 +248,14 @@ class TwitchChatCatalogSource(
             playerRepository.loadGlobalBTTVEmotes(response, useWebp)
         }.map { emoteMap(it, ChatAssetProvider.BTTV, ChatEmoteScope.GLOBAL) }
         val channel = previous?.channel?.takeIf { it is ScopeUpdate.Success } ?: scopeUpdate(channel = true, emptyValue = emptyList()) {
-            if (channelId.isBlank()) return@scopeUpdate emptyList()
-            try {
-                playerRepository.loadBTTVEmotes(
-                    playerRepository.loadBTTVEmotesResponse(
-                        network,
-                        channelId,
-                        throwOnHttpError = true,
-                    ),
-                    useWebp,
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Throwable) {
-                emptyList()
-            }
+            playerRepository.loadBTTVEmotes(
+                playerRepository.loadBTTVEmotesResponse(
+                    network,
+                    channelId,
+                    throwOnHttpError = true,
+                ),
+                useWebp,
+            )
         }.map { emoteMap(it, ChatAssetProvider.BTTV, ChatEmoteScope.CHANNEL) }
         return scopedProviderUpdate(global, channel)
     }
@@ -292,20 +274,13 @@ class TwitchChatCatalogSource(
             playerRepository.loadGlobalFFZEmotes(response)
         }.map { emoteMap(it, ChatAssetProvider.FFZ, ChatEmoteScope.GLOBAL) }
         val channel = previous?.channel?.takeIf { it is ScopeUpdate.Success } ?: scopeUpdate(channel = true, emptyValue = emptyList()) {
-            if (channelId.isBlank()) return@scopeUpdate emptyList()
-            try {
-                playerRepository.loadFFZEmotes(
-                    playerRepository.loadFFZEmotesResponse(
-                        network,
-                        channelId,
-                        throwOnHttpError = true,
-                    ),
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Throwable) {
-                emptyList()
-            }
+            playerRepository.loadFFZEmotes(
+                playerRepository.loadFFZEmotesResponse(
+                    network,
+                    channelId,
+                    throwOnHttpError = true,
+                ),
+            )
         }.map { emoteMap(it, ChatAssetProvider.FFZ, ChatEmoteScope.CHANNEL) }
         return scopedProviderUpdate(global, channel)
     }
@@ -441,9 +416,8 @@ class TwitchChatCatalogSource(
 
     private fun isExpectedMissingChannel(error: Throwable): Boolean =
         generateSequence(error) { it.cause }.any {
-            val code = (it as? NetworkUtils.HttpStatusException)?.statusCode
-            code == 404 || code == 400 || code == 422 || code == 204
-        } || error is kotlinx.serialization.SerializationException || error is org.json.JSONException
+            (it as? NetworkUtils.HttpStatusException)?.statusCode == 404
+        }
 
     private suspend fun <T> provider(block: suspend () -> T): ChatCatalogProviderUpdate<T>? = try {
         ChatCatalogProviderUpdate(block())

@@ -827,9 +827,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 val pTop = dp(6)
                 setPadding(pSide, pTop, pSide, pTop)
                 val bg = android.graphics.drawable.GradientDrawable().apply {
-                    setColor(android.graphics.Color.parseColor("#121318"))
+                    setColor(android.graphics.Color.parseColor("#10121A"))
                     cornerRadius = dp(8).toFloat()
-                    setStroke(dp(1), android.graphics.Color.parseColor("#262936"))
+                    setStroke(dp(1), android.graphics.Color.parseColor("#2F354D"))
                 }
                 background = bg
                 elevation = dp(20).toFloat()
@@ -1036,24 +1036,41 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             }
 
             val standardQualities = listOf(autoLabel, "1080p", "720p", "480p", "360p", "160p")
+            val masterPillViews = mutableListOf<android.widget.TextView>()
+            var selectedMasterQuality = autoLabel
+
+            fun refreshMasterPills() {
+                masterPillViews.forEach { pill ->
+                    val pillQual = pill.tag as? String ?: ""
+                    val isSelected = pillQual == selectedMasterQuality
+                    val bg = android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = dp(4).toFloat()
+                        if (isSelected) {
+                            setColor(android.graphics.Color.parseColor("#F59E0B"))
+                            setStroke(dp(1.5f), android.graphics.Color.parseColor("#FEF3C7"))
+                        } else {
+                            setColor(android.graphics.Color.parseColor("#1B1E2C"))
+                            setStroke(dp(1), android.graphics.Color.parseColor("#2E344A"))
+                        }
+                    }
+                    pill.background = deckRipple(bg)
+                    pill.setTextColor(if (isSelected) android.graphics.Color.BLACK else android.graphics.Color.parseColor("#E5E7EB"))
+                }
+            }
+
             standardQualities.forEachIndexed { qIdx, qual ->
                 val pill = android.widget.TextView(context).apply {
+                    tag = qual
                     text = if (qual == autoLabel) "Auto" else qual
                     textSize = 10f
                     typeface = android.graphics.Typeface.DEFAULT_BOLD
-                    setTextColor(android.graphics.Color.WHITE)
                     gravity = Gravity.CENTER
-                    val bg = android.graphics.drawable.GradientDrawable().apply {
-                        setColor(android.graphics.Color.parseColor("#1B1D28"))
-                        cornerRadius = dp(4).toFloat()
-                        setStroke(dp(1), android.graphics.Color.parseColor("#2E3244"))
-                    }
-                    background = deckRipple(bg)
                     val lp = LinearLayout.LayoutParams(0, dp(26), 1f).apply {
                         if (qIdx < standardQualities.lastIndex) marginEnd = dp(4)
                     }
                     layoutParams = lp
                     setOnClickListener {
+                        selectedMasterQuality = qual
                         latestState.streams.forEach { stream ->
                             val id = MultiviewSessionReducer.stableIdentity(stream) ?: return@forEach
                             val targetLabel = if (qual == autoLabel) {
@@ -1063,11 +1080,14 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                             }
                             viewModel.setQualityOverride(id, targetLabel)
                         }
+                        refreshMasterPills()
                         cardPillUpdaters.forEach { it.invoke() }
                     }
                 }
+                masterPillViews.add(pill)
                 masterQualityRow.addView(pill)
             }
+            refreshMasterPills()
             masterCard.addView(masterQualityRow)
 
             // Fader Row: Tactile Master Mute Button + Pro Fader
@@ -1165,9 +1185,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                         val pTop = dp(4)
                         setPadding(pSide, pTop, pSide, pTop)
                         val bg = android.graphics.drawable.GradientDrawable().apply {
-                            setColor(android.graphics.Color.parseColor("#151722"))
+                            setColor(android.graphics.Color.parseColor("#161928"))
                             cornerRadius = dp(6).toFloat()
-                            setStroke(dp(1), android.graphics.Color.parseColor("#26293A"))
+                            setStroke(dp(1), android.graphics.Color.parseColor("#2F354D"))
                         }
                         background = deckRipple(bg)
                         val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -1457,32 +1477,31 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     val pillViews = mutableListOf<android.widget.TextView>()
                     fun refreshThisPills() {
                         val overrideQuality = latestState.qualityOverrides[identity]
-                        val activePlayingQuality = latestPlayback[identity]?.qualityLabel
-                        val playingLabel = activePlayingQuality.orEmpty()
-                        val targetTag = overrideQuality
-                            ?: available.firstOrNull { playingLabel.isNotBlank() && (it.contains(playingLabel, ignoreCase = true) || playingLabel.contains(it, ignoreCase = true)) }
-                            ?: autoLabel
                         pillViews.forEach { pill ->
-                            val pillTag = pill.tag as? String ?: ""
+                            val qual = pill.tag as? String ?: ""
                             val isSelected = when {
-                                pillTag == targetTag -> true
-                                overrideQuality != null && pillTag == overrideQuality -> true
-                                overrideQuality == null && playingLabel.isNotBlank() && (pillTag.contains(playingLabel, ignoreCase = true) || playingLabel.contains(pillTag, ignoreCase = true)) -> true
-                                overrideQuality == null && playingLabel.isBlank() && pillTag == autoLabel -> true
-                                else -> false
+                                overrideQuality == null -> qual == autoLabel
+                                qual == autoLabel -> false
+                                overrideQuality == qual -> true
+                                qual.contains("1080") && overrideQuality.contains("1080") -> true
+                                qual.contains("720") && overrideQuality.contains("720") -> true
+                                qual.contains("480") && overrideQuality.contains("480") -> true
+                                qual.contains("360") && overrideQuality.contains("360") -> true
+                                qual.contains("160") && overrideQuality.contains("160") -> true
+                                else -> overrideQuality.contains(qual, ignoreCase = true) || qual.contains(overrideQuality, ignoreCase = true)
                             }
                             val pillBg = android.graphics.drawable.GradientDrawable().apply {
                                 cornerRadius = dp(3.5f).toFloat()
                                 if (isSelected) {
-                                    setColor(android.graphics.Color.parseColor("#E6AA38"))
-                                    setStroke(dp(1), android.graphics.Color.parseColor("#F59E0B"))
+                                    setColor(android.graphics.Color.parseColor("#F59E0B"))
+                                    setStroke(dp(1.5f), android.graphics.Color.parseColor("#FEF3C7"))
                                 } else {
-                                    setColor(android.graphics.Color.parseColor("#1A1C26"))
-                                    setStroke(dp(1), android.graphics.Color.parseColor("#2A2D3C"))
+                                    setColor(android.graphics.Color.parseColor("#1B1E2C"))
+                                    setStroke(dp(1), android.graphics.Color.parseColor("#2E344A"))
                                 }
                             }
                             pill.background = deckRipple(pillBg)
-                            pill.setTextColor(if (isSelected) android.graphics.Color.BLACK else android.graphics.Color.parseColor("#9CA3AF"))
+                            pill.setTextColor(if (isSelected) android.graphics.Color.BLACK else android.graphics.Color.parseColor("#E5E7EB"))
                         }
                     }
 
@@ -1509,15 +1528,18 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                             }
                             layoutParams = lp
                             setOnClickListener {
-                                val match = available.firstOrNull { it.contains(qual, ignoreCase = true) } ?: qual
-                                viewModel.setQualityOverride(identity, match.takeUnless { it == autoLabel })
+                                val match = if (qual == autoLabel) {
+                                    null
+                                } else {
+                                    available.firstOrNull { it.contains(qual, ignoreCase = true) } ?: qual
+                                }
+                                viewModel.setQualityOverride(identity, match)
                                 refreshThisPills()
                             }
                         }
                         pillViews.add(pill)
                         row3.addView(pill)
                     }
-
                     refreshThisPills()
                     card.addView(row3)
                     streamListLayout.addView(card)
@@ -2214,7 +2236,7 @@ class DjFaderView(
         style = android.graphics.Paint.Style.FILL
     }
     private val trackBorderPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.parseColor("#252838")
+        color = android.graphics.Color.parseColor("#374151")
         style = android.graphics.Paint.Style.STROKE
         strokeWidth = 2f
     }
@@ -2235,11 +2257,11 @@ class DjFaderView(
         strokeWidth = if (isCompact) 1.2f else 1.5f
     }
     private val capBodyPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.parseColor("#1E202B")
+        color = android.graphics.Color.parseColor("#1F2232")
         style = android.graphics.Paint.Style.FILL
     }
     private val capBorderPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.parseColor("#4B5563")
+        color = android.graphics.Color.parseColor("#9CA3AF")
         style = android.graphics.Paint.Style.STROKE
         strokeWidth = 2f
     }
