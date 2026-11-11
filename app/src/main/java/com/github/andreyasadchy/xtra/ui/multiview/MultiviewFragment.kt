@@ -558,20 +558,53 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         val parentHeight = binding.videoGrid.height
         if (parentWidth <= 0 || parentHeight <= 0) return
 
+        val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         val specialTwoStream = isTwoStreamLandscapeChatOff()
-        val firstIdentity = latestLayoutPlan.placements.firstOrNull()?.identity
+        val placements = latestLayoutPlan.placements
+        val firstIdentity = placements.firstOrNull()?.identity
 
-        latestLayoutPlan.placements.forEach { placement ->
-            val slotView = slotViews[placement.identity] ?: return@forEach
+        // Landscape: the main stream and the right-hand stack must never cross the
+        // column split, whatever the plan says. Chat on keeps exactly 20% of the
+        // screen for the stack (25% of the 80% video area); chat off keeps 20% of
+        // the full screen. 2 streams with chat on and Fill split the video 50/50.
+        val sideFraction = when {
+            !landscape || specialTwoStream || placements.size < 2 -> null
+            placements.size == 2 && latestState.chatVisible && latestState.fillVideo -> 0.5f
+            latestState.chatVisible -> 0.25f
+            else -> LANDSCAPE_SIDE_WEIGHT
+        }
+        val sideStart = sideFraction?.let { ((1f - it) * parentWidth).roundToInt() }
 
-            val left = (placement.left * parentWidth).roundToInt()
-            val top = (placement.top * parentHeight).roundToInt()
-            val right = (placement.right * parentWidth).roundToInt()
+        // Portrait "line" layout: a straight stack of full-width rows.
+        val portraitStack = !landscape && placements.size > 1 &&
+            placements.all { it.left == 0f && it.right == 1f }
+
+        placements.forEachIndexed { index, placement ->
+            val slotView = slotViews[placement.identity] ?: return@forEachIndexed
+
+            var left = (placement.left * parentWidth).roundToInt()
+            var top = (placement.top * parentHeight).roundToInt()
+            var right = (placement.right * parentWidth).roundToInt()
             var bottom = (placement.bottom * parentHeight).roundToInt()
             if (specialTwoStream && placement.identity != firstIdentity) {
                 // 2 streams, landscape, chat off: the small stream is exactly as tall
                 // as 16:9 needs, flush top-right. Chat takes everything under it.
                 bottom = top + specialSecondTileHeight(right - left, parentHeight)
+            }
+            if (sideStart != null) {
+                if (placement.identity == firstIdentity) {
+                    left = 0
+                    right = sideStart
+                } else {
+                    left = sideStart
+                    right = parentWidth
+                }
+            }
+            if (portraitStack) {
+                // Every stream gets exactly the same row height, so Fill mode can
+                // never leave one tile fat and another one thin.
+                top = (index.toFloat() * parentHeight / placements.size).roundToInt()
+                bottom = ((index + 1).toFloat() * parentHeight / placements.size).roundToInt()
             }
 
             val width = (right - left).coerceAtLeast(1)
