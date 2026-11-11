@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Network
+import android.os.SystemClock
 import android.util.Log
 import android.annotation.SuppressLint
 import com.github.andreyasadchy.xtra.BuildConfig
@@ -21,6 +22,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultLivePlaybackSpeedControl
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.hls.HlsManifest
@@ -38,7 +40,11 @@ import com.github.andreyasadchy.xtra.player.lowlatency.OkHttpDataSource
 import com.github.andreyasadchy.xtra.ui.common.logVideoSurfaceBinding
 import com.github.andreyasadchy.xtra.ui.player.TwitchVaftController
 import com.github.andreyasadchy.xtra.util.C
+import com.github.andreyasadchy.xtra.util.AdaptiveLiveLoadControl
+import com.github.andreyasadchy.xtra.util.AdaptiveLivePlaybackController
+import com.github.andreyasadchy.xtra.util.FixedSpeedLivePlaybackControl
 import com.github.andreyasadchy.xtra.util.LivePlaybackPolicies
+import com.github.andreyasadchy.xtra.util.LivePlaybackSettings
 import com.github.andreyasadchy.xtra.util.NetworkUtils.proxyCandidates
 import com.github.andreyasadchy.xtra.util.prefs
 import com.github.andreyasadchy.xtra.util.m3u8.TwitchVaftDetector
@@ -319,19 +325,70 @@ class MultiviewPlaybackCoordinator(
     fun currentTarget(identity: String): MultiviewQualityTarget? = slots[identity]?.target
 
     private fun createSlot(identity: String, stream: Stream): MultiviewPlayerSlot {
+        val liveSettings = LivePlaybackSettings.fromPreferences(applicationContext.prefs())
+        val livePolicies = liveSettings.policies()
+        val initialLivePolicy = livePolicies.forMode(liveSettings.mode)
+        val liveController = AdaptiveLivePlaybackController(
+            initialPolicy = initialLivePolicy,
+            adaptiveEnabled = false,
+            policySet = livePolicies,
+        )
+        val liveSpeedControl = FixedSpeedLivePlaybackControl(
+            DefaultLivePlaybackSpeedControl.Builder().build(),
+        ).apply {
+            setAdaptiveTargetLiveOffsetUs(initialLivePolicy.targetOffsetMs * 1_000L)
+            setRebufferTargetAdaptationEnabled(false)
+        }
+        val applyLivePolicy = {
+            liveSpeedControl.setAdaptiveTargetLiveOffsetUs(liveController.currentPolicy().targetOffsetMs * 1_000L)
+        }
         val player = ExoPlayer.Builder(applicationContext).apply {
             setLoadControl(
-                LivePlaybackPolicies.forLowLatency(
-                    applicationContext.prefs().getBoolean(C.PLAYER_LOW_LATENCY, C.DEFAULT_PLAYER_LOW_LATENCY),
-                ).buffers.buildLoadControl()
+                AdaptiveLiveLoadControl(
+                    controller = liveController,
+                    initialPolicy = initialLivePolicy,
+                    onPolicyChanged = applyLivePolicy,
+                    nonLivePolicy = LivePlaybackPolicies.NORMAL,
+                    delegate = LivePlaybackPolicies.NORMAL.buffers.buildLoadControl(),
+                ),
             )
+            setLivePlaybackSpeedControl(liveSpeedControl)
             setAudioAttributes(
                 AudioAttributes.DEFAULT,
                 false,
             )
             setHandleAudioBecomingNoisy(false)
         }.build()
-        return MultiviewPlayerSlot(identity, stream, player).also { slot ->
+        return MultiviewPlayerSlot(
+            identity,
+            stream,
+            player,
+            liveSettings,
+            liveController,
+            liveSpeedControl,
+            applyLivePolicy,
+        ).also { slot ->
+            slot.livePriorityCatchUpJob = scope.launch {
+                while (isActive) {
+                    delay(5_000L)
+                    val liveOffsetMs = player.currentLiveOffset
+                    val now = SystemClock.elapsedRealtime()
+                    if (player.isPlaying && player.isCurrentMediaItemDynamic && liveOffsetMs >= 0L &&
+                        liveOffsetMs != androidx.media3.common.C.TIME_UNSET &&
+                        applicationContext.prefs().getString(
+                            C.PLAYER_VAFT_PLAYBACK_PRIORITY,
+                            C.VAFT_PRIORITY_CONTINUITY,
+                        ) == C.VAFT_PRIORITY_LIVE &&
+                        liveOffsetMs - liveController.currentPolicy().targetOffsetMs > LIVE_PRIORITY_CATCH_UP_THRESHOLD_MS &&
+                        (slot.lastLivePriorityCatchUpRealtimeMs == Long.MIN_VALUE ||
+                            now - slot.lastLivePriorityCatchUpRealtimeMs >= LIVE_PRIORITY_CATCH_UP_COOLDOWN_MS) &&
+                        player.isCommandAvailable(Player.COMMAND_SEEK_TO_DEFAULT_POSITION)
+                    ) {
+                        slot.lastLivePriorityCatchUpRealtimeMs = now
+                        player.seekToDefaultPosition()
+                    }
+                }
+            }
             player.addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     updateViewingStats(slot)
@@ -469,6 +526,14 @@ class MultiviewPlaybackCoordinator(
             slot.hasMediaSource = false
             slot.reloadRequired = false
         }
+        val initialPolicy = slot.liveSettings.policies().forMode(slot.liveSettings.mode)
+        slot.liveController.reset(
+            initialPolicy = initialPolicy,
+            enabled = false,
+            policies = slot.liveSettings.policies(),
+        )
+        slot.liveSpeedControl.setRebufferTargetAdaptationEnabled(false)
+        slot.applyLivePolicy()
         slot.loadJob = scope.launch {
             publish(slot, MultiviewSlotStatus.LOADING)
             try {
@@ -485,32 +550,18 @@ class MultiviewPlaybackCoordinator(
                 slot.lastResponseCode = null
                 slot.lastMasterResponseCode = null
                 slot.lastResponseWasMaster = false
+                val liveSettings = slot.liveSettings
+                val livePolicy = liveSettings.policies().forMode(liveSettings.mode)
                 val mediaItem = MediaItem.Builder()
                     .setUri(selection.url)
                     .setMimeType(MimeTypes.APPLICATION_M3U8)
-                    .setLiveConfiguration(
-                        MediaItem.LiveConfiguration.Builder().apply {
-                            setTargetOffsetMs(
-                                LivePlaybackPolicies.forLowLatency(
-                                    applicationContext.prefs().getBoolean(
-                                        C.PLAYER_LOW_LATENCY,
-                                        C.DEFAULT_PLAYER_LOW_LATENCY,
-                                    ),
-                                ).targetOffsetMs,
-                            )
-                        }.build()
-                    )
+                    .setLiveConfiguration(liveSettings.liveConfiguration(livePolicy))
                     .setMediaMetadata(metadata(slot.stream))
                     .build()
                 val source = HlsMediaSource.Factory(createDataSourceFactory(slot))
                     .setPlaylistParserFactory(
                         TwitchHlsPlaylistParserFactory(
-                            lowLatencyEnabled = LivePlaybackPolicies.forLowLatency(
-                                applicationContext.prefs().getBoolean(
-                                    C.PLAYER_LOW_LATENCY,
-                                    C.DEFAULT_PLAYER_LOW_LATENCY,
-                                ),
-                            ).lowLatency,
+                            lowLatencyEnabled = liveSettings.lowLatencyEnabled,
                         ),
                     )
                     .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(6))
@@ -1278,11 +1329,17 @@ class MultiviewPlaybackCoordinator(
         val identity: String,
         var stream: Stream,
         val player: ExoPlayer,
+        val liveSettings: LivePlaybackSettings,
+        val liveController: AdaptiveLivePlaybackController,
+        val liveSpeedControl: FixedSpeedLivePlaybackControl,
+        val applyLivePolicy: () -> Unit,
     ) {
         var attachedView: PlayerView? = null
         var loadJob: Job? = null
         var retryJob: Job? = null
         var stableRecoveryJob: Job? = null
+        var livePriorityCatchUpJob: Job? = null
+        var lastLivePriorityCatchUpRealtimeMs: Long = Long.MIN_VALUE
         var vaftAvoidanceJob: Job? = null
         var primaryRestoreJob: Job? = null
         var bufferingWatchdogJob: Job? = null
@@ -1351,6 +1408,7 @@ class MultiviewPlaybackCoordinator(
             loadJob?.cancel()
             retryJob?.cancel()
             stableRecoveryJob?.cancel()
+            livePriorityCatchUpJob?.cancel()
             vaftAvoidanceJob?.cancel()
             primaryRestoreJob?.cancel()
             bufferingWatchdogJob?.cancel()
@@ -1368,6 +1426,8 @@ class MultiviewPlaybackCoordinator(
 
     companion object {
         private const val TAG = "MultiviewPlayback"
+        private const val LIVE_PRIORITY_CATCH_UP_THRESHOLD_MS = 6_000L
+        private const val LIVE_PRIORITY_CATCH_UP_COOLDOWN_MS = 15_000L
         private const val MAX_RETRIES = 6
         private const val WATCHDOG_BUFFERING_TIMEOUT_MS = 6_000L
         private const val NETWORK_RETRY_DELAY_MS = 15_000L

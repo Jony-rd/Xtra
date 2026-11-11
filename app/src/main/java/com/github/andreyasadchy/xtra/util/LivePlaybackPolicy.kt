@@ -29,6 +29,27 @@ data class LivePlaybackPolicy(
     val targetOffsetMs: Long,
 )
 
+data class LivePlaybackPolicySet(
+    val normal: LivePlaybackPolicy,
+    val minimumDelay: LivePlaybackPolicy,
+    val custom: LivePlaybackPolicy,
+    val buffered: LivePlaybackPolicy,
+    val recovering: LivePlaybackPolicy,
+) {
+    fun forMode(mode: LivePlaybackMode): LivePlaybackPolicy = when (mode) {
+        LivePlaybackMode.MINIMUM_DELAY -> minimumDelay
+        LivePlaybackMode.CUSTOM -> custom
+        LivePlaybackMode.NORMAL -> normal
+    }
+
+    fun forAdaptiveState(state: AdaptiveLivePlaybackController.State): LivePlaybackPolicy = when (state) {
+        AdaptiveLivePlaybackController.State.NORMAL -> normal
+        AdaptiveLivePlaybackController.State.LOW_LATENCY -> minimumDelay
+        AdaptiveLivePlaybackController.State.BUFFERED -> buffered
+        AdaptiveLivePlaybackController.State.RECOVERING -> recovering
+    }
+}
+
 object LivePlaybackPolicies {
     val NORMAL = LivePlaybackPolicy(
         lowLatency = false,
@@ -79,5 +100,46 @@ object LivePlaybackPolicies {
     )
 
     fun forLowLatency(enabled: Boolean): LivePlaybackPolicy = if (enabled) LOW_LATENCY else NORMAL
+
+    fun forSettings(settings: LivePlaybackSettings): LivePlaybackPolicySet {
+        val customBuffers = NORMAL.buffers.withOverrides(settings.buffers)
+        return LivePlaybackPolicySet(
+            normal = NORMAL,
+            minimumDelay = LOW_LATENCY,
+            custom = LivePlaybackPolicy(
+                lowLatency = true,
+                buffers = customBuffers,
+                targetOffsetMs = settings.targetOffsetMs ?: NORMAL.targetOffsetMs,
+            ),
+            buffered = BUFFERED,
+            recovering = RECOVERING,
+        )
+    }
+
+    private fun PlaybackBufferPolicy.withOverrides(overrides: PlaybackBufferOverrides): PlaybackBufferPolicy {
+        val requestedMin = overrides.minBufferMs
+        val requestedMax = overrides.maxBufferMs
+        val min = requestedMin ?: if (requestedMax != null && requestedMax <= minBufferMs) {
+            (requestedMax / 2).coerceAtLeast(250)
+        } else {
+            minBufferMs
+        }
+        val max = requestedMax ?: if (requestedMin != null && requestedMin >= maxBufferMs) {
+            (requestedMin * 2).coerceAtMost(120_000)
+        } else {
+            maxBufferMs
+        }
+        val validPair = min < max
+        val effectiveMin = if (validPair) min else minBufferMs
+        val effectiveMax = if (validPair) max else maxBufferMs
+        return copy(
+            minBufferMs = effectiveMin,
+            maxBufferMs = effectiveMax,
+            bufferForPlaybackMs = (overrides.bufferForPlaybackMs ?: bufferForPlaybackMs).coerceAtMost(effectiveMin),
+            bufferForPlaybackAfterRebufferMs =
+                (overrides.bufferForPlaybackAfterRebufferMs ?: bufferForPlaybackAfterRebufferMs).coerceAtMost(effectiveMin),
+        )
+    }
+
 }
 
