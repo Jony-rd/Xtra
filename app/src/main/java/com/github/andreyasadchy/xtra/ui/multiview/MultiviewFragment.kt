@@ -1885,8 +1885,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 }
                 val naturalHeight = try {
                     chassis.measure(
-                        MeasureSpec.makeMeasureSpec(widthPx, MeasureSpec.EXACTLY),
-                        MeasureSpec.makeMeasureSpec(Int.MAX_VALUE shr 2, MeasureSpec.AT_MOST),
+                        android.view.View.MeasureSpec.makeMeasureSpec(widthPx, android.view.View.MeasureSpec.EXACTLY),
+                        android.view.View.MeasureSpec.makeMeasureSpec(Int.MAX_VALUE shr 2, android.view.View.MeasureSpec.AT_MOST),
                     )
                     chassis.measuredHeight
                 } catch (_: Throwable) {
