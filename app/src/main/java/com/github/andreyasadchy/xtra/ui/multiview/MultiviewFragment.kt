@@ -1381,7 +1381,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             var populateCards: () -> Unit = {}
 
             // Builder for each channel strip
-            fun buildStreamCard(index: Int, stream: com.github.andreyasadchy.xtra.data.multiview.MultiviewStream, isCompactMode: Boolean): View {
+            fun buildStreamCard(index: Int, stream: Stream, isCompactMode: Boolean): View {
                 val identity = MultiviewSessionReducer.stableIdentity(stream) ?: return View(context)
 
                 val card = LinearLayout(context).apply {
