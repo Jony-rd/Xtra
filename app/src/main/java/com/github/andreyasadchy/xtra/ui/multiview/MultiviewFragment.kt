@@ -886,6 +886,14 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 }
             }
 
+            // Strict text centering helper to prevent Android's setBackground from offsetting text
+            fun centerKeycapText(tv: android.widget.TextView) {
+                tv.gravity = Gravity.CENTER
+                tv.textAlignment = View.TEXT_ALIGNMENT_CENTER
+                tv.includeFontPadding = false
+                tv.setPadding(0, 0, 0, dp(1))
+            }
+
             // Soft press feedback for deck controls (standard RippleDrawable)
             fun deckRipple(base: android.graphics.drawable.Drawable): android.graphics.drawable.Drawable =
                 android.graphics.drawable.RippleDrawable(
@@ -902,25 +910,47 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 setTextColor(android.graphics.Color.parseColor("#475069"))
             }
 
-            // Sleek Pro Audio Hardware Chassis (Matte Obsidian)
+            // Cyberpunk Deck Chassis with optional subtle background artwork
+            val bgRes = try {
+                resources.getIdentifier("bg_cyber_deck", "drawable", context.packageName)
+            } catch (_: Throwable) { 0 }
+
+            val deckBgDrawable = if (bgRes != 0) {
+                try {
+                    context.getDrawable(bgRes)?.mutate()?.apply {
+                        alpha = 85
+                    }
+                } catch (_: Throwable) { null }
+            } else null
+
+            val chassisBase = android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                intArrayOf(
+                    android.graphics.Color.parseColor("#1B0A2F"),
+                    android.graphics.Color.parseColor("#0B0918"),
+                    android.graphics.Color.parseColor("#062028"),
+                ),
+            ).apply {
+                cornerRadius = dp(10).toFloat()
+                setStroke(dp(1.4f), android.graphics.Color.parseColor("#FF2E88"))
+            }
+
             val chassis = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
-                val pSide = dp(8)
-                val pTop = dp(6)
+                val pSide = dp(if (isLandscape) 7 else 8)
+                val pTop = dp(if (isLandscape) 5 else 6)
                 setPadding(pSide, pTop, pSide, pTop)
-                val bg = android.graphics.drawable.GradientDrawable(
-                    android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
-                    intArrayOf(
-                        android.graphics.Color.parseColor("#1B0A2F"),
-                        android.graphics.Color.parseColor("#0B0918"),
-                        android.graphics.Color.parseColor("#062028"),
-                    ),
-                ).apply {
-                    cornerRadius = dp(10).toFloat()
-                    setStroke(dp(1.4f), android.graphics.Color.parseColor("#FF2E88"))
+                background = if (deckBgDrawable != null) {
+                    android.graphics.drawable.LayerDrawable(arrayOf(chassisBase, deckBgDrawable))
+                } else {
+                    chassisBase
                 }
-                background = bg
                 elevation = dp(20).toFloat()
+                outlineProvider = object : android.view.ViewOutlineProvider() {
+                    override fun getOutline(view: View, outline: android.graphics.Outline) {
+                        outline.setRoundRect(0, 0, view.width, view.height, dp(10).toFloat())
+                    }
+                }
                 clipToOutline = true
             }
 
@@ -933,12 +963,11 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             }
             chassisContainer.addView(chassis)
 
-            // Top Header: [⨁] [icon] STREAM DECK [STUDIO]       [⏱️ SLEEP]   [✕]
+            // Top Header: [⨁] [icon] STREAM DECK [STUDIO]  [Avatar] [CIRI]  [⏱️ SLEEP]  [✕]
             val header = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(8), dp(4), dp(6), dp(4))
-                // Brushed-metal top plate: a lighter face inset into the dark chassis.
+                setPadding(dp(8), dp(if (isLandscape) 3 else 4), dp(6), dp(if (isLandscape) 3 else 4))
                 background = android.graphics.drawable.GradientDrawable(
                     android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
                     intArrayOf(
@@ -959,18 +988,19 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             })
 
             val deckIcon = android.widget.ImageView(context).apply {
-                layoutParams = LinearLayout.LayoutParams(dp(19), dp(19))
+                val iconSize = dp(if (isLandscape) 17 else 19)
+                layoutParams = LinearLayout.LayoutParams(iconSize, iconSize)
                 setImageResource(R.drawable.ic_hw_stream_deck)
             }
             header.addView(deckIcon)
 
             val titleView = android.widget.TextView(context).apply {
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    marginStart = dp(6)
+                    marginStart = dp(5)
                 }
                 text = "STREAM DECK"
                 setTextColor(android.graphics.Color.WHITE)
-                textSize = 13f
+                textSize = if (isLandscape) 11.5f else 13f
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
             }
             header.addView(titleView)
@@ -980,97 +1010,79 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     marginStart = dp(5)
                 }
                 text = "STUDIO"
-                setTextColor(android.graphics.Color.parseColor("#FF2E88"))
-                textSize = 9.5f
+                setTextColor(android.graphics.Color.parseColor("#00E5FF"))
+                textSize = if (isLandscape) 8.5f else 9.5f
                 typeface = android.graphics.Typeface.MONOSPACE
             }
             header.addView(proBadge)
 
-            // Power LED: a static dot, nothing redrawing
+            // Power LED: cyan glowing hardware indicator
             header.addView(android.view.View(context).apply {
                 layoutParams = LinearLayout.LayoutParams(dp(5), dp(5)).apply {
-                    marginEnd = dp(7)
+                    marginEnd = dp(6)
                 }
                 background = android.graphics.drawable.GradientDrawable().apply {
                     shape = android.graphics.drawable.GradientDrawable.OVAL
-                    setColor(android.graphics.Color.parseColor("#C8FF00"))
+                    setColor(android.graphics.Color.parseColor("#00E5FF"))
                 }
             })
 
-            // Portrait slot: drop an image named sd_portrait (png/webp/jpg) into
-            // app/src/main/res/drawable and it shows up here, framed like a holo-ID.
+            // Portrait slot: Cyberpunk Ciri framed holo-ID avatar
             val portraitRes = try {
                 resources.getIdentifier("sd_portrait", "drawable", context.packageName)
-            } catch (_: Throwable) {
-                0
-            }
-            header.addView(if (portraitRes != 0) {
-                android.widget.ImageView(context).apply {
-                    layoutParams = LinearLayout.LayoutParams(dp(46), dp(46)).apply { marginEnd = dp(7) }
+            } catch (_: Throwable) { 0 }
+
+            if (portraitRes != 0) {
+                val portraitAvatar = android.widget.ImageView(context).apply {
+                    val pSize = dp(if (isLandscape) 28 else 36)
+                    layoutParams = LinearLayout.LayoutParams(pSize, pSize).apply {
+                        marginEnd = dp(6)
+                    }
                     scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
                     clipToOutline = true
-                    setImageResource(portraitRes)
-                    background = android.graphics.drawable.GradientDrawable().apply {
-                        cornerRadius = dp(7).toFloat()
-                        setStroke(dp(1.4f), android.graphics.Color.parseColor("#FF2E88"))
-                    }
-                }
-            } else {
-                android.widget.TextView(context).apply {
-                    layoutParams = LinearLayout.LayoutParams(dp(46), dp(46)).apply { marginEnd = dp(7) }
-                    text = "CIRI"
-                    gravity = Gravity.CENTER
-                    textSize = 8f
-                    typeface = android.graphics.Typeface.MONOSPACE
-                    setTextColor(android.graphics.Color.parseColor("#C8FF00"))
-                    background = android.graphics.drawable.GradientDrawable(
-                        android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
-                        intArrayOf(
-                            android.graphics.Color.parseColor("#3A0E55"),
-                            android.graphics.Color.parseColor("#06222C"),
-                        ),
-                    ).apply {
-                        cornerRadius = dp(7).toFloat()
-                        setStroke(dp(1.4f), android.graphics.Color.parseColor("#FF2E88"))
-                    }
-                }
-            })
-
-            // Optional art layer: the same portrait, faded, sits behind the master
-            // plate like a holo-screen behind tinted glass.
-            val portraitDrawable = if (portraitRes != 0) {
-                try {
-                    context.getDrawable(portraitRes)?.mutate()?.apply {
-                        alpha = 72
-                        if (this is android.graphics.drawable.BitmapDrawable) {
-                            gravity = Gravity.FILL
+                    outlineProvider = object : android.view.ViewOutlineProvider() {
+                        override fun getOutline(view: View, outline: android.graphics.Outline) {
+                            outline.setRoundRect(0, 0, view.width, view.height, dp(5).toFloat())
                         }
                     }
-                } catch (_: Throwable) {
-                    null
+                    setImageResource(portraitRes)
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = dp(5).toFloat()
+                        setStroke(dp(1.2f), android.graphics.Color.parseColor("#00E5FF"))
+                    }
                 }
-            } else null
-            fun plateWithArt(plate: android.graphics.drawable.Drawable): android.graphics.drawable.Drawable =
-                if (portraitDrawable != null) {
-                    android.graphics.drawable.LayerDrawable(arrayOf(plate, portraitDrawable))
-                } else {
-                    plate
+                header.addView(portraitAvatar)
+            }
+
+            // Cyberpunk CIRI Badge Button
+            val ciriBtn = android.widget.TextView(context).apply {
+                text = "CIRI"
+                textSize = if (isLandscape) 8.5f else 9.5f
+                typeface = android.graphics.Typeface.MONOSPACE
+                setTextColor(android.graphics.Color.parseColor("#00E5FF"))
+                val bg = make3DKeycap("#0E2235", "#06131F", "#02070B", "#00E5FF", 3.5f, 2f)
+                background = deckRipple(bg)
+                centerKeycapText(this)
+                val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(if (isLandscape) 22 else 24)).apply {
+                    marginEnd = dp(6)
                 }
+                layoutParams = lp
+            }
+            header.addView(ciriBtn)
 
             // Sleep Timer button
             val sleepBtn = android.widget.TextView(context).apply {
                 text = "⏱️ SLEEP"
-                textSize = 10f
+                textSize = if (isLandscape) 8.5f else 10f
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
                 setTextColor(android.graphics.Color.parseColor("#E2E8F0"))
                 val bg = make3DKeycap("#2A1F3A", "#170F26", "#050308", "#5B3C8A", 3.5f, 2f)
                 background = deckRipple(bg)
-                setPadding(dp(8), dp(3), dp(8), dp(3))
-                val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(24)).apply {
+                centerKeycapText(this)
+                val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(if (isLandscape) 22 else 24)).apply {
                     marginEnd = dp(6)
                 }
                 layoutParams = lp
-                gravity = Gravity.CENTER
                 setOnClickListener {
                     try {
                         SleepTimerDialog.newInstance((activity as? MainActivity)?.getSleepTimerTimeLeft() ?: 0).show(childFragmentManager, null)
@@ -1082,14 +1094,15 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             // Close [✕] button
             val closeBtn = android.widget.TextView(context).apply {
                 text = "✕"
-                textSize = 14f
+                textSize = if (isLandscape) 12f else 14f
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
                 setTextColor(android.graphics.Color.parseColor("#FF4D6D"))
                 val bg = make3DKeycap("#3A0E24", "#22060F", "#0A0206", "#FF2E88", 3.5f, 2f)
                 background = deckRipple(bg)
-                val lp = LinearLayout.LayoutParams(dp(24), dp(24))
+                centerKeycapText(this)
+                val btnSize = dp(if (isLandscape) 22 else 24)
+                val lp = LinearLayout.LayoutParams(btnSize, btnSize)
                 layoutParams = lp
-                gravity = Gravity.CENTER
                 setOnClickListener {
                     try { dialog?.dismiss() } catch (_: Throwable) {}
                 }
@@ -1099,7 +1112,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             // Subtle dark hairline separator
             val divider = View(context).apply {
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
-                    bottomMargin = dp(4)
+                    bottomMargin = dp(3)
                 }
                 setBackgroundColor(android.graphics.Color.parseColor("#33204F"))
             }
@@ -1107,10 +1120,10 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             chassis.addView(header)
             chassis.addView(divider)
 
-            // Hazard tape under the header: the one loud graphic accent of the deck.
+            // Hazard tape under the header
             chassis.addView(View(context).apply {
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4)).apply {
-                    bottomMargin = dp(5)
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(if (isLandscape) 3 else 4)).apply {
+                    bottomMargin = dp(if (isLandscape) 4 else 5)
                 }
                 background = HazardStripeDrawable()
             })
@@ -1124,7 +1137,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             // ==========================================
             val masterCard = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(dp(8), dp(6), dp(8), dp(6))
+                val pSide = dp(if (isLandscape) 7 else 8)
+                val pTop = dp(if (isLandscape) 4 else 6)
+                setPadding(pSide, pTop, pSide, pTop)
                 val bg = android.graphics.drawable.GradientDrawable(
                     android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
                     intArrayOf(
@@ -1135,9 +1150,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     cornerRadius = dp(8).toFloat()
                     setStroke(dp(1.4f), android.graphics.Color.parseColor("#FF2E88"))
                 }
-                background = plateWithArt(bg)
+                background = bg
                 val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    bottomMargin = dp(5)
+                    bottomMargin = dp(if (isLandscape) 3 else 5)
                 }
                 layoutParams = lp
             }
@@ -1147,7 +1162,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    bottomMargin = dp(5)
+                    bottomMargin = dp(if (isLandscape) 3 else 5)
                 }
             }
             val masterLedBezel = LinearLayout(context).apply {
@@ -1159,7 +1174,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     setStroke(dp(1), android.graphics.Color.parseColor("#4C6B00"))
                 }
                 background = bg
-                setPadding(dp(6), dp(2.5f), dp(7), dp(2.5f))
+                setPadding(dp(5), dp(2), dp(6), dp(2))
             }
             val ledDot = android.widget.TextView(context).apply {
                 text = "●"
@@ -1172,7 +1187,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             masterLedBezel.addView(ledDot)
             val masterBusTitle = android.widget.TextView(context).apply {
                 text = "MASTER BUS"
-                textSize = 9.5f
+                textSize = if (isLandscape) 8.5f else 9.5f
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
                 setTextColor(android.graphics.Color.parseColor("#C8FF00"))
             }
@@ -1188,7 +1203,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             val masterPercentView = android.widget.TextView(context).apply {
                 text = "100%"
                 setTextColor(android.graphics.Color.parseColor("#00E5FF"))
-                textSize = 11.5f
+                textSize = if (isLandscape) 10f else 11.5f
                 typeface = android.graphics.Typeface.MONOSPACE
                 val oledBg = android.graphics.drawable.GradientDrawable().apply {
                     setColor(android.graphics.Color.parseColor("#04070A"))
@@ -1196,17 +1211,16 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     setStroke(dp(1), android.graphics.Color.parseColor("#07505C"))
                 }
                 background = oledBg
-                setPadding(dp(8), dp(2), dp(8), dp(2))
+                setPadding(dp(6), dp(1.5f), dp(6), dp(1.5f))
             }
             masterHeader.addView(masterPercentView)
             masterCard.addView(masterHeader)
 
-            // Global Full-Width Quality Buttons (Bigger, Spaced, Fills full width)
+            // Master Quality Selection Keycaps
             val masterQualityRow = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    bottomMargin = dp(5)
+                    bottomMargin = dp(if (isLandscape) 3 else 5)
                 }
             }
             val standardQualities = listOf(autoLabel, "1080p", "720p", "480p", "360p", "160p")
@@ -1237,10 +1251,10 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     val isSelected = pillQual == selectedMasterQuality
                     val bg = if (isSelected) {
                         make3DKeycap(
-                            topColorHex = "#FF3D9A",
-                            bottomColorHex = "#D10F6B",
-                            shadowColorHex = "#3A0020",
-                            strokeColorHex = "#FFC2DE",
+                            topColorHex = "#FF2E88",
+                            bottomColorHex = "#C40E5E",
+                            shadowColorHex = "#3A0019",
+                            strokeColorHex = "#FFB0D2",
                             cornerRadiusDp = 4.5f,
                             shadowDepthDp = 2.5f,
                         )
@@ -1256,6 +1270,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     }
                     pill.background = deckRipple(bg)
                     pill.setTextColor(if (isSelected) android.graphics.Color.BLACK else android.graphics.Color.parseColor("#E2E8F0"))
+                    centerKeycapText(pill)
                 }
             }
 
@@ -1263,13 +1278,13 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 val pill = android.widget.TextView(context).apply {
                     tag = qual
                     text = if (qual == autoLabel) "Auto" else qual
-                    textSize = 10f
+                    textSize = if (isLandscape) 8.5f else 10f
                     typeface = android.graphics.Typeface.DEFAULT_BOLD
-                    gravity = Gravity.CENTER
-                    val lp = LinearLayout.LayoutParams(0, dp(31), 1f).apply {
-                        if (qIdx < standardQualities.lastIndex) marginEnd = dp(4)
+                    val lp = LinearLayout.LayoutParams(0, dp(if (isLandscape) 24 else 31), 1f).apply {
+                        if (qIdx < standardQualities.lastIndex) marginEnd = dp(3)
                     }
                     layoutParams = lp
+                    centerKeycapText(this)
                     setOnClickListener {
                         selectedMasterQuality = qual
                         latestState.streams.forEach { stream ->
@@ -1291,7 +1306,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             refreshMasterPills()
             masterCard.addView(masterQualityRow)
 
-            // Fader Row: Tactile Master Mute Button + Pro Fader
+            // Fader Row: Master Mute Button + Pro Fader
             val masterFaderRow = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -1299,9 +1314,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             }
 
             val masterMuteBtn = android.widget.ImageButton(context).apply {
-                val btnSize = dp(24)
+                val btnSize = dp(if (isLandscape) 20 else 24)
                 layoutParams = LinearLayout.LayoutParams(btnSize, btnSize).apply {
-                    marginEnd = dp(6)
+                    marginEnd = dp(5)
                 }
                 background = deckRipple(make3DKeycap("#2A1F3A", "#170F26", "#050308", "#5B3C8A", 4f, 2f))
                 setPadding(dp(3), dp(3), dp(3), dp(3))
@@ -1315,11 +1330,11 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             } ?: 1f
             masterPercentView.text = "${(masterVol * 100).roundToInt()}%"
 
-            val masterFader = DjFaderView(context, masterVol, isCompact = false) { newVol ->
+            val masterFader = DjFaderView(context, masterVol, isCompact = isLandscape) { newVol ->
                 masterVol = newVol
                 masterPercentView.text = "${(newVol * 100).roundToInt()}%"
                 masterMuteBtn.setImageResource(if (newVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
-                val activeColor = if (newVol > 0f) android.graphics.Color.parseColor("#FF9A3C") else android.graphics.Color.parseColor("#FF4D6D")
+                val activeColor = if (newVol > 0f) android.graphics.Color.parseColor("#00E5FF") else android.graphics.Color.parseColor("#FF4D6D")
                 masterMuteBtn.setColorFilter(activeColor)
                 latestState.streams.forEach { stream ->
                     val id = MultiviewSessionReducer.stableIdentity(stream) ?: return@forEach
@@ -1327,7 +1342,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     cardVolumeUpdaters[id]?.invoke(newVol)
                 }
             }.apply {
-                layoutParams = LinearLayout.LayoutParams(0, dp(20), 1f)
+                layoutParams = LinearLayout.LayoutParams(0, dp(if (isLandscape) 18 else 20), 1f)
             }
             masterFaderRow.addView(masterFader)
 
@@ -1339,28 +1354,22 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             chassis.addView(masterCard)
 
             // ==========================================
-            // STREAM CARDS CONTAINER (Dedicated 3-Row Studio Strips)
+            // STREAM CARDS CONTAINER (2-Column Studio Mixer in Landscape, 1-Column in Portrait)
             // ==========================================
-            // Measured at its natural height on purpose. The panel is scaled down to
-            // fit the screen afterwards, so there is never an inner scrolling area:
-            // every control of every stream stays visible at once.
             val streamScroll = object : android.widget.ScrollView(context) {
                 override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-                    val unbounded = MeasureSpec.makeMeasureSpec(Int.MAX_VALUE shr 2, MeasureSpec.AT_MOST)
-                    super.onMeasure(widthMeasureSpec, unbounded)
+                    val maxH = if (isLandscape) dp(180) else dp(480)
+                    val hSpec = if (MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.UNSPECIFIED || MeasureSpec.getSize(heightMeasureSpec) > maxH) {
+                        MeasureSpec.makeMeasureSpec(maxH, MeasureSpec.AT_MOST)
+                    } else {
+                        heightMeasureSpec
+                    }
+                    super.onMeasure(widthMeasureSpec, hSpec)
                 }
             }.apply {
                 isFillViewport = true
-                overScrollMode = View.OVER_SCROLL_NEVER
+                overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
                 isVerticalScrollBarEnabled = false
-                // Recessed display well the channel strips sit in.
-                background = android.graphics.drawable.GradientDrawable().apply {
-                    setColor(android.graphics.Color.parseColor("#0A0B11"))
-                    cornerRadius = dp(5).toFloat()
-                    setStroke(dp(1), android.graphics.Color.parseColor("#1D2130"))
-                }
-                setPadding(dp(4), dp(4), dp(4), dp(4))
-                clipToOutline = true
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             }
 
@@ -1369,403 +1378,434 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             }
             streamScroll.addView(streamListLayout)
 
-            fun populateCards() {
+            var populateCards: () -> Unit = {}
+
+            // Builder for each channel strip
+            fun buildStreamCard(index: Int, stream: com.github.andreyasadchy.xtra.data.multiview.MultiviewStream, isCompactMode: Boolean): View {
+                val identity = MultiviewSessionReducer.stableIdentity(stream) ?: return View(context)
+
+                val card = LinearLayout(context).apply {
+                    orientation = LinearLayout.VERTICAL
+                    val pSide = dp(if (isCompactMode) 6 else 7)
+                    val pTop = dp(if (isCompactMode) 3 else 5)
+                    setPadding(pSide, pTop, pSide, pTop)
+                    val bg = android.graphics.drawable.GradientDrawable().apply {
+                        setColor(android.graphics.Color.parseColor("#170F26"))
+                        cornerRadius = dp(6).toFloat()
+                        setStroke(dp(1.2f), android.graphics.Color.parseColor("#3E2A6B"))
+                    }
+                    background = bg
+                    val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        bottomMargin = dp(if (isCompactMode) 3 else 4)
+                    }
+                    layoutParams = lp
+                }
+
+                // ROW 1: [#1] [Avatar] [Streamer Name FULL] ... [▲][▼] [VU] [Mute] [100%] [⛶] [✕]
+                val row1 = LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(if (isCompactMode) 19 else 22))
+                }
+
+                // Slot badge [#1]
+                val slotBadge = android.widget.TextView(context).apply {
+                    text = "#${index + 1}"
+                    setTextColor(android.graphics.Color.parseColor("#00E5FF"))
+                    textSize = if (isCompactMode) 8f else 9.5f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    val badgeBg = android.graphics.drawable.GradientDrawable().apply {
+                        setColor(android.graphics.Color.parseColor("#061722"))
+                        cornerRadius = dp(3.5f).toFloat()
+                        setStroke(dp(1), android.graphics.Color.parseColor("#00E5FF"))
+                    }
+                    background = badgeBg
+                    setPadding(dp(4), dp(1), dp(4), dp(1))
+                }
+                row1.addView(slotBadge)
+
+                // Avatar
+                val avatar = android.widget.ImageView(context).apply {
+                    val avSize = dp(if (isCompactMode) 17 else 20)
+                    layoutParams = LinearLayout.LayoutParams(avSize, avSize).apply {
+                        marginStart = dp(4)
+                    }
+                    scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+                    clipToOutline = true
+                    outlineProvider = object : android.view.ViewOutlineProvider() {
+                        override fun getOutline(view: View, outline: android.graphics.Outline) {
+                            outline.setRoundRect(0, 0, view.width, view.height, dp(3).toFloat())
+                        }
+                    }
+                    setImageResource(R.drawable.ic_person_placeholder)
+                }
+                try {
+                    com.github.andreyasadchy.xtra.ui.common.loadStreamProfileImage(context, avatar, stream)
+                } catch (_: Throwable) {}
+                row1.addView(avatar)
+
+                // Streamer Name
+                val nameView = android.widget.TextView(context).apply {
+                    text = displayName(stream)
+                    setTextColor(android.graphics.Color.WHITE)
+                    textSize = if (isCompactMode) 10.5f else 12f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                        marginStart = dp(4)
+                        marginEnd = dp(3)
+                    }
+                    layoutParams = lp
+                }
+                row1.addView(nameView)
+
+                val btnSize = dp(if (isCompactMode) 16 else 18)
+                val streams = latestState.streams.toList()
+
+                // Reorder ▲
+                val upBtn = android.widget.TextView(context).apply {
+                    text = "▲"
+                    setTextColor(if (index > 0) android.graphics.Color.parseColor("#00E5FF") else android.graphics.Color.parseColor("#3C4155"))
+                    textSize = if (isCompactMode) 8f else 10f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    centerKeycapText(this)
+                    val lp = LinearLayout.LayoutParams(btnSize, btnSize).apply { marginEnd = dp(2) }
+                    layoutParams = lp
+                    if (index > 0) {
+                        background = deckRipple(make3DKeycap("#241B36", "#141021", "#050308", "#4A3B73", 3f, 1.5f))
+                        setOnClickListener {
+                            viewModel.reorder(identity, index - 1)
+                            populateCards()
+                        }
+                    }
+                }
+                row1.addView(upBtn)
+
+                // Reorder ▼
+                val downBtn = android.widget.TextView(context).apply {
+                    text = "▼"
+                    setTextColor(if (index < streams.lastIndex) android.graphics.Color.parseColor("#00E5FF") else android.graphics.Color.parseColor("#3C4155"))
+                    textSize = if (isCompactMode) 8f else 10f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    centerKeycapText(this)
+                    val lp = LinearLayout.LayoutParams(btnSize, btnSize).apply { marginEnd = dp(2) }
+                    layoutParams = lp
+                    if (index < streams.lastIndex) {
+                        background = deckRipple(make3DKeycap("#241B36", "#141021", "#050308", "#4A3B73", 3f, 1.5f))
+                        setOnClickListener {
+                            viewModel.reorder(identity, index + 1)
+                            populateCards()
+                        }
+                    }
+                }
+                row1.addView(downBtn)
+
+                // VU Meter (3 bars)
+                val vuMeter = LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        marginEnd = dp(2)
+                    }
+                    layoutParams = lp
+                }
+                val vuBars = mutableListOf<View>()
+                val vuColors = listOf("#00E5FF", "#C8FF00", "#FF2E88")
+                vuColors.forEach { col ->
+                    val bar = View(context).apply {
+                        val lp = LinearLayout.LayoutParams(dp(2.5f), dp(if (isCompactMode) 7 else 9)).apply { marginEnd = dp(1) }
+                        layoutParams = lp
+                        setBackgroundColor(android.graphics.Color.parseColor("#262B3D"))
+                    }
+                    vuBars.add(bar)
+                    vuMeter.addView(bar)
+                }
+                row1.addView(vuMeter)
+
+                var vol = viewModel.audioVolume(identity)
+                fun updateVuMeter(v: Float) {
+                    val litCount = when {
+                        v <= 0f -> 0
+                        v < 0.45f -> 1
+                        v < 0.85f -> 2
+                        else -> 3
+                    }
+                    vuBars.forEachIndexed { i, bar ->
+                        bar.setBackgroundColor(
+                            if (i < litCount) android.graphics.Color.parseColor(vuColors[i])
+                            else android.graphics.Color.parseColor("#262B3D")
+                        )
+                    }
+                }
+                updateVuMeter(vol)
+
+                // Mute button
+                val muteBtn = android.widget.ImageButton(context).apply {
+                    layoutParams = LinearLayout.LayoutParams(btnSize, btnSize).apply {
+                        marginEnd = dp(2)
+                    }
+                    background = deckRipple(make3DKeycap("#241B36", "#141021", "#050308", "#4A3B73", 3f, 1.5f))
+                    setPadding(dp(2), dp(2), dp(2), dp(2))
+                    setImageResource(if (vol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
+                    setColorFilter(if (vol > 0f) android.graphics.Color.parseColor("#00E5FF") else android.graphics.Color.parseColor("#FF4D6D"))
+                }
+                row1.addView(muteBtn)
+
+                // Digital Percent Readout
+                val percentView = android.widget.TextView(context).apply {
+                    text = "${(vol * 100).roundToInt()}%"
+                    setTextColor(android.graphics.Color.parseColor("#00E5FF"))
+                    textSize = if (isCompactMode) 8.5f else 10f
+                    typeface = android.graphics.Typeface.MONOSPACE
+                    val oledBg = android.graphics.drawable.GradientDrawable().apply {
+                        setColor(android.graphics.Color.parseColor("#04070A"))
+                        cornerRadius = dp(3).toFloat()
+                        setStroke(dp(1), android.graphics.Color.parseColor("#07505C"))
+                    }
+                    background = oledBg
+                    setPadding(dp(3), dp(1), dp(3), dp(1))
+                    val lp = LinearLayout.LayoutParams(dp(if (isCompactMode) 32 else 38), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        marginStart = dp(2)
+                    }
+                    gravity = Gravity.CENTER
+                    layoutParams = lp
+                }
+                row1.addView(percentView)
+
+                // Open Single Player [⛶]
+                val openPlayerBtn = android.widget.ImageView(context).apply {
+                    layoutParams = LinearLayout.LayoutParams(btnSize, btnSize).apply {
+                        marginStart = dp(2)
+                        marginEnd = dp(2)
+                    }
+                    setImageResource(R.drawable.ic_pref_fullscreen)
+                    setColorFilter(android.graphics.Color.parseColor("#9CA3AF"))
+                    setPadding(dp(1.5f), dp(1.5f), dp(1.5f), dp(1.5f))
+                    contentDescription = getString(R.string.multiview_open_player)
+                    setOnClickListener {
+                        try { dialog?.dismiss() } catch (_: Throwable) {}
+                        openNormalPlayer(identity)
+                    }
+                }
+                row1.addView(openPlayerBtn)
+
+                // Close Stream [✕]
+                val closeStreamBtn = android.widget.ImageView(context).apply {
+                    layoutParams = LinearLayout.LayoutParams(btnSize, btnSize)
+                    setImageResource(R.drawable.ic_close)
+                    setColorFilter(android.graphics.Color.parseColor("#FF4D6D"))
+                    setPadding(dp(1.5f), dp(1.5f), dp(1.5f), dp(1.5f))
+                    contentDescription = "Remove stream"
+                    setOnClickListener {
+                        viewModel.remove(identity)
+                        populateCards()
+                    }
+                }
+                row1.addView(closeStreamBtn)
+                card.addView(row1)
+
+                // ROW 2: FULL DJ SLIDER
+                val row2 = LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        topMargin = dp(if (isCompactMode) 1 else 2)
+                        bottomMargin = dp(if (isCompactMode) 1 else 2)
+                    }
+                }
+                val zeroLabel = android.widget.TextView(context).apply {
+                    text = "0%"
+                    textSize = if (isCompactMode) 7f else 8f
+                    typeface = android.graphics.Typeface.MONOSPACE
+                    setTextColor(android.graphics.Color.parseColor("#64748B"))
+                    val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        marginEnd = dp(2)
+                    }
+                    layoutParams = lp
+                }
+                row2.addView(zeroLabel)
+
+                val fader = DjFaderView(context, vol, isCompact = isCompactMode) { newVol ->
+                    vol = newVol
+                    viewModel.setAudioVolume(identity, newVol)
+                    updateVuMeter(newVol)
+                    percentView.text = "${(newVol * 100).roundToInt()}%"
+                    muteBtn.setImageResource(if (newVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
+                    muteBtn.setColorFilter(if (newVol > 0f) android.graphics.Color.parseColor("#00E5FF") else android.graphics.Color.parseColor("#FF4D6D"))
+                }.apply {
+                    layoutParams = LinearLayout.LayoutParams(0, dp(if (isCompactMode) 16 else 18), 1f)
+                }
+                row2.addView(fader)
+
+                val hundredLabel = android.widget.TextView(context).apply {
+                    text = "100%"
+                    textSize = if (isCompactMode) 7f else 8f
+                    typeface = android.graphics.Typeface.MONOSPACE
+                    setTextColor(android.graphics.Color.parseColor("#64748B"))
+                    val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        marginStart = dp(2)
+                    }
+                    layoutParams = lp
+                }
+                row2.addView(hundredLabel)
+
+                cardVolumeUpdaters[identity] = { newVol ->
+                    vol = newVol
+                    fader.setVolume(newVol)
+                    updateVuMeter(newVol)
+                    percentView.text = "${(newVol * 100).roundToInt()}%"
+                    muteBtn.setImageResource(if (newVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
+                    muteBtn.setColorFilter(if (newVol > 0f) android.graphics.Color.parseColor("#00E5FF") else android.graphics.Color.parseColor("#FF4D6D"))
+                }
+
+                muteBtn.setOnClickListener {
+                    val current = vol
+                    val targetVol = if (current > 0f) 0f else viewModel.defaultAudioVolume().takeIf { it > 0f } ?: 1f
+                    vol = targetVol
+                    fader.setVolume(targetVol)
+                    viewModel.setAudioVolume(identity, targetVol)
+                    updateVuMeter(targetVol)
+                    percentView.text = "${(targetVol * 100).roundToInt()}%"
+                    muteBtn.setImageResource(if (targetVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
+                    muteBtn.setColorFilter(if (targetVol > 0f) android.graphics.Color.parseColor("#00E5FF") else android.graphics.Color.parseColor("#FF4D6D"))
+                }
+                card.addView(row2)
+
+                // ROW 3: QUALITY KEYCAPS
+                val row3 = LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                }
+                val available = latestPlayback[identity]?.availableQualities.orEmpty()
+                val displayQualities = listOf(autoLabel, "1080p", "720p", "480p", "360p", "160p")
+
+                val pillViews = mutableListOf<android.widget.TextView>()
+                fun refreshThisPills() {
+                    val overrideQuality = latestState.qualityOverrides[identity]
+                    val activePlayingQuality = latestPlayback[identity]?.qualityLabel.orEmpty()
+                    val currentRes = overrideQuality ?: activePlayingQuality
+
+                    pillViews.forEach { pill ->
+                        val qual = pill.tag as? String ?: ""
+                        val isSelected = when {
+                            currentRes.contains("1080") -> qual.contains("1080")
+                            currentRes.contains("720") -> qual.contains("720")
+                            currentRes.contains("480") -> qual.contains("480")
+                            currentRes.contains("360") -> qual.contains("360")
+                            currentRes.contains("160") -> qual.contains("160")
+                            currentRes.isBlank() -> qual == autoLabel
+                            else -> qual.contains(currentRes, ignoreCase = true) || currentRes.contains(qual, ignoreCase = true)
+                        }
+                        val pillBg = if (isSelected) {
+                            make3DKeycap(
+                                topColorHex = "#00E5FF",
+                                bottomColorHex = "#0090C2",
+                                shadowColorHex = "#00303D",
+                                strokeColorHex = "#B4F6FF",
+                                cornerRadiusDp = 4f,
+                                shadowDepthDp = 2.5f,
+                            )
+                        } else {
+                            make3DKeycap(
+                                topColorHex = "#241B36",
+                                bottomColorHex = "#141021",
+                                shadowColorHex = "#050308",
+                                strokeColorHex = "#4A3B73",
+                                cornerRadiusDp = 4f,
+                                shadowDepthDp = 2.5f,
+                            )
+                        }
+                        pill.background = deckRipple(pillBg)
+                        pill.setTextColor(if (isSelected) android.graphics.Color.BLACK else android.graphics.Color.parseColor("#E2E8F0"))
+                        centerKeycapText(pill)
+                    }
+                }
+
+                cardPillUpdaters.add(::refreshThisPills)
+
+                displayQualities.forEachIndexed { qIdx, qual ->
+                    val shortName = when {
+                        qual == autoLabel -> "Auto"
+                        qual.contains("1080") -> "1080p"
+                        qual.contains("720") -> "720p"
+                        qual.contains("480") -> "480p"
+                        qual.contains("360") -> "360p"
+                        qual.contains("160") -> "160p"
+                        else -> qual.split(" ").firstOrNull() ?: qual
+                    }
+                    val pill = android.widget.TextView(context).apply {
+                        tag = qual
+                        text = shortName
+                        textSize = if (isCompactMode) 8f else 9.5f
+                        typeface = android.graphics.Typeface.DEFAULT_BOLD
+                        val lp = LinearLayout.LayoutParams(0, dp(if (isCompactMode) 22 else 25), 1f).apply {
+                            if (qIdx < displayQualities.lastIndex) marginEnd = dp(2)
+                        }
+                        layoutParams = lp
+                        centerKeycapText(this)
+                        setOnClickListener {
+                            val match = if (qual == autoLabel) {
+                                null
+                            } else {
+                                available.firstOrNull { it.contains(qual, ignoreCase = true) } ?: qual
+                            }
+                            viewModel.setQualityOverride(identity, match)
+                            refreshThisPills()
+                        }
+                    }
+                    pillViews.add(pill)
+                    row3.addView(pill)
+                }
+
+                refreshThisPills()
+                card.addView(row3)
+                return card
+            }
+
+            populateCards = {
                 streamListLayout.removeAllViews()
                 cardPillUpdaters.clear()
                 cardVolumeUpdaters.clear()
 
                 val streams = latestState.streams.toList()
-                streams.forEachIndexed { index, stream ->
-                    val identity = MultiviewSessionReducer.stableIdentity(stream) ?: return@forEachIndexed
+                val useTwoColumns = isLandscape && streams.size > 1
 
-                    // DEDICATED 3-ROW STUDIO CHANNEL STRIP
-                    val card = LinearLayout(context).apply {
+                if (useTwoColumns) {
+                    val gridRow = LinearLayout(context).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    }
+                    val col1 = LinearLayout(context).apply {
                         orientation = LinearLayout.VERTICAL
-                        val pSide = dp(7)
-                        val pTop = dp(5)
-                        setPadding(pSide, pTop, pSide, pTop)
-                        val bg = android.graphics.drawable.GradientDrawable().apply {
-                            setColor(android.graphics.Color.parseColor("#170F26"))
-                            cornerRadius = dp(6).toFloat()
-                            setStroke(dp(1.2f), android.graphics.Color.parseColor("#3E2A6B"))
-                        }
-                        background = bg
-                        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                            bottomMargin = dp(4)
-                        }
-                        layoutParams = lp
-                    }
-
-                    // ----------------------------------------------------
-                    // ROW 1 (Header): [#1] [Avatar] [Streamer Name FULL] ... [▲][▼] [VU] [Mute] [100%] [⛶] [✕]
-                    // ----------------------------------------------------
-                    val row1 = LinearLayout(context).apply {
-                        orientation = LinearLayout.HORIZONTAL
-                        gravity = Gravity.CENTER_VERTICAL
-                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(22))
-                    }
-
-                    // Slot badge [#1] (Chunky EP-133 Tactile Pill)
-                    val slotBadge = android.widget.TextView(context).apply {
-                        text = "#${index + 1}"
-                        setTextColor(android.graphics.Color.parseColor("#C8FF00"))
-                        textSize = 9.5f
-                        typeface = android.graphics.Typeface.DEFAULT_BOLD
-                        val badgeBg = android.graphics.drawable.GradientDrawable().apply {
-                            setColor(android.graphics.Color.parseColor("#0F1A0B"))
-                            cornerRadius = dp(3.5f).toFloat()
-                            setStroke(dp(1), android.graphics.Color.parseColor("#4C6B00"))
-                        }
-                        background = badgeBg
-                        setPadding(dp(5), dp(2), dp(5), dp(2))
-                    }
-                    row1.addView(slotBadge)
-
-                    // Streamer Avatar
-                    val avatar = android.widget.ImageView(context).apply {
-                        layoutParams = LinearLayout.LayoutParams(dp(20), dp(20)).apply {
-                            marginStart = dp(5)
-                        }
-                        scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
-                        clipToOutline = true
-                        outlineProvider = object : android.view.ViewOutlineProvider() {
-                            override fun getOutline(view: View, outline: android.graphics.Outline) {
-                                outline.setRoundRect(0, 0, view.width, view.height, dp(3).toFloat())
-                            }
-                        }
-                        setImageResource(R.drawable.ic_person_placeholder)
-                    }
-                    try {
-                        com.github.andreyasadchy.xtra.ui.common.loadStreamProfileImage(context, avatar, stream)
-                    } catch (_: Throwable) {}
-                    row1.addView(avatar)
-
-                    // Streamer Name (FULL WIDTH, NO CUTOFF!)
-                    val nameView = android.widget.TextView(context).apply {
-                        text = displayName(stream)
-                        setTextColor(android.graphics.Color.WHITE)
-                        textSize = 12f
-                        typeface = android.graphics.Typeface.DEFAULT_BOLD
-                        maxLines = 1
-                        ellipsize = android.text.TextUtils.TruncateAt.END
-                        val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                            marginStart = dp(5)
-                            marginEnd = dp(4)
-                        }
-                        layoutParams = lp
-                    }
-                    row1.addView(nameView)
-
-                    // Reorder ▲
-                    val upBtn = android.widget.TextView(context).apply {
-                        text = "▲"
-                        setTextColor(if (index > 0) android.graphics.Color.parseColor("#C8FF00") else android.graphics.Color.parseColor("#3C4155"))
-                        textSize = 10f
-                        typeface = android.graphics.Typeface.DEFAULT_BOLD
-                        gravity = Gravity.CENTER
-                        val lp = LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(2) }
-                        layoutParams = lp
-                        if (index > 0) {
-                            background = deckRipple(make3DKeycap("#241B36", "#141021", "#050308", "#4A3B73", 3f, 1.5f))
-                            setOnClickListener {
-                                viewModel.reorder(identity, index - 1)
-                                populateCards()
-                            }
-                        }
-                    }
-                    row1.addView(upBtn)
-
-                    // Reorder ▼
-                    val downBtn = android.widget.TextView(context).apply {
-                        text = "▼"
-                        setTextColor(if (index < streams.lastIndex) android.graphics.Color.parseColor("#C8FF00") else android.graphics.Color.parseColor("#3C4155"))
-                        textSize = 10f
-                        typeface = android.graphics.Typeface.DEFAULT_BOLD
-                        gravity = Gravity.CENTER
-                        val lp = LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(3) }
-                        layoutParams = lp
-                        if (index < streams.lastIndex) {
-                            background = deckRipple(make3DKeycap("#241B36", "#141021", "#050308", "#4A3B73", 3f, 1.5f))
-                            setOnClickListener {
-                                viewModel.reorder(identity, index + 1)
-                                populateCards()
-                            }
-                        }
-                    }
-                    row1.addView(downBtn)
-
-                    // VU Meter (4 segments)
-                    val vuMeter = LinearLayout(context).apply {
-                        orientation = LinearLayout.HORIZONTAL
-                        gravity = Gravity.CENTER_VERTICAL
-                        layoutParams = LinearLayout.LayoutParams(dp(16), dp(10)).apply {
-                            marginEnd = dp(4)
-                        }
-                    }
-                    val ledSegments = (0..3).map {
-                        View(context).apply {
-                            val lp = LinearLayout.LayoutParams(dp(2.5f), dp(8)).apply {
-                                marginEnd = dp(1)
-                            }
-                            layoutParams = lp
-                        }
-                    }
-                    ledSegments.forEach { vuMeter.addView(it) }
-
-                    fun updateVuMeter(volume: Float) {
-                        val litCount = when {
-                            volume <= 0f -> 0
-                            volume < 0.35f -> 1
-                            volume < 0.65f -> 2
-                            volume < 0.90f -> 3
-                            else -> 4
-                        }
-                        ledSegments.forEachIndexed { idx, led ->
-                            val isLit = idx < litCount
-                            val colorHex = when (idx) {
-                                0, 1 -> if (isLit) "#10B981" else "#10261E"
-                                2 -> if (isLit) "#F59E0B" else "#2A1E0D"
-                                else -> if (isLit) "#FF4D6D" else "#2E1214"
-                            }
-                            val bg = android.graphics.drawable.GradientDrawable().apply {
-                                setColor(android.graphics.Color.parseColor(colorHex))
-                                cornerRadius = dp(1.5f).toFloat()
-                            }
-                            led.background = bg
-                        }
-                    }
-                    var vol = viewModel.audioVolume(identity).coerceIn(0f, 1f)
-                    updateVuMeter(vol)
-                    row1.addView(vuMeter)
-
-                    // Mute button
-                    val muteBtn = android.widget.ImageButton(context).apply {
-                        layoutParams = LinearLayout.LayoutParams(dp(20), dp(20)).apply {
-                            marginEnd = dp(2)
-                        }
-                        background = null
-                        setImageResource(if (vol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
-                        setColorFilter(if (vol > 0f) android.graphics.Color.parseColor("#C8FF00") else android.graphics.Color.parseColor("#FF4D6D"))
-                    }
-                    row1.addView(muteBtn)
-
-                    // Volume Readout (Single Line, Recessed OLED)
-                    val percentView = android.widget.TextView(context).apply {
-                        text = "${(vol * 100).roundToInt()}%"
-                        setTextColor(android.graphics.Color.parseColor("#FF9A3C"))
-                        textSize = 10f
-                        typeface = android.graphics.Typeface.MONOSPACE
-                        val oledBg = android.graphics.drawable.GradientDrawable().apply {
-                            setColor(android.graphics.Color.parseColor("#04070A"))
-                            cornerRadius = dp(3).toFloat()
-                            setStroke(dp(1), android.graphics.Color.parseColor("#382613"))
-                        }
-                        background = oledBg
-                        setPadding(dp(4), dp(1.5f), dp(4), dp(1.5f))
-                        val lp = LinearLayout.LayoutParams(dp(38), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                            marginStart = dp(2)
-                        }
-                        gravity = Gravity.CENTER
-                        layoutParams = lp
-                    }
-                    row1.addView(percentView)
-
-                    // Open Single Player [⛶]
-                    val openPlayerBtn = android.widget.ImageView(context).apply {
-                        layoutParams = LinearLayout.LayoutParams(dp(20), dp(20)).apply {
-                            marginStart = dp(3)
-                            marginEnd = dp(2)
-                        }
-                        setImageResource(R.drawable.ic_pref_fullscreen)
-                        setColorFilter(android.graphics.Color.parseColor("#9CA3AF"))
-                        setPadding(dp(2), dp(2), dp(2), dp(2))
-                        contentDescription = getString(R.string.multiview_open_player)
-                        setOnClickListener {
-                            try { dialog?.dismiss() } catch (_: Throwable) {}
-                            openNormalPlayer(identity)
-                        }
-                    }
-                    row1.addView(openPlayerBtn)
-
-                    // Close Stream [✕]
-                    val closeStreamBtn = android.widget.ImageView(context).apply {
-                        layoutParams = LinearLayout.LayoutParams(dp(20), dp(20))
-                        setImageResource(R.drawable.ic_close)
-                        setColorFilter(android.graphics.Color.parseColor("#FF4D6D"))
-                        setPadding(dp(2), dp(2), dp(2), dp(2))
-                        contentDescription = "Remove stream"
-                        setOnClickListener {
-                            viewModel.remove(identity)
-                            populateCards()
-                        }
-                    }
-                    row1.addView(closeStreamBtn)
-                    card.addView(row1)
-
-                    // ----------------------------------------------------
-                    // ROW 2 (FULL DJ SLIDER): Spans edge-to-edge under streamer name
-                    // ----------------------------------------------------
-                    val row2 = LinearLayout(context).apply {
-                        orientation = LinearLayout.HORIZONTAL
-                        gravity = Gravity.CENTER_VERTICAL
-                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                            topMargin = dp(2)
-                            bottomMargin = dp(2)
-                        }
-                    }
-                    val zeroLabel = android.widget.TextView(context).apply {
-                        text = "0%"
-                        textSize = 8f
-                        typeface = android.graphics.Typeface.MONOSPACE
-                        setTextColor(android.graphics.Color.parseColor("#64748B"))
-                        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                             marginEnd = dp(3)
                         }
-                        layoutParams = lp
                     }
-                    row2.addView(zeroLabel)
-
-                    var fader: DjFaderView? = null
-                    fader = DjFaderView(context, vol, isCompact = false) { newVol ->
-                        vol = newVol
-                        viewModel.setAudioVolume(identity, newVol)
-                        updateVuMeter(newVol)
-                        percentView.text = "${(newVol * 100).roundToInt()}%"
-                        muteBtn.setImageResource(if (newVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
-                        muteBtn.setColorFilter(if (newVol > 0f) android.graphics.Color.parseColor("#C8FF00") else android.graphics.Color.parseColor("#FF4D6D"))
-                    }.apply {
-                        layoutParams = LinearLayout.LayoutParams(0, dp(18), 1f)
-                    }
-                    row2.addView(fader)
-
-                    val hundredLabel = android.widget.TextView(context).apply {
-                        text = "100%"
-                        textSize = 8f
-                        typeface = android.graphics.Typeface.MONOSPACE
-                        setTextColor(android.graphics.Color.parseColor("#64748B"))
-                        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    val col2 = LinearLayout(context).apply {
+                        orientation = LinearLayout.VERTICAL
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                             marginStart = dp(3)
                         }
-                        layoutParams = lp
                     }
-                    row2.addView(hundredLabel)
+                    gridRow.addView(col1)
+                    gridRow.addView(col2)
+                    streamListLayout.addView(gridRow)
 
-                    cardVolumeUpdaters[identity] = { newVol ->
-                        vol = newVol
-                        fader.setVolume(newVol)
-                        updateVuMeter(newVol)
-                        percentView.text = "${(newVol * 100).roundToInt()}%"
-                        muteBtn.setImageResource(if (newVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
-                        muteBtn.setColorFilter(if (newVol > 0f) android.graphics.Color.parseColor("#C8FF00") else android.graphics.Color.parseColor("#FF4D6D"))
-                    }
-
-                    muteBtn.setOnClickListener {
-                        val current = vol
-                        val targetVol = if (current > 0f) 0f else viewModel.defaultAudioVolume().takeIf { it > 0f } ?: 1f
-                        vol = targetVol
-                        fader.setVolume(targetVol)
-                        viewModel.setAudioVolume(identity, targetVol)
-                        updateVuMeter(targetVol)
-                        percentView.text = "${(targetVol * 100).roundToInt()}%"
-                        muteBtn.setImageResource(if (targetVol > 0f) R.drawable.baseline_volume_up_black_24 else R.drawable.baseline_volume_off_black_24)
-                        muteBtn.setColorFilter(if (targetVol > 0f) android.graphics.Color.parseColor("#C8FF00") else android.graphics.Color.parseColor("#FF4D6D"))
-                    }
-                    card.addView(row2)
-
-                    // ----------------------------------------------------
-                    // ROW 3 (FULL QUALITY STRIP): Tactile 3D Keycaps side-by-side, full width
-                    // ----------------------------------------------------
-                    val row3 = LinearLayout(context).apply {
-                        orientation = LinearLayout.HORIZONTAL
-                        gravity = Gravity.CENTER_VERTICAL
-                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                            topMargin = dp(2)
+                    streams.forEachIndexed { index, stream ->
+                        val card = buildStreamCard(index, stream, isCompactMode = true)
+                        if (index % 2 == 0) {
+                            col1.addView(card)
+                        } else {
+                            col2.addView(card)
                         }
                     }
-
-                    val available = listOf(autoLabel) + latestPlayback[identity]?.availableQualities.orEmpty()
-                    val displayQualities = listOf(autoLabel, "1080p", "720p", "480p", "360p", "160p")
-
-                    val pillViews = mutableListOf<android.widget.TextView>()
-                    fun refreshThisPills() {
-                        val overrideQuality = latestState.qualityOverrides[identity]
-                        val activePlayingQuality = latestPlayback[identity]?.qualityLabel.orEmpty()
-                        val currentRes = overrideQuality ?: activePlayingQuality
-
-                        pillViews.forEach { pill ->
-                            val qual = pill.tag as? String ?: ""
-                            val isSelected = when {
-                                currentRes.contains("1080") -> qual.contains("1080")
-                                currentRes.contains("720") -> qual.contains("720")
-                                currentRes.contains("480") -> qual.contains("480")
-                                currentRes.contains("360") -> qual.contains("360")
-                                currentRes.contains("160") -> qual.contains("160")
-                                currentRes.isBlank() -> qual == autoLabel
-                                else -> qual.contains(currentRes, ignoreCase = true) || currentRes.contains(qual, ignoreCase = true)
-                            }
-                            val pillBg = if (isSelected) {
-                                make3DKeycap(
-                                    topColorHex = "#D8FF3D",
-                                    bottomColorHex = "#A6DE00",
-                                    shadowColorHex = "#2F3A00",
-                                    strokeColorHex = "#F4FFC2",
-                                    cornerRadiusDp = 4f,
-                                    shadowDepthDp = 2.5f,
-                                )
-                            } else {
-                                make3DKeycap(
-                                    topColorHex = "#241B36",
-                                    bottomColorHex = "#141021",
-                                    shadowColorHex = "#050308",
-                                    strokeColorHex = "#4A3B73",
-                                    cornerRadiusDp = 4f,
-                                    shadowDepthDp = 2.5f,
-                                )
-                            }
-                            pill.background = deckRipple(pillBg)
-                            pill.setTextColor(if (isSelected) android.graphics.Color.BLACK else android.graphics.Color.parseColor("#E2E8F0"))
-                        }
+                } else {
+                    streams.forEachIndexed { index, stream ->
+                        val card = buildStreamCard(index, stream, isCompactMode = false)
+                        streamListLayout.addView(card)
                     }
-
-                    cardPillUpdaters.add(::refreshThisPills)
-
-                    displayQualities.forEachIndexed { qIdx, qual ->
-                        val shortName = when {
-                            qual == autoLabel -> "Auto"
-                            qual.contains("1080") -> "1080p"
-                            qual.contains("720") -> "720p"
-                            qual.contains("480") -> "480p"
-                            qual.contains("360") -> "360p"
-                            qual.contains("160") -> "160p"
-                            else -> qual.split(" ").firstOrNull() ?: qual
-                        }
-                        val pill = android.widget.TextView(context).apply {
-                            tag = qual
-                            text = shortName
-                            textSize = 9.5f
-                            typeface = android.graphics.Typeface.DEFAULT_BOLD
-                            gravity = Gravity.CENTER
-                            val lp = LinearLayout.LayoutParams(0, dp(25), 1f).apply {
-                                if (qIdx < displayQualities.lastIndex) marginEnd = dp(3)
-                            }
-                            layoutParams = lp
-                            setOnClickListener {
-                                val match = if (qual == autoLabel) {
-                                    null
-                                } else {
-                                    available.firstOrNull { it.contains(qual, ignoreCase = true) } ?: qual
-                                }
-                                viewModel.setQualityOverride(identity, match)
-                                refreshThisPills()
-                            }
-                        }
-                        pillViews.add(pill)
-                        row3.addView(pill)
-                    }
-
-                    refreshThisPills()
-                    card.addView(row3)
-                    streamListLayout.addView(card)
                 }
             }
 
@@ -1773,20 +1813,19 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             chassis.addView(streamScroll)
 
             // ==========================================
-            // BOTTOM MACRO ACTIONS: [MUTE ALL] [EQUALIZE] [SOLO ACTIVE]
+            // BOTTOM MACRO ACTIONS: [MUTE ALL] [EQUALIZE] [SOLO ACTIVE] [REMOVE ALL]
             // ==========================================
             val bottomMacros = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER
-                setPadding(dp(4), dp(6), dp(4), dp(4))
-                // Recessed key tray under the macro keys.
+                setPadding(dp(4), dp(if (isLandscape) 4 else 6), dp(4), dp(if (isLandscape) 3 else 4))
                 background = android.graphics.drawable.GradientDrawable().apply {
                     setColor(android.graphics.Color.parseColor("#160B26"))
                     cornerRadius = dp(6).toFloat()
                     setStroke(dp(1), android.graphics.Color.parseColor("#3E2A6B"))
                 }
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    topMargin = dp(4)
+                    topMargin = dp(if (isLandscape) 3 else 4)
                 }
             }
 
@@ -1801,18 +1840,18 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             ): android.widget.TextView {
                 return android.widget.TextView(context).apply {
                     text = label
-                    textSize = 9.5f
+                    textSize = if (isLandscape) 8f else 9.5f
                     maxLines = 1
                     typeface = android.graphics.Typeface.DEFAULT_BOLD
                     setTextColor(android.graphics.Color.parseColor(textHex))
                     val bg = make3DKeycap(topHex, bottomHex, shadowHex, strokeHex, 4f, 2.5f)
                     background = deckRipple(bg)
-                    val lp = LinearLayout.LayoutParams(0, dp(33), 1f).apply {
+                    centerKeycapText(this)
+                    val lp = LinearLayout.LayoutParams(0, dp(if (isLandscape) 28 else 33), 1f).apply {
                         marginStart = dp(2)
                         marginEnd = dp(2)
                     }
                     layoutParams = lp
-                    gravity = Gravity.CENTER
                     setOnClickListener {
                         onClick()
                         populateCards()
@@ -1827,8 +1866,6 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     }
                 }
             })
-
-
 
             bottomMacros.addView(createMacroBtn("EQUALIZE", "#00E5FF", "#0090C2", "#00303D", "#B4F6FF", "#04141A") {
                 val count = latestState.streams.size.coerceAtLeast(1)
@@ -1860,6 +1897,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             })
 
             chassis.addView(bottomMacros)
+
             // Floating Dialog Window Configuration
             val themedContext = androidx.appcompat.view.ContextThemeWrapper(context, R.style.MaterialDialog)
             dialog = android.app.Dialog(themedContext).apply {
@@ -1870,7 +1908,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     clearFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
                     val displayWidth = context.resources.displayMetrics.widthPixels
                     val cardWidth = when {
-                        isLandscape -> (displayWidth * 0.74f).toInt()
+                        isLandscape -> (displayWidth * 0.92f).toInt()
                         isFloatingWindow -> (displayWidth * 0.96f).toInt()
                         else -> (displayWidth * 0.94f).toInt()
                     }
@@ -1894,54 +1932,20 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             dialog?.show()
             resetDismissTimer()
 
-            // ---- Fit to screen, never scroll -------------------------------------
-            // Measure the deck at its natural height and, if that is taller than the
-            // visible window (4 streams in landscape, for example), scale the whole
-            // panel down so every button is on screen at the same time.
-            fun applyFitAndAnimate(attempt: Int = 0) {
-                val widthPx = chassis.width.takeIf { it > 0 } ?: chassisContainer.measuredWidth
-                if (widthPx <= 0 && attempt < 3) {
-                    chassis.postDelayed({ applyFitAndAnimate(attempt + 1) }, 60L)
-                    return
-                }
-                val naturalHeight = try {
-                    chassis.measure(
-                        android.view.View.MeasureSpec.makeMeasureSpec(widthPx, android.view.View.MeasureSpec.EXACTLY),
-                        android.view.View.MeasureSpec.makeMeasureSpec(Int.MAX_VALUE shr 2, android.view.View.MeasureSpec.AT_MOST),
-                    )
-                    chassis.measuredHeight
-                } catch (_: Throwable) {
-                    chassisContainer.measuredHeight
-                }
-                val rect = android.graphics.Rect()
-                dialog?.window?.decorView?.getWindowVisibleDisplayFrame(rect)
-                val avail = rect.height().takeIf { it > 0 }
-                    ?: resources.displayMetrics.heightPixels
-                var fit = 1f
-                if (naturalHeight > 0 && avail > 0 && naturalHeight > avail) {
-                    fit = avail.toFloat() / naturalHeight.toFloat()
-                    chassis.pivotX = widthPx / 2f
-                    chassis.pivotY = 0f
-                    chassisContainer.layoutParams = android.widget.FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        (naturalHeight * fit).toInt(),
-                    )
-                    chassisContainer.requestLayout()
-                }
-                chassis.alpha = 0f
-                chassis.scaleX = 0.96f * fit
-                chassis.scaleY = 0.96f * fit
-                chassis.translationY = dp(14).toFloat()
-                chassis.animate().alpha(1f).scaleX(fit).scaleY(fit).translationY(0f)
-                    .setDuration(160L)
-                    .setInterpolator(android.view.animation.OvershootInterpolator(0.6f))
-                    .start()
-            }
-            chassis.post { applyFitAndAnimate() }
+            // Crisp smooth entrance animation (NO scaling hack!)
+            chassis.alpha = 0f
+            chassis.translationY = dp(14).toFloat()
+            chassis.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setDuration(180L)
+                .setInterpolator(android.view.animation.DecelerateInterpolator())
+                .start()
         } catch (_: Throwable) {
             unlockControls()
         }
     }
+
 
     private fun showSlotQualityMenu(identity: String, slot: MultiviewSlotView) {
         val stream = slot.stream ?: return
@@ -2525,11 +2529,11 @@ class DjFaderView(
         strokeWidth = 2f
     }
     private val majorTickPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.parseColor("#FF8A00")
+        color = android.graphics.Color.parseColor("#00E5FF")
         strokeWidth = if (isCompact) 2.2f else 2.8f
     }
     private val midTickPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.parseColor("#FF8A00")
+        color = android.graphics.Color.parseColor("#00E5FF")
         strokeWidth = if (isCompact) 2.2f else 2.8f
     }
     private val medTickPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
@@ -2545,20 +2549,20 @@ class DjFaderView(
         style = android.graphics.Paint.Style.FILL
     }
     private val capBodyPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.parseColor("#222638")
+        color = android.graphics.Color.parseColor("#00E5FF")
         style = android.graphics.Paint.Style.FILL
     }
     private val capBorderPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.parseColor("#94A3B8")
+        color = android.graphics.Color.parseColor("#E0F7FA")
         style = android.graphics.Paint.Style.STROKE
         strokeWidth = 2f
     }
     private val knobGripPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.parseColor("#475569")
+        color = android.graphics.Color.parseColor("#0097A7")
         strokeWidth = 1.3f
     }
     private val capGlowPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.parseColor("#FF8A00")
+        color = android.graphics.Color.parseColor("#FFFFFF")
         strokeWidth = if (isCompact) 2.5f else 3.5f
     }
 
