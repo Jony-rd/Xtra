@@ -1006,7 +1006,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             }
             header.addView(if (portraitRes != 0) {
                 android.widget.ImageView(context).apply {
-                    layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(7) }
+                    layoutParams = LinearLayout.LayoutParams(dp(46), dp(46)).apply { marginEnd = dp(7) }
                     scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
                     clipToOutline = true
                     setImageResource(portraitRes)
@@ -1017,7 +1017,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                 }
             } else {
                 android.widget.TextView(context).apply {
-                    layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(7) }
+                    layoutParams = LinearLayout.LayoutParams(dp(46), dp(46)).apply { marginEnd = dp(7) }
                     text = "CIRI"
                     gravity = Gravity.CENTER
                     textSize = 8f
@@ -1035,6 +1035,27 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     }
                 }
             })
+
+            // Optional art layer: the same portrait, faded, sits behind the master
+            // plate like a holo-screen behind tinted glass.
+            val portraitDrawable = if (portraitRes != 0) {
+                try {
+                    context.getDrawable(portraitRes)?.mutate()?.apply {
+                        alpha = 72
+                        if (this is android.graphics.drawable.BitmapDrawable) {
+                            gravity = Gravity.FILL
+                        }
+                    }
+                } catch (_: Throwable) {
+                    null
+                }
+            } else null
+            fun plateWithArt(plate: android.graphics.drawable.Drawable): android.graphics.drawable.Drawable =
+                if (portraitDrawable != null) {
+                    android.graphics.drawable.LayerDrawable(arrayOf(plate, portraitDrawable))
+                } else {
+                    plate
+                }
 
             // Sleep Timer button
             val sleepBtn = android.widget.TextView(context).apply {
@@ -1114,7 +1135,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
                     cornerRadius = dp(8).toFloat()
                     setStroke(dp(1.4f), android.graphics.Color.parseColor("#FF2E88"))
                 }
-                background = bg
+                background = plateWithArt(bg)
                 val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                     bottomMargin = dp(5)
                 }
