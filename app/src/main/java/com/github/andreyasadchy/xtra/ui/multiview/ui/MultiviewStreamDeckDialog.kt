@@ -656,7 +656,7 @@ object MultiviewStreamDeckDialog {
                 val card = LinearLayout(context).apply {
                     orientation = LinearLayout.VERTICAL
                     val pSide = dp(if (isGridCell) 8 else 8)
-                    val pVert = dp(if (isGridCell) 5 else 5.5f)
+                    val pVert = dp(if (isGridCell) 5f else 5.5f)
                     setPadding(pSide, pVert, pSide, pVert)
                     background = GradientDrawable(
                         GradientDrawable.Orientation.TL_BR,
