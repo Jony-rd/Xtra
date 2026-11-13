@@ -63,6 +63,7 @@ class MultiviewViewModel(
         loadPlaylist = ::loadStreamPlaylist,
         loadCleanPlaylist = ::loadCleanStreamPlaylist,
         onSnapshot = ::updatePlaybackSnapshot,
+        checkStreamLive = ::isChannelLive,
     )
 
     fun initialize(initialStream: Stream?) {
@@ -281,6 +282,23 @@ class MultiviewViewModel(
     fun releaseAll() = playbackCoordinator.releaseAll()
     fun onStop(allowBackground: Boolean = true, inPictureInPicture: Boolean = false) =
         playbackCoordinator.onStop(allowBackground, inPictureInPicture)
+
+    private suspend fun isChannelLive(channelLogin: String): Boolean? {
+        return try {
+            val preferences = applicationContext.prefs()
+            val networkLibrary = preferences.getString(C.NETWORK_LIBRARY, C.OKHTTP)
+            val gqlHeaders = TwitchApiHelper.getGQLHeaders(applicationContext, true)
+            val user = graphQLRepository.loadQueryUsersStream(
+                networkLibrary = networkLibrary,
+                headers = gqlHeaders,
+                logins = listOf(channelLogin),
+            ).data?.users?.firstOrNull() ?: return null
+            user.stream != null
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            null
+        }
+    }
 
     suspend fun resolveLiveStream(channelLogin: String): Stream? {
         val preferences = applicationContext.prefs()

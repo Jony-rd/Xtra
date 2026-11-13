@@ -75,6 +75,7 @@ class MultiviewPlaybackCoordinator(
     private val loadPlaylist: suspend (String, Boolean) -> String,
     private val loadCleanPlaylist: suspend (String, List<String>, Boolean, Boolean) -> PlayerRepository.StreamPlaylistCandidate?,
     private val onSnapshot: (String, MultiviewPlaybackSnapshot) -> Unit,
+    private val checkStreamLive: (suspend (String) -> Boolean?)? = null,
 ) {
     private val applicationContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -170,6 +171,7 @@ class MultiviewPlaybackCoordinator(
             slot.retainDowngradeAtMost(1)
             slot.retryJob?.cancel()
             slot.loadJob?.cancel()
+            slot.liveCheckJob?.cancel()
             start(slot, force = true)
         }
     }
@@ -192,9 +194,11 @@ class MultiviewPlaybackCoordinator(
         slot.bufferingWatchdogJob = scope.launch {
             delay(WATCHDOG_BUFFERING_TIMEOUT_MS)
             if (!isActive || slots[slot.identity] !== slot) return@launch
-            val isStalled = slot.player.playbackState == Player.STATE_BUFFERING ||
-                slot.status == MultiviewSlotStatus.BUFFERING ||
-                slot.status == MultiviewSlotStatus.LOADING
+            val isStalled = slot.loadJob?.isActive != true && (
+                slot.player.playbackState == Player.STATE_BUFFERING ||
+                    slot.status == MultiviewSlotStatus.BUFFERING ||
+                    slot.status == MultiviewSlotStatus.LOADING
+                )
             if (isStalled) {
                 Log.i(TAG, "channel=${slot.identity} watchdog triggered after buffering/loading timeout, recovering (playbackState=${slot.player.playbackState}, status=${slot.status})")
                 slot.reloadRequired = true
@@ -216,7 +220,29 @@ class MultiviewPlaybackCoordinator(
         slots.values.forEach { slot ->
             restoreBackgroundVideo(slot)
             slot.attachedView?.let { attach(slot.identity, it) }
-            slot.player.playWhenReady = shouldPlayWhenReady(slot)
+            val stuckLoading = slot.status == MultiviewSlotStatus.LOADING && slot.loadJob?.isActive != true
+            val needsPrepare = slot.hasMediaSource &&
+                (slot.player.playbackState == Player.STATE_IDLE || slot.player.playbackState == Player.STATE_ENDED)
+            val missingSource = !slot.hasMediaSource && slot.loadJob?.isActive != true
+            when {
+                stuckLoading || missingSource -> {
+                    slot.reloadRequired = true
+                    start(slot, force = true)
+                }
+                needsPrepare -> {
+                    slot.reloadRequired = true
+                    recoverSlot(slot, null)
+                }
+                else -> {
+                    slot.player.playWhenReady = shouldPlayWhenReady(slot)
+                    if (slot.player.playbackState == Player.STATE_BUFFERING ||
+                        slot.status == MultiviewSlotStatus.BUFFERING ||
+                        slot.status == MultiviewSlotStatus.LOADING
+                    ) {
+                        scheduleBufferingWatchdog(slot)
+                    }
+                }
+            }
         }
         maintainBackgroundPlaybackService()
     }
@@ -404,6 +430,8 @@ class MultiviewPlaybackCoordinator(
                         Player.STATE_READY -> {
                             slot.bufferingWatchdogJob?.cancel()
                             slot.bufferingWatchdogJob = null
+                            slot.liveCheckJob?.cancel()
+                            slot.liveCheckJob = null
                             slot.markReady()
                             slot.retryCount = 0
                             slot.manualRetry = false
@@ -417,8 +445,16 @@ class MultiviewPlaybackCoordinator(
                             publish(slot, MultiviewSlotStatus.OFFLINE)
                         }
                         Player.STATE_IDLE -> {
-                            slot.bufferingWatchdogJob?.cancel()
-                            slot.bufferingWatchdogJob = null
+                            if (slot.hasMediaSource &&
+                                foreground &&
+                                slot.loadJob?.isActive != true &&
+                                (slot.status == MultiviewSlotStatus.LOADING || slot.status == MultiviewSlotStatus.BUFFERING)
+                            ) {
+                                scheduleBufferingWatchdog(slot)
+                            } else {
+                                slot.bufferingWatchdogJob?.cancel()
+                                slot.bufferingWatchdogJob = null
+                            }
                         }
                     }
                 }
@@ -519,6 +555,7 @@ class MultiviewPlaybackCoordinator(
     ) {
         slot.retryJob?.cancel()
         slot.loadJob?.cancel()
+        slot.liveCheckJob?.cancel()
         slot.target = null
         slot.effectiveQualityLabel = null
         if (force) {
@@ -539,7 +576,11 @@ class MultiviewPlaybackCoordinator(
             try {
                 val login = slot.stream.channelLogin?.trim()?.lowercase()
                     ?: throw IllegalArgumentException("missing channel login")
-                val selection = requestedSelection ?: loadPlaylistUrl(slot, login)
+                val selection = requestedSelection ?: (
+                    withTimeoutOrNull(PLAYLIST_LOAD_TIMEOUT_MS) {
+                        loadPlaylistUrl(slot, login)
+                    } ?: throw IOException("Playlist load timed out")
+                )
                 if (!isActive || slots[slot.identity] !== slot) return@launch
                 slot.customProxy = selection.customProxy
                 slot.currentPlayerType = selection.playerType
@@ -562,7 +603,7 @@ class MultiviewPlaybackCoordinator(
                             lowLatencyEnabled = liveSettings.lowLatencyEnabled,
                         ),
                     )
-                    .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(6))
+                    .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(3))
                     .createMediaSource(mediaItem)
                 slot.player.setMediaSource(source)
                 slot.hasMediaSource = true
@@ -647,8 +688,24 @@ class MultiviewPlaybackCoordinator(
         if (isOffline) {
             slot.retryJob?.cancel()
             slot.bufferingWatchdogJob?.cancel()
+            slot.liveCheckJob?.cancel()
             publish(slot, MultiviewSlotStatus.OFFLINE, retryAvailable = true)
             return
+        }
+        val login = slot.stream.channelLogin?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
+        if (!slot.customProxy && checkStreamLive != null && login != null) {
+            slot.liveCheckJob?.cancel()
+            slot.liveCheckJob = scope.launch {
+                val live = withTimeoutOrNull(LIVE_STATUS_CHECK_TIMEOUT_MS) {
+                    runCatching { checkStreamLive.invoke(login) }.getOrNull()
+                }
+                if (!isActive || slots[slot.identity] !== slot) return@launch
+                if (live == false && slot.status != MultiviewSlotStatus.LIVE) {
+                    slot.retryJob?.cancel()
+                    slot.bufferingWatchdogJob?.cancel()
+                    publish(slot, MultiviewSlotStatus.OFFLINE, retryAvailable = true)
+                }
+            }
         }
 
         if (!hasValidatedNetwork()) {
@@ -1341,6 +1398,7 @@ class MultiviewPlaybackCoordinator(
         var vaftAvoidanceJob: Job? = null
         var primaryRestoreJob: Job? = null
         var bufferingWatchdogJob: Job? = null
+        var liveCheckJob: Job? = null
         val vaftController = TwitchVaftController()
         var retryCount: Int = 0
         private var recoveryState = MultiviewQualityRecoveryState()
@@ -1411,6 +1469,8 @@ class MultiviewPlaybackCoordinator(
             primaryRestoreJob?.cancel()
             bufferingWatchdogJob?.cancel()
             bufferingWatchdogJob = null
+            liveCheckJob?.cancel()
+            liveCheckJob = null
             attachedView?.let { view ->
                 if (view.player === player) {
                     logVideoSurfaceBinding("multiview_detach", player, view, view.player)
@@ -1428,6 +1488,8 @@ class MultiviewPlaybackCoordinator(
         private const val LIVE_PRIORITY_CATCH_UP_COOLDOWN_MS = 15_000L
         private const val MAX_RETRIES = 6
         private const val WATCHDOG_BUFFERING_TIMEOUT_MS = 6_000L
+        private const val PLAYLIST_LOAD_TIMEOUT_MS = 10_000L
+        private const val LIVE_STATUS_CHECK_TIMEOUT_MS = 4_000L
         private const val NETWORK_RETRY_DELAY_MS = 15_000L
         private const val PRIMARY_RESTORE_INTERVAL_MS = 10_000L
         private const val FRAME_RATE_TOLERANCE = 0.5f

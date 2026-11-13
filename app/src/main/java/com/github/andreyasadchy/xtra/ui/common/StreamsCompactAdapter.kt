@@ -1,6 +1,9 @@
 package com.github.andreyasadchy.xtra.ui.common
 
+import android.content.res.ColorStateList
+import android.graphics.Color
 import android.view.LayoutInflater
+import androidx.core.graphics.ColorUtils
 import android.view.View
 import android.view.ViewGroup
 import androidx.fragment.app.Fragment
@@ -33,6 +36,8 @@ class StreamsCompactAdapter(
     private val showGame: Boolean = true,
     private val onStreamClick: ((Stream) -> Unit)? = null,
     private val recordSearchHistory: Boolean = false,
+    private val isStreamExcluded: ((Stream) -> Boolean)? = null,
+    private val isStreamSelected: ((Stream) -> Boolean)? = null,
 ) : PagingDataAdapter<Stream, StreamsCompactAdapter.PagingViewHolder>(
     object : DiffUtil.ItemCallback<Stream>() {
         override fun areItemsTheSame(oldItem: Stream, newItem: Stream): Boolean =
@@ -92,13 +97,24 @@ class StreamsCompactAdapter(
         holder.bind(getItem(position))
     }
 
+    fun refreshSelection() {
+        notifyItemRangeChanged(0, itemCount, PAYLOAD_SELECTION)
+    }
+
     override fun onBindViewHolder(holder: PagingViewHolder, position: Int, payloads: MutableList<Any>) {
-        if (payloads.isNotEmpty() && payloads.all { it === StreamThumbnailChangedPayload }) {
-            holder.beginThumbnailRefresh()
-            holder.bindThumbnail(getItem(position))
-        } else {
-            super.onBindViewHolder(holder, position, payloads)
+        if (payloads.isNotEmpty()) {
+            val item = getItem(position)
+            if (payloads.all { it === StreamThumbnailChangedPayload }) {
+                holder.beginThumbnailRefresh()
+                holder.bindThumbnail(item)
+                return
+            }
+            if (payloads.all { it === PAYLOAD_SELECTION }) {
+                holder.bindSelectionState(item)
+                return
+            }
         }
+        super.onBindViewHolder(holder, position, payloads)
     }
 
     override fun onViewRecycled(holder: PagingViewHolder) {
@@ -127,6 +143,9 @@ class StreamsCompactAdapter(
         private var boundThumbnailKey: String? = null
         private var boundStream: Stream? = null
         private val uptimeBinder = StreamCardUptimeBinder(binding.uptime)
+        private val defaultStrokeWidth = binding.root.strokeWidth
+        private val defaultStrokeColor: ColorStateList? = binding.root.strokeColorStateList
+        private val defaultCardBackground: ColorStateList? = binding.root.cardBackgroundColor
         private val dropsBadgeBinder = StreamDropsBadgeBinder(binding.dropsBadge) { stream ->
             StreamDropsBottomSheet.show(fragment, stream)
         }
@@ -137,7 +156,11 @@ class StreamsCompactAdapter(
             binding.userImage.setOnClickListener { boundStream?.let(::openChannel) }
             binding.username.setOnClickListener { boundStream?.let(::openChannel) }
             binding.gameName.setOnClickListener { boundStream?.let(::openGame) }
-            binding.multiview.setOnClickListener { boundStream?.let(::openMultiview) }
+            binding.multiview.setOnClickListener {
+                boundStream?.let { stream ->
+                    if (onStreamClick != null) openStream(stream) else openMultiview(stream)
+                }
+            }
             tagViews.setOnTagClickListener { tag ->
                 boundStream?.let { stream ->
                     if (onStreamClick != null) onStreamClick.invoke(stream) else selectTag(tag)
@@ -208,6 +231,9 @@ class StreamsCompactAdapter(
                 if (item != null) {
                     val context = fragment.requireContext()
                     dropsBadgeBinder.bind(item)
+                    if (onStreamClick != null) {
+                        dropsBadge.setOnClickListener { boundStream?.let(::openStream) }
+                    }
                     val uiPreferences = FeedUiPreferencesStore.current(context)
                     uptimeBinder.bind(item.createdAt, uiPreferences.showUptime)
                     val presentation = StreamCardPresentationCache.get(item, uiPreferences)
@@ -306,6 +332,38 @@ class StreamsCompactAdapter(
                     liveBadge.visibility = View.GONE
                 }
             }
+            bindSelectionState(item)
+        }
+
+        fun bindSelectionState(item: Stream?) {
+            if (isStreamExcluded == null && isStreamSelected == null) return
+            val excluded = item != null && isStreamExcluded?.invoke(item) == true
+            val selected = item != null && !excluded && isStreamSelected?.invoke(item) == true
+            binding.root.alpha = if (excluded) 0.45f else 1f
+            binding.root.isEnabled = !excluded
+            binding.root.isClickable = !excluded
+            binding.root.contentDescription = if (excluded) {
+                "${item?.channelName ?: item?.channelLogin.orEmpty()}, ${binding.root.context.getString(R.string.multiview_already_added)}"
+            } else {
+                item?.channelName ?: item?.channelLogin
+            }
+            if (selected) {
+                val accent = Color.parseColor("#00F5D4")
+                binding.root.strokeWidth = (2.5f * binding.root.resources.displayMetrics.density).toInt()
+                binding.root.strokeColor = accent
+                val baseColor = defaultCardBackground?.defaultColor ?: Color.parseColor("#181A24")
+                binding.root.setCardBackgroundColor(ColorUtils.blendARGB(baseColor, accent, 0.14f))
+            } else {
+                binding.root.strokeWidth = defaultStrokeWidth
+                if (defaultStrokeColor != null) {
+                    binding.root.setStrokeColor(defaultStrokeColor)
+                } else {
+                    binding.root.strokeColor = 0
+                }
+                if (defaultCardBackground != null) {
+                    binding.root.setCardBackgroundColor(defaultCardBackground)
+                }
+            }
         }
 
         private fun applyPresentation(presentation: StreamCardPresentation) {
@@ -339,6 +397,7 @@ class StreamsCompactAdapter(
         }
 
         private fun openStream(stream: Stream) {
+            if (isStreamExcluded?.invoke(stream) == true) return
             val ctx = fragment.context ?: return
             if (recordSearchHistory) SearchHistoryRecorder.channel(ctx, stream)
             if (onStreamClick != null) {
@@ -349,6 +408,7 @@ class StreamsCompactAdapter(
         }
 
         private fun openChannel(stream: Stream) {
+            if (isStreamExcluded?.invoke(stream) == true) return
             val ctx = fragment.context ?: return
             if (recordSearchHistory) SearchHistoryRecorder.channel(ctx, stream)
             if (onStreamClick != null) {
@@ -367,6 +427,7 @@ class StreamsCompactAdapter(
         }
 
         private fun openGame(stream: Stream) {
+            if (isStreamExcluded?.invoke(stream) == true) return
             if (showGame && !stream.gameName.isNullOrBlank()) {
                 val ctx = fragment.context ?: return
                 if (recordSearchHistory) SearchHistoryRecorder.game(ctx, stream)
@@ -442,5 +503,9 @@ class StreamsCompactAdapter(
                         )
                     }
                 }
+    }
+
+    private companion object {
+        val PAYLOAD_SELECTION = Any()
     }
 }

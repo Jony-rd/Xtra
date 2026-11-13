@@ -11,13 +11,17 @@ import androidx.lifecycle.lifecycleScope
 import androidx.paging.LoadState
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.github.andreyasadchy.xtra.R
+import com.github.andreyasadchy.xtra.XtraApp
 import com.github.andreyasadchy.xtra.databinding.FragmentAddMultiviewStreamsBinding
 import com.github.andreyasadchy.xtra.model.ui.Stream
+import com.github.andreyasadchy.xtra.repository.streamfeed.RefreshReason
+import com.github.andreyasadchy.xtra.ui.common.StreamPreloadViewportController
+import com.github.andreyasadchy.xtra.ui.common.StreamsCompactAdapter
 import com.github.andreyasadchy.xtra.ui.following.streams.FollowedStreamsViewModel
 import com.github.andreyasadchy.xtra.ui.multiview.MultiviewFragment
-import com.google.android.material.bottomsheet.BottomSheetDialogFragment
-import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.R as MaterialR
+import com.google.android.material.bottomsheet.BottomSheetBehavior
+import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -28,7 +32,8 @@ class AddMultiviewStreamsSheet : BottomSheetDialogFragment() {
         FollowedStreamsViewModel.FollowedStreamsViewModelFactory
     }
     private val selected = linkedMapOf<String, Stream>()
-    private lateinit var adapter: MultiviewPickerAdapter
+    private lateinit var adapter: StreamsCompactAdapter
+    private lateinit var streamPreloadViewportController: StreamPreloadViewportController
     private var excluded: Set<String> = emptySet()
     private var maxSelection = 1
     private var submitted = false
@@ -50,13 +55,24 @@ class AddMultiviewStreamsSheet : BottomSheetDialogFragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        adapter = MultiviewPickerAdapter(
-            isExcluded = { stableIdentity(it) in excluded },
-            isSelected = { stableIdentity(it) in selected },
-            onClick = ::toggleSelection,
+        adapter = StreamsCompactAdapter(
+            fragment = this,
+            selectTag = {},
+            showGame = true,
+            onStreamClick = ::toggleSelection,
+            recordSearchHistory = false,
+            isStreamExcluded = { stableIdentity(it) in excluded },
+            isStreamSelected = { stableIdentity(it) in selected },
         )
         binding.streamList.layoutManager = LinearLayoutManager(requireContext())
         binding.streamList.adapter = adapter
+        streamPreloadViewportController = StreamPreloadViewportController(
+            fragment = this,
+            coordinator = (requireActivity().application as XtraApp).xtraModule.streamPreloadCoordinator,
+            viewportKey = "multiview-picker-streams",
+            recyclerView = binding.streamList,
+            streamAtPosition = adapter::peek,
+        ).also { it.start() }
         binding.pickerLimit.text = getString(R.string.multiview_picker_limit, maxSelection)
         binding.cancelButton.setOnClickListener { dismiss() }
         binding.addButton.setOnClickListener { submitSelection() }
@@ -72,6 +88,9 @@ class AddMultiviewStreamsSheet : BottomSheetDialogFragment() {
         }
         updateSelectionUi()
 
+        followedStreamsViewModel.syncCurrentAccount()
+        followedStreamsViewModel.refreshCurrent(RefreshReason.SCREEN_VISIBLE)
+
         viewLifecycleOwner.lifecycleScope.launch {
             followedStreamsViewModel.pagingFlow.collectLatest { adapter.submitData(it) }
         }
@@ -79,7 +98,7 @@ class AddMultiviewStreamsSheet : BottomSheetDialogFragment() {
             adapter.loadStateFlow.collectLatest { states ->
                 val loading = states.refresh is LoadState.Loading
                 val error = states.refresh is LoadState.Error
-                binding.loading.isVisible = loading
+                binding.loading.isVisible = loading && adapter.itemCount == 0
                 binding.errorState.isVisible = error && adapter.itemCount == 0
                 binding.emptyState.isVisible = !loading && !error && states.refresh is LoadState.NotLoading && adapter.itemCount == 0
             }
@@ -93,8 +112,23 @@ class AddMultiviewStreamsSheet : BottomSheetDialogFragment() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (::streamPreloadViewportController.isInitialized) {
+            streamPreloadViewportController.onResume()
+        }
+    }
+
+    override fun onPause() {
+        if (::streamPreloadViewportController.isInitialized) {
+            streamPreloadViewportController.onPause()
+        }
+        super.onPause()
+    }
+
     private fun toggleSelection(stream: Stream) {
         val identity = stableIdentity(stream) ?: return
+        if (identity in excluded) return
         if (selected.remove(identity) == null) {
             if (selected.size >= maxSelection) return
             selected[identity] = stream
@@ -154,6 +188,10 @@ class AddMultiviewStreamsSheet : BottomSheetDialogFragment() {
     }
 
     override fun onDestroyView() {
+        if (::streamPreloadViewportController.isInitialized) {
+            streamPreloadViewportController.stop()
+        }
+        _binding?.streamList?.adapter = null
         _binding = null
         super.onDestroyView()
     }
