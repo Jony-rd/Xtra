@@ -813,15 +813,31 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             .show()
     }
 
+    private fun computeStreamDeckAnchorBottomPx(): Int? {
+        val binding = _binding ?: return null
+        if (resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) return null
+        val anchorView = when {
+            binding.chatContainer.isVisible && binding.chatHeader.isShown -> binding.chatHeader
+            !latestState.fillVideo && binding.videoGrid.isShown -> binding.videoGrid
+            else -> return null
+        }
+        val loc = IntArray(2)
+        anchorView.getLocationOnScreen(loc)
+        val bottom = loc[1] + anchorView.height
+        return bottom.takeIf { it > 0 }
+    }
+
     private fun showStreamDeckPanel() {
         val context = context ?: return
         if (latestState.streams.isEmpty()) return
         lockControls()
         val isFloatingWindow = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && activity?.isInMultiWindowMode == true) ||
             resources.configuration.screenHeightDp < 520
+        val anchorBottomPx = computeStreamDeckAnchorBottomPx()
         MultiviewStreamDeckDialog.show(
             context = context,
             isFloatingWindow = isFloatingWindow,
+            anchorBottomPx = anchorBottomPx,
             stateProvider = { latestState },
             playbackProvider = { latestPlayback },
             viewModel = viewModel,
