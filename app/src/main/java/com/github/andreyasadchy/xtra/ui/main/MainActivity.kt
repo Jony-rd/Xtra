@@ -366,6 +366,10 @@ class MainActivity : AppCompatActivity() {
         binding.bottomSearch.setOnClickListener {
             navController.navigate(R.id.action_global_searchPagerFragment)
         }
+        binding.bottomSearch.setOnLongClickListener {
+            openNavigationTabCustomization()
+            true
+        }
         binding.tvAccount.setOnClickListener { openTvAccount() }
         binding.tvSettings.setOnClickListener {
             settingsResultLauncher?.launch(Intent(this, com.github.andreyasadchy.xtra.ui.settings.SettingsActivity::class.java))
@@ -2100,9 +2104,7 @@ class MainActivity : AppCompatActivity() {
                 val menuView = getChildAt(0) as? ViewGroup ?: return@post
                 for (index in 0 until minOf(menu.size(), menuView.childCount)) {
                     menuView.getChildAt(index).setOnLongClickListener {
-                        settingsResultLauncher?.let {
-                            openTabCustomization(C.UI_NAVIGATION_TAB_LIST, it)
-                        } ?: openTabCustomization(C.UI_NAVIGATION_TAB_LIST)
+                        openNavigationTabCustomization()
                         true
                     }
                 }
@@ -2138,6 +2140,12 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    private fun openNavigationTabCustomization() {
+        settingsResultLauncher?.let {
+            openTabCustomization(C.UI_NAVIGATION_TAB_LIST, it)
+        } ?: openTabCustomization(C.UI_NAVIGATION_TAB_LIST)
     }
 
     private fun configureTvRootFocusOrder() {

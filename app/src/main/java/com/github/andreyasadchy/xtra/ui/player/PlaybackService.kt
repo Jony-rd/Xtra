@@ -93,6 +93,7 @@ import com.github.andreyasadchy.xtra.util.C
 import com.github.andreyasadchy.xtra.util.AdaptiveLivePlaybackController
 import com.github.andreyasadchy.xtra.util.FixedSpeedLivePlaybackControl
 import com.github.andreyasadchy.xtra.util.LivePlaybackSettings
+import com.github.andreyasadchy.xtra.util.shouldRunAdaptiveLiveSampleTicker
 import com.github.andreyasadchy.xtra.util.TwitchApiHelper
 import com.github.andreyasadchy.xtra.util.httpProxyHost
 import com.github.andreyasadchy.xtra.util.httpProxyPort
@@ -497,6 +498,7 @@ class PlaybackService : MediaSessionService() {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     updateHiddenStreamAudio()
                     if (playbackState == Player.STATE_READY) systemReplayRollback = null
+                    updateAdaptiveLiveSampleTicker(player)
                     updateVaft(player)
                     updateViewingStats(player)
                     if (BuildConfig.DEBUG) {
@@ -720,6 +722,7 @@ class PlaybackService : MediaSessionService() {
                     syncVodClipSource()
                     captureLiveClipManifest()
                     refreshMediaButtonPreferencesIfSeekabilityChanged(player)
+                    updateAdaptiveLiveSampleTicker(player)
                 }
 
                 override fun onAudioSessionIdChanged(audioSessionId: Int) {
@@ -2490,10 +2493,14 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun shouldRunLiveSampleTicker(player: Player): Boolean =
-        viewingContentType == ViewingPlaybackMetadata.CONTENT_TYPE_LIVE &&
-            (isLivePlaybackWindow(player) &&
-                (player.isPlaying || prefs().getBoolean(C.SYSTEM_MEDIA_CONTROLS_ENABLED, true)) ||
-                liveRewindActive && player.currentMediaItem != null)
+        shouldRunAdaptiveLiveSampleTicker(
+            isLiveContent = viewingContentType == ViewingPlaybackMetadata.CONTENT_TYPE_LIVE,
+            isDynamicLiveItem = player.isCurrentMediaItemDynamic,
+            isPlaying = player.isPlaying,
+            systemMediaControlsEnabled = prefs().getBoolean(C.SYSTEM_MEDIA_CONTROLS_ENABLED, true),
+            isLiveRewindActive = liveRewindActive,
+            hasCurrentItem = player.currentMediaItem != null,
+        )
 
     private fun isLivePlaybackWindow(player: Player): Boolean =
         viewingContentType == ViewingPlaybackMetadata.CONTENT_TYPE_LIVE &&
@@ -2933,7 +2940,7 @@ class PlaybackService : MediaSessionService() {
 
     private fun maybeCatchUpLivePlayback(player: Player) {
         if (!player.isPlaying || !isLocalLive() || liveRewindActive || liveRewindTransitioning ||
-            prefs().getString(C.PLAYER_VAFT_PLAYBACK_PRIORITY, C.VAFT_PRIORITY_CONTINUITY) != C.VAFT_PRIORITY_LIVE
+            prefs().getString(C.PLAYER_VAFT_PLAYBACK_PRIORITY, C.VAFT_PRIORITY_LIVE) != C.VAFT_PRIORITY_LIVE
         ) return
 
         val liveOffsetMs = player.currentLiveOffset
@@ -3844,7 +3851,7 @@ class PlaybackService : MediaSessionService() {
                     }
                 }
                 if (player.isPlaying && prefs().isVaftEnabled() &&
-                    prefs().getString(C.PLAYER_VAFT_PLAYBACK_PRIORITY, C.VAFT_PRIORITY_CONTINUITY) == C.VAFT_PRIORITY_LIVE &&
+                    prefs().getString(C.PLAYER_VAFT_PLAYBACK_PRIORITY, C.VAFT_PRIORITY_LIVE) == C.VAFT_PRIORITY_LIVE &&
                     livePositionMs - player.currentPosition > 6_000L) {
                     if (BuildConfig.DEBUG) Log.d("XtraVaftFeed",
                         "event=live_priority_catch_up skippedMs=${livePositionMs - player.currentPosition}")
