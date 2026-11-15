@@ -38,6 +38,7 @@ import com.github.andreyasadchy.xtra.player.hls.TwitchHlsPlaylistParserFactory
 import com.github.andreyasadchy.xtra.player.lowlatency.HttpEngineDataSource
 import com.github.andreyasadchy.xtra.player.lowlatency.OkHttpDataSource
 import com.github.andreyasadchy.xtra.ui.common.logVideoSurfaceBinding
+import com.github.andreyasadchy.xtra.ui.player.LiveBufferHealthTrend
 import com.github.andreyasadchy.xtra.ui.player.TwitchVaftController
 import com.github.andreyasadchy.xtra.util.C
 import com.github.andreyasadchy.xtra.util.AdaptiveLiveLoadControl
@@ -84,6 +85,7 @@ class MultiviewPlaybackCoordinator(
     }
     private val slots = linkedMapOf<String, MultiviewPlayerSlot>()
     private val tileBounds = mutableMapOf<String, Pair<Int, Int>>()
+    private val healthWindow = Timeline.Window()
     private var activeIdentity: String? = null
     private var focusedIdentity: String? = null
     private var qualityMode = MultiviewQualityMode.AUTO
@@ -350,6 +352,58 @@ class MultiviewPlaybackCoordinator(
 
     fun currentTarget(identity: String): MultiviewQualityTarget? = slots[identity]?.target
 
+    fun liveHealthSnapshot(): Map<String, MultiviewLiveHealth> {
+        val nowMs = SystemClock.elapsedRealtime()
+        val result = linkedMapOf<String, MultiviewLiveHealth>()
+        slots.forEach { (identity, slot) ->
+            val player = slot.player
+            val state = player.playbackState
+            val hasVideo = player.videoSize.width > 0 && player.videoSize.height > 0
+            val bufferMs = (player.bufferedPosition - player.currentPosition).coerceAtLeast(0L)
+            val timeline = player.currentTimeline
+            val window = if (!timeline.isEmpty && player.currentMediaItemIndex in 0 until timeline.windowCount) {
+                timeline.getWindow(player.currentMediaItemIndex, healthWindow)
+            } else {
+                null
+            }
+            val liveOffsetMs = if (window != null && window.windowStartTimeMs != androidx.media3.common.C.TIME_UNSET) {
+                (window.currentUnixTimeMs - window.windowStartTimeMs - player.currentPosition).coerceAtLeast(0L)
+            } else {
+                player.currentLiveOffset.takeIf { it != androidx.media3.common.C.TIME_UNSET && it >= 0L }
+            }
+            val allowReading = player.playWhenReady && hasVideo &&
+                (state == Player.STATE_READY || state == Player.STATE_BUFFERING)
+            val reading = if (allowReading && liveOffsetMs != null) {
+                slot.bufferHealthTrend.update(bufferMs, liveOffsetMs, nowMs)
+            } else {
+                slot.bufferHealthTrend.reset()
+                null
+            }
+            if (reading != null) {
+                result[identity] = MultiviewLiveHealth(
+                    bufferSeconds = reading.bufferSeconds,
+                    liveOffsetSeconds = reading.liveOffsetSeconds,
+                    isDecreasing = reading.isDecreasing,
+                    isBuffering = state == Player.STATE_BUFFERING,
+                    isLiveReady = state == Player.STATE_READY,
+                )
+            } else if (
+                state == Player.STATE_BUFFERING ||
+                slot.status == MultiviewSlotStatus.BUFFERING ||
+                slot.status == MultiviewSlotStatus.LOADING
+            ) {
+                result[identity] = MultiviewLiveHealth(
+                    bufferSeconds = ((bufferMs + 500L) / 1_000L).toInt(),
+                    liveOffsetSeconds = ((liveOffsetMs ?: 0L).coerceAtLeast(0L) / 1_000L).toInt(),
+                    isDecreasing = false,
+                    isBuffering = true,
+                    isLiveReady = false,
+                )
+            }
+        }
+        return result
+    }
+
     private fun createSlot(identity: String, stream: Stream): MultiviewPlayerSlot {
         val liveSettings = LivePlaybackSettings.fromPreferences(applicationContext.prefs())
         val livePolicies = liveSettings.policies()
@@ -558,6 +612,7 @@ class MultiviewPlaybackCoordinator(
         slot.liveCheckJob?.cancel()
         slot.target = null
         slot.effectiveQualityLabel = null
+        slot.bufferHealthTrend.reset()
         if (force) {
             slot.player.stop()
             slot.hasMediaSource = false
@@ -1400,6 +1455,7 @@ class MultiviewPlaybackCoordinator(
         var bufferingWatchdogJob: Job? = null
         var liveCheckJob: Job? = null
         val vaftController = TwitchVaftController()
+        internal val bufferHealthTrend = LiveBufferHealthTrend()
         var retryCount: Int = 0
         private var recoveryState = MultiviewQualityRecoveryState()
         val downgradeLevel: Int get() = recoveryState.downgradeLevel
@@ -1514,4 +1570,12 @@ data class MultiviewPlaybackSnapshot(
     val availableQualities: List<String> = emptyList(),
     val retryCount: Int = 0,
     val retryAvailable: Boolean = false,
+)
+
+data class MultiviewLiveHealth(
+    val bufferSeconds: Int,
+    val liveOffsetSeconds: Int,
+    val isDecreasing: Boolean,
+    val isBuffering: Boolean,
+    val isLiveReady: Boolean,
 )

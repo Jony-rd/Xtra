@@ -218,6 +218,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             viewLifecycleOwner,
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
+                    if (MultiviewStreamDeckDialog.dismiss()) {
+                        return
+                    }
                     if (latestState.focusedIdentity != null) {
                         viewModel.setFocus(null)
                         revealControls()
@@ -239,6 +242,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     }
 
     override fun onStop() {
+        MultiviewStreamDeckDialog.dismiss()
         exitImmersiveMode()
         if ((activity as? MainActivity)?.playerFragment != null) {
             suppressBackgroundOnNextStop = false
@@ -309,6 +313,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     }
 
     override fun onDestroyView() {
+        MultiviewStreamDeckDialog.dismiss()
         viewModel.stopRaidMonitoring()
         swipeGestureController?.release(restoreBrightness = true)
         swipeGestureController = null
@@ -466,9 +471,13 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         portraitHeightWidthRatio = 9f / 16f,
     )
 
-    private fun applyLayout(state: MultiviewSessionState) {
+    private fun isEffectiveLandscape(): Boolean {
         val inPip = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && (activity?.isInPictureInPictureMode == true)
-        val landscape = if (inPip) !pipEnteredFromPortrait else resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        return if (inPip) !pipEnteredFromPortrait else resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    }
+
+    private fun applyLayout(state: MultiviewSessionState) {
+        val landscape = isEffectiveLandscape()
         val plan = MultiviewLayoutManager.plan(
             identities = state.identities,
             activeIdentity = state.activeIdentity,
@@ -559,7 +568,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         val parentHeight = binding.videoGrid.height
         if (parentWidth <= 0 || parentHeight <= 0) return
 
-        val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val landscape = isEffectiveLandscape()
         val specialTwoStream = isTwoStreamLandscapeChatOff()
         val placements = latestLayoutPlan.placements
         val firstIdentity = placements.firstOrNull()?.identity
@@ -635,7 +644,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     }
 
     private fun isTwoStreamLandscapeChatOff(state: MultiviewSessionState = latestState): Boolean {
-        return resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE &&
+        return isEffectiveLandscape() &&
             !state.chatVisible &&
             state.streams.size == 2
     }
@@ -828,6 +837,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     }
 
     private fun showStreamDeckPanel() {
+        val binding = _binding ?: return
+        if (MultiviewStreamDeckDialog.dismiss()) return
         val context = context ?: return
         if (latestState.streams.isEmpty()) return
         lockControls()
@@ -836,10 +847,14 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         val anchorBottomPx = computeStreamDeckAnchorBottomPx()
         MultiviewStreamDeckDialog.show(
             context = context,
+            hostContainer = binding.streamDeckHost,
+            toolbarView = binding.controlsOverlay,
+            toggleButton = binding.streamDeckButton,
             isFloatingWindow = isFloatingWindow,
             anchorBottomPx = anchorBottomPx,
             stateProvider = { latestState },
             playbackProvider = { latestPlayback },
+            healthProvider = { viewModel.playbackCoordinator.liveHealthSnapshot() },
             viewModel = viewModel,
             onOpenSleepTimer = {
                 SleepTimerDialog.newInstance((activity as? MainActivity)?.getSleepTimerTimeLeft() ?: 0)
@@ -1061,10 +1076,11 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             binding.specialRightColumn.isVisible = false
             binding.controlsOverlay.visibility = View.GONE
             binding.multiviewRoot.orientation = if (pipEnteredFromPortrait) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
-            (binding.multiviewContent.layoutParams as? LinearLayout.LayoutParams)?.apply {
-                width = ViewGroup.LayoutParams.MATCH_PARENT
-                height = ViewGroup.LayoutParams.MATCH_PARENT
-                weight = 1f
+            (binding.multiviewContent.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
+                lp.width = ViewGroup.LayoutParams.MATCH_PARENT
+                lp.height = ViewGroup.LayoutParams.MATCH_PARENT
+                lp.weight = 1f
+                binding.multiviewContent.layoutParams = lp
             }
             binding.videoGrid.layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -1324,6 +1340,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
     fun prepareForPictureInPicture() {
         if (_binding == null) return
+        MultiviewStreamDeckDialog.dismiss()
         pipEnteredFromPortrait = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
         setControlsOverlayVisible(false)
         slotViews.values.forEach { it.setControlsVisible(false) }
@@ -1337,16 +1354,25 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         controlsHandler.removeCallbacks(hideControls)
         controlsLockCount = 0
         if (isInPictureInPictureMode) {
+            MultiviewStreamDeckDialog.dismiss()
             viewModel.onStart()
             setControlsOverlayVisible(false)
             slotViews.values.forEach { it.setControlsVisible(false) }
             binding.chatContainer.isVisible = false
             binding.controlsOverlay.visibility = View.GONE
+            renderedLayoutKey = null
+            updateOrientationLayout()
+            applyLayout(latestState)
+            binding.videoGrid.doOnLayout { renderTileBounds() }
         } else {
             pipEnteredFromPortrait = false
             binding.controlsOverlay.visibility = View.VISIBLE
+            renderedLayoutKey = null
+            updateOrientationLayout()
+            applyLayout(latestState)
             updateToolbar(latestState)
             updateChat(latestState)
+            binding.multiviewRoot.doOnLayout { renderTileBounds() }
             revealControls()
         }
     }

@@ -5,7 +5,9 @@ import android.os.Build
 import android.content.Context
 import android.view.GestureDetector
 import android.view.LayoutInflater
+import android.graphics.Rect
 import android.view.MotionEvent
+import android.view.TouchDelegate
 import android.view.View
 import android.view.ViewConfiguration
 import android.widget.FrameLayout
@@ -110,6 +112,19 @@ class MultiviewSlotView(context: Context) : FrameLayout(context) {
         binding.removeButton.setOnClickListener { onRemove?.invoke() }
         binding.audioIcon.setOnClickListener { onAudioClick?.invoke() }
         binding.statusMessage.setOnClickListener { onRetry?.invoke() }
+        binding.infoBar.addOnLayoutChangeListener { bar, _, _, _, _, _, _, _, _ ->
+            if (!binding.removeButton.isVisible) {
+                bar.touchDelegate = null
+                return@addOnLayoutChangeListener
+            }
+            val hit = Rect()
+            binding.removeButton.getHitRect(hit)
+            hit.top = 0
+            hit.bottom = bar.height
+            hit.right = bar.width
+            hit.left = (hit.left - dp(4)).coerceAtLeast(0)
+            bar.touchDelegate = TouchDelegate(hit, binding.removeButton)
+        }
         setControlsVisible(false)
     }
 

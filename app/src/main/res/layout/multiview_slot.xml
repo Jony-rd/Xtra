@@ -38,11 +38,13 @@
         android:layout_gravity="top"
         android:layout_margin="2dp"
         android:background="@drawable/bg_stream_overlay"
+        android:clickable="true"
+        android:focusable="false"
         android:gravity="center_vertical"
-        android:minHeight="28dp"
+        android:minHeight="36dp"
         android:orientation="horizontal"
-        android:paddingStart="6dp"
-        android:paddingEnd="2dp">
+        android:paddingStart="8dp"
+        android:paddingEnd="4dp">
 
         <TextView
             android:id="@+id/channelName"
@@ -70,13 +72,13 @@
 
         <ImageButton
             android:id="@+id/audioIcon"
-            android:layout_width="26dp"
-            android:layout_height="26dp"
+            android:layout_width="34dp"
+            android:layout_height="34dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:clickable="true"
             android:contentDescription="@string/multiview_audio_muted_short"
             android:focusable="true"
-            android:padding="3dp"
+            android:padding="6dp"
             android:scaleType="fitCenter"
             android:src="@drawable/baseline_volume_off_black_24"
             android:visibility="gone"
@@ -84,13 +86,13 @@
 
         <ImageButton
             android:id="@+id/dragHandle"
-            android:layout_width="26dp"
-            android:layout_height="26dp"
+            android:layout_width="34dp"
+            android:layout_height="34dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:clickable="true"
             android:contentDescription="Drag to reorder stream"
             android:focusable="true"
-            android:padding="3dp"
+            android:padding="6dp"
             android:scaleType="fitCenter"
             android:src="@drawable/outline_drag_handle_black_24"
             android:visibility="gone"
@@ -98,11 +100,12 @@
 
         <ImageButton
             android:id="@+id/overflowButton"
-            android:layout_width="26dp"
-            android:layout_height="26dp"
+            android:layout_width="34dp"
+            android:layout_height="34dp"
+            android:layout_marginStart="2dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/multiview_stream_actions"
-            android:padding="3dp"
+            android:padding="6dp"
             android:scaleType="fitCenter"
             android:src="@drawable/baseline_more_vert_black_24"
             android:visibility="gone"
@@ -110,11 +113,12 @@
 
         <ImageButton
             android:id="@+id/removeButton"
-            android:layout_width="26dp"
-            android:layout_height="26dp"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_marginStart="4dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/multiview_remove_stream"
-            android:padding="3dp"
+            android:padding="7dp"
             android:scaleType="fitCenter"
             android:src="@drawable/ic_close"
             android:visibility="gone"
