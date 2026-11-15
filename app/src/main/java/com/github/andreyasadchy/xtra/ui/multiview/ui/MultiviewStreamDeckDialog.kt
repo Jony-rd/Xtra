@@ -1762,7 +1762,7 @@ object MultiviewStreamDeckDialog {
     }
 }
 
-class DjFaderView @JvmOverloads constructor(
+class DjFaderView(
     context: Context,
     initialVolume: Float,
     private val isCompact: Boolean = false,
@@ -1776,24 +1776,6 @@ class DjFaderView @JvmOverloads constructor(
     private val onDragStateChanged: ((Boolean) -> Unit)? = null,
     private val onVolumeChanged: (Float) -> Unit,
 ) : View(context) {
-    constructor(
-        context: Context,
-        initialVolume: Float,
-        onVolumeChanged: (Float) -> Unit,
-    ) : this(
-        context,
-        initialVolume,
-        false,
-        "#A855F7",
-        "#C084FC",
-        "#1D1036",
-        "#7E22CE",
-        "#776D28D9",
-        "#C2FF00",
-        "#6664748B",
-        null,
-        onVolumeChanged,
-    )
 
     private var volume: Float = initialVolume.coerceIn(0f, 1f)
     private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -1921,6 +1903,7 @@ class DjFaderView @JvmOverloads constructor(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (!isEnabled) return false
         val pad = capWidth / 2f + dpToPx(if (isCompact) 3f else 4f)
         val trackW = width.toFloat() - (pad * 2f)
         if (trackW <= 0f) return super.onTouchEvent(event)
