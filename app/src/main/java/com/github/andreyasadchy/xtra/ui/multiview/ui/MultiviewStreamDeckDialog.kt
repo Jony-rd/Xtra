@@ -1,6 +1,9 @@
 package com.github.andreyasadchy.xtra.ui.multiview.ui
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Canvas
@@ -15,6 +18,7 @@ import android.graphics.drawable.LayerDrawable
 import android.graphics.drawable.RippleDrawable
 import android.graphics.drawable.StateListDrawable
 import android.media.AudioManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.text.TextUtils
@@ -31,6 +35,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import androidx.core.content.ContextCompat
 import androidx.core.widget.TextViewCompat
 import com.github.andreyasadchy.xtra.R
 import com.github.andreyasadchy.xtra.model.ui.Stream
@@ -154,9 +159,11 @@ object MultiviewStreamDeckDialog {
                 (initialState.layoutMode == MultiviewLayoutMode.FOCUS || initialState.streams.size <= 1) &&
                 localAnchorBottom != null
 
+            val appContext = context.applicationContext
             val uiHandler = Handler(Looper.getMainLooper())
             var overlayRef: ActiveOverlay? = null
             var cleanedUp = false
+            var volumeReceiver: BroadcastReceiver? = null
 
             lateinit var overlayWrapper: FrameLayout
             val healthUpdaters = mutableMapOf<String, (MultiviewLiveHealth?) -> Unit>()
@@ -194,6 +201,13 @@ object MultiviewStreamDeckDialog {
                 }
                 uiHandler.removeCallbacks(dismissRunnable)
                 uiHandler.removeCallbacks(healthTickerRunnable)
+                volumeReceiver?.let { receiver ->
+                    try {
+                        appContext.unregisterReceiver(receiver)
+                    } catch (_: Throwable) {
+                    }
+                    volumeReceiver = null
+                }
                 hostContainer.removeAllViews()
                 hostContainer.visibility = View.GONE
                 viewModel.persistSession()
@@ -334,6 +348,7 @@ object MultiviewStreamDeckDialog {
             }
 
             var headerRef: LinearLayout? = null
+            var systemCardRef: LinearLayout? = null
             var masterCardRef: LinearLayout? = null
             var bottomMacrosRef: LinearLayout? = null
             var streamScrollMaxCapPx = (maxDialogHeight * 0.56f).roundToInt()
@@ -346,7 +361,7 @@ object MultiviewStreamDeckDialog {
                     val looseHSpec = MeasureSpec.makeMeasureSpec(maxDialogHeight, MeasureSpec.AT_MOST)
 
                     var fixedH = paddingTop + paddingBottom
-                    listOfNotNull(headerRef, masterCardRef, bottomMacrosRef).forEach { child ->
+                    listOfNotNull(headerRef, systemCardRef, masterCardRef, bottomMacrosRef).forEach { child ->
                         child.measure(innerWSpec, looseHSpec)
                         val lp = child.layoutParams as? MarginLayoutParams
                         fixedH += child.measuredHeight + (lp?.topMargin ?: 0) + (lp?.bottomMargin ?: 0)
@@ -465,12 +480,276 @@ object MultiviewStreamDeckDialog {
             header.addView(closeBtn)
             chassis.addView(header)
 
+            // ==========================================
+            // STANDALONE TOP HARDWARE MODULE: SYSTEM OUT
+            // ==========================================
+            val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            val sysMinStep = if (audioManager != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                audioManager.getStreamMinVolume(AudioManager.STREAM_MUSIC)
+            } else {
+                0
+            }
+            val sysMaxStep = (audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 15).coerceAtLeast(sysMinStep + 1)
+            val isSysFixed = audioManager?.isVolumeFixed == true
+            fun readSysStep(): Int =
+                (audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: sysMinStep).coerceIn(sysMinStep, sysMaxStep)
+            fun stepToFraction(step: Int): Float =
+                ((step - sysMinStep).toFloat() / (sysMaxStep - sysMinStep).coerceAtLeast(1)).coerceIn(0f, 1f)
+            fun fractionToStep(norm: Float): Int =
+                (sysMinStep + norm.coerceIn(0f, 1f) * (sysMaxStep - sysMinStep)).roundToInt().coerceIn(sysMinStep, sysMaxStep)
+
+            var lastSysStep = readSysStep()
+            var lastNonZeroSysStep = lastSysStep.takeIf { it > sysMinStep } ?: fractionToStep(0.5f).coerceAtLeast(sysMinStep + 1)
+            var isDraggingSysVol = false
+
+            val sysCardFill = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(
+                    Color.parseColor("#47041D26"),
+                    Color.parseColor("#5C020B12"),
+                    Color.parseColor("#4A061822"),
+                ),
+            ).apply {
+                cornerRadius = dp(10).toFloat()
+                setStroke(dp(1.3f).coerceAtLeast(1), Color.parseColor("#D900E5FF"))
+            }
+            val sysCardBevel = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(
+                    Color.parseColor("#3367E8F9"),
+                    Color.parseColor("#0800E5FF"),
+                    Color.TRANSPARENT,
+                ),
+            ).apply {
+                cornerRadius = dp(10).toFloat()
+                setStroke(dp(0.8f).coerceAtLeast(1), Color.parseColor("#4400E5FF"))
+            }
+            val sysCardBg = LayerDrawable(arrayOf(sysCardFill, sysCardBevel)).apply {
+                setLayerInset(1, dp(1), dp(1), dp(1), dp(1))
+            }
+
+            val systemCard = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(8), dp(5), dp(8), dp(5))
+                background = sysCardBg
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply {
+                    bottomMargin = dp(5)
+                }
+            }
+            systemCardRef = systemCard
+
+            val sysHeaderRow = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply {
+                    bottomMargin = dp(3)
+                }
+            }
+
+            val sysTitlePill = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#6605212B"))
+                    cornerRadius = dp(5).toFloat()
+                    setStroke(dp(1), Color.parseColor("#AA00E5FF"))
+                }
+                setPadding(dp(6), dp(2), dp(7), dp(2))
+            }
+            sysTitlePill.addView(TextView(context).apply {
+                text = "◈"
+                textSize = 9.5f
+                setTextColor(Color.parseColor(COLOR_CYAN))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { marginEnd = dp(4) }
+            })
+            sysTitlePill.addView(TextView(context).apply {
+                text = "SYSTEM OUT"
+                textSize = 9.8f
+                typeface = Typeface.DEFAULT_BOLD
+                letterSpacing = 0.08f
+                setTextColor(Color.WHITE)
+                setShadowLayer(4f, 0f, 1f, Color.BLACK)
+            })
+            sysHeaderRow.addView(sysTitlePill)
+
+            sysHeaderRow.addView(TextView(context).apply {
+                text = if (isSysFixed) "FIXED" else "DEVICE"
+                textSize = 8f
+                typeface = Typeface.DEFAULT_BOLD
+                letterSpacing = 0.06f
+                setTextColor(Color.parseColor("#67E8F9"))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { marginStart = dp(6) }
+            })
+
+            sysHeaderRow.addView(View(context).apply {
+                layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
+            })
+
+            val sysPercentView = TextView(context).apply {
+                textSize = if (isLandscape) 10.5f else 10.5f
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#66031820"))
+                    cornerRadius = dp(5).toFloat()
+                    setStroke(dp(1), Color.parseColor("#AA00E5FF"))
+                }
+                setPadding(dp(8), dp(2), dp(8), dp(2))
+            }
+            sysHeaderRow.addView(sysPercentView)
+            systemCard.addView(sysHeaderRow)
+
+            val sysFaderRow = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                )
+            }
+
+            val sysMuteBtn = ImageButton(context).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(30), dp(28)).apply {
+                    marginEnd = dp(6)
+                }
+                background = deckRipple(
+                    make3DKeycap(COLOR_CYAN_GLASS_TOP, COLOR_CYAN_GLASS_BOTTOM, COLOR_CYAN_SHADOW, COLOR_CYAN_STROKE, 5.5f, 2.5f),
+                )
+                setPadding(dp(5), dp(4), dp(5), dp(6.5f))
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                contentDescription = "System media volume mute"
+                isEnabled = !isSysFixed
+            }
+            sysFaderRow.addView(sysMuteBtn)
+
+            lateinit var sysFader: DjFaderView
+            fun renderSysVolumeUi(norm: Float, updateFader: Boolean) {
+                val clamped = norm.coerceIn(0f, 1f)
+                if (updateFader) sysFader.setVolume(clamped)
+                val pct = (clamped * 100).roundToInt()
+                sysPercentView.text = if (pct == 0) "MUTE" else "$pct%"
+                sysPercentView.setTextColor(Color.parseColor(if (pct > 0) "#7CEEFF" else "#FF7096"))
+                (sysPercentView.background as? GradientDrawable)?.setStroke(
+                    dp(1),
+                    Color.parseColor(if (pct > 0) "#AA00E5FF" else "#AAFF2E63"),
+                )
+                sysMuteBtn.setImageResource(
+                    if (pct > 0) R.drawable.baseline_volume_up_black_24
+                    else R.drawable.baseline_volume_off_black_24,
+                )
+                sysMuteBtn.setColorFilter(
+                    Color.parseColor(if (pct > 0) COLOR_CYAN else COLOR_CRIMSON),
+                )
+            }
+
+            sysFader = DjFaderView(
+                context = context,
+                initialVolume = stepToFraction(lastSysStep),
+                isCompact = false,
+                fillHex = COLOR_CYAN,
+                thumbBorderHex = "#67E8F9",
+                thumbFillHex = "#062533",
+                gripHex = "#0891B2",
+                trackBorderHex = "#8800E5FF",
+                majorTickHex = COLOR_CYAN,
+                minorTickHex = "#6638BDF8",
+                onDragStateChanged = { dragging ->
+                    isDraggingSysVol = dragging
+                    if (!dragging) {
+                        val actual = readSysStep()
+                        lastSysStep = actual
+                        if (actual > sysMinStep) lastNonZeroSysStep = actual
+                        renderSysVolumeUi(stepToFraction(actual), updateFader = true)
+                    }
+                },
+                onVolumeChanged = { newVol ->
+                    if (!isSysFixed) {
+                        val targetStep = fractionToStep(newVol)
+                        if (targetStep > sysMinStep) lastNonZeroSysStep = targetStep
+                        if (targetStep != lastSysStep) {
+                            lastSysStep = targetStep
+                            try {
+                                audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC, targetStep, 0)
+                            } catch (_: Throwable) {
+                            }
+                        }
+                        renderSysVolumeUi(newVol, updateFader = false)
+                    }
+                },
+            ).apply {
+                isEnabled = !isSysFixed
+                layoutParams = LinearLayout.LayoutParams(0, dp(25), 1f)
+            }
+            renderSysVolumeUi(stepToFraction(lastSysStep), updateFader = false)
+            sysFaderRow.addView(sysFader)
+
+            sysMuteBtn.setOnClickListener {
+                if (isSysFixed) return@setOnClickListener
+                val cur = readSysStep()
+                if (cur > sysMinStep) lastNonZeroSysStep = cur
+                val nextStep = if (cur > sysMinStep) sysMinStep else lastNonZeroSysStep.coerceIn(sysMinStep + 1, sysMaxStep)
+                try {
+                    audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC, nextStep, 0)
+                } catch (_: Throwable) {
+                }
+                val actual = readSysStep()
+                lastSysStep = actual
+                renderSysVolumeUi(stepToFraction(actual), updateFader = true)
+            }
+
+            syncSystemVolumeUi = {
+                if (!isDraggingSysVol) {
+                    val actual = readSysStep()
+                    if (actual != lastSysStep) {
+                        lastSysStep = actual
+                        if (actual > sysMinStep) lastNonZeroSysStep = actual
+                        renderSysVolumeUi(stepToFraction(actual), updateFader = true)
+                    }
+                }
+            }
+
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(ctx: Context?, intent: Intent?) {
+                    if (cleanedUp || activeOverlay !== overlayRef) return
+                    val streamType = intent?.getIntExtra("android.media.EXTRA_VOLUME_STREAM_TYPE", AudioManager.STREAM_MUSIC)
+                    if (streamType == null || streamType == AudioManager.STREAM_MUSIC) {
+                        syncSystemVolumeUi?.invoke()
+                    }
+                }
+            }
+            volumeReceiver = receiver
+            try {
+                ContextCompat.registerReceiver(
+                    appContext,
+                    receiver,
+                    IntentFilter("android.media.VOLUME_CHANGED_ACTION"),
+                    ContextCompat.RECEIVER_EXPORTED,
+                )
+            } catch (_: Throwable) {
+                volumeReceiver = null
+            }
+
+            systemCard.addView(sysFaderRow)
+            chassis.addView(systemCard)
+
             val autoLabel = context.getString(R.string.multiview_quality_auto)
             val cardVolumeUpdaters = mutableMapOf<String, (Float) -> Unit>()
             val cardPillUpdaters = mutableListOf<() -> Unit>()
 
             // ==========================================
-            // MASTER BUS + SYSTEM VOLUME PANEL
+            // MASTER BUS (APP STREAM MIXER + GLOBAL QUALITY)
             // ==========================================
             val masterCard = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
@@ -663,9 +942,7 @@ object MultiviewStreamDeckDialog {
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply {
-                    bottomMargin = dp(3)
-                }
+                )
             }
             val masterMuteBtn = ImageButton(context).apply {
                 val btnSize = dp(26)
@@ -725,148 +1002,6 @@ object MultiviewStreamDeckDialog {
                 }
             }
             masterCard.addView(masterFaderRow)
-
-            // ==========================================
-            // SYSTEM VOLUME SLIDER (Controls Device STREAM_MUSIC ONLY)
-            // ==========================================
-            val audioManager = context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-            val sysMaxStep = (audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 15).coerceAtLeast(1)
-            fun readSysStep(): Int =
-                (audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 0).coerceIn(0, sysMaxStep)
-
-            var lastSysStep = readSysStep()
-            var lastNonZeroSysStep = lastSysStep.takeIf { it > 0 } ?: (sysMaxStep / 2).coerceAtLeast(1)
-            var isDraggingSysVol = false
-
-            val sysVolRow = LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                )
-            }
-
-            val sysMuteBtn = ImageButton(context).apply {
-                val btnSize = dp(26)
-                layoutParams = LinearLayout.LayoutParams(btnSize, btnSize).apply {
-                    marginEnd = dp(5)
-                }
-                background = deckRipple(
-                    make3DKeycap(COLOR_CYAN_GLASS_TOP, COLOR_CYAN_GLASS_BOTTOM, COLOR_CYAN_SHADOW, COLOR_CYAN_STROKE, 5.5f, 2.5f),
-                )
-                setPadding(dp(4), dp(4), dp(4), dp(6))
-                scaleType = ImageView.ScaleType.FIT_CENTER
-                contentDescription = "System media volume mute"
-            }
-            sysVolRow.addView(sysMuteBtn)
-
-            val sysBadge = TextView(context).apply {
-                text = "SYS"
-                textSize = 8.5f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(Color.parseColor("#A5F3FC"))
-                background = GradientDrawable().apply {
-                    setColor(Color.parseColor("#55051A22"))
-                    cornerRadius = dp(4).toFloat()
-                    setStroke(dp(1), Color.parseColor("#8800E5FF"))
-                }
-                setPadding(dp(5), dp(2), dp(5), dp(2))
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply {
-                    marginEnd = dp(4)
-                }
-            }
-            sysVolRow.addView(sysBadge)
-
-            val sysPercentView = TextView(context).apply {
-                textSize = 9.5f
-                typeface = Typeface.DEFAULT_BOLD
-                gravity = Gravity.CENTER
-                background = GradientDrawable().apply {
-                    setColor(Color.parseColor("#4D04141A"))
-                    cornerRadius = dp(5).toFloat()
-                    setStroke(dp(1), Color.parseColor("#8800E5FF"))
-                }
-                setPadding(dp(5), dp(1.5f), dp(5), dp(1.5f))
-                layoutParams = LinearLayout.LayoutParams(
-                    dp(38),
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply {
-                    marginStart = dp(4)
-                }
-            }
-
-            lateinit var sysFader: DjFaderView
-            fun renderSysVolumeUi(norm: Float, updateFader: Boolean) {
-                val clamped = norm.coerceIn(0f, 1f)
-                if (updateFader) sysFader.setVolume(clamped)
-                val pct = (clamped * 100).roundToInt()
-                sysPercentView.text = "$pct%"
-                sysPercentView.setTextColor(Color.parseColor(if (pct > 0) "#7CEEFF" else COLOR_CRIMSON))
-                sysMuteBtn.setImageResource(
-                    if (pct > 0) R.drawable.baseline_volume_up_black_24
-                    else R.drawable.baseline_volume_off_black_24,
-                )
-                sysMuteBtn.setColorFilter(
-                    Color.parseColor(if (pct > 0) COLOR_CYAN else COLOR_CRIMSON),
-                )
-            }
-
-            sysFader = DjFaderView(
-                context = context,
-                initialVolume = lastSysStep.toFloat() / sysMaxStep,
-                isCompact = true,
-                fillHex = COLOR_CYAN,
-                thumbBorderHex = "#67E8F9",
-                thumbFillHex = "#08242E",
-                gripHex = "#0891B2",
-                onDragStateChanged = { dragging -> isDraggingSysVol = dragging },
-                onVolumeChanged = { newVol ->
-                    val targetStep = (newVol.coerceIn(0f, 1f) * sysMaxStep).roundToInt().coerceIn(0, sysMaxStep)
-                    if (targetStep > 0) lastNonZeroSysStep = targetStep
-                    if (targetStep != lastSysStep) {
-                        lastSysStep = targetStep
-                        try {
-                            audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC, targetStep, 0)
-                        } catch (_: Throwable) {
-                        }
-                    }
-                    renderSysVolumeUi(newVol, updateFader = false)
-                },
-            ).apply {
-                layoutParams = LinearLayout.LayoutParams(0, dp(21), 1f)
-            }
-            renderSysVolumeUi(lastSysStep.toFloat() / sysMaxStep, updateFader = false)
-            sysVolRow.addView(sysFader)
-            sysVolRow.addView(sysPercentView)
-
-            sysMuteBtn.setOnClickListener {
-                val cur = readSysStep()
-                if (cur > 0) lastNonZeroSysStep = cur
-                val nextStep = if (cur > 0) 0 else lastNonZeroSysStep.coerceIn(1, sysMaxStep)
-                lastSysStep = nextStep
-                try {
-                    audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC, nextStep, 0)
-                } catch (_: Throwable) {
-                }
-                renderSysVolumeUi(nextStep.toFloat() / sysMaxStep, updateFader = true)
-            }
-
-            syncSystemVolumeUi = {
-                if (!isDraggingSysVol) {
-                    val actual = readSysStep()
-                    if (actual != lastSysStep) {
-                        lastSysStep = actual
-                        if (actual > 0) lastNonZeroSysStep = actual
-                        renderSysVolumeUi(actual.toFloat() / sysMaxStep, updateFader = true)
-                    }
-                }
-            }
-
-            masterCard.addView(sysVolRow)
             chassis.addView(masterCard)
 
             // ==========================================
@@ -1635,6 +1770,9 @@ class DjFaderView @JvmOverloads constructor(
     thumbBorderHex: String = "#C084FC",
     thumbFillHex: String = "#1D1036",
     gripHex: String = "#7E22CE",
+    trackBorderHex: String = "#776D28D9",
+    majorTickHex: String = "#C2FF00",
+    minorTickHex: String = "#6664748B",
     private val onDragStateChanged: ((Boolean) -> Unit)? = null,
     private val onVolumeChanged: (Float) -> Unit,
 ) : View(context) {
@@ -1642,7 +1780,20 @@ class DjFaderView @JvmOverloads constructor(
         context: Context,
         initialVolume: Float,
         onVolumeChanged: (Float) -> Unit,
-    ) : this(context, initialVolume, false, "#A855F7", "#C084FC", "#1D1036", "#7E22CE", null, onVolumeChanged)
+    ) : this(
+        context,
+        initialVolume,
+        false,
+        "#A855F7",
+        "#C084FC",
+        "#1D1036",
+        "#7E22CE",
+        "#776D28D9",
+        "#C2FF00",
+        "#6664748B",
+        null,
+        onVolumeChanged,
+    )
 
     private var volume: Float = initialVolume.coerceIn(0f, 1f)
     private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -1654,16 +1805,16 @@ class DjFaderView @JvmOverloads constructor(
         style = Paint.Style.FILL
     }
     private val trackBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#776D28D9")
+        color = Color.parseColor(trackBorderHex)
         style = Paint.Style.STROKE
         strokeWidth = 2f
     }
     private val majorTickPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#C2FF00")
+        color = Color.parseColor(majorTickHex)
         strokeWidth = if (isCompact) 2f else 2.5f
     }
     private val minorTickPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#6664748B")
+        color = Color.parseColor(minorTickHex)
         strokeWidth = if (isCompact) 1.2f else 1.5f
     }
     private val knobShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
