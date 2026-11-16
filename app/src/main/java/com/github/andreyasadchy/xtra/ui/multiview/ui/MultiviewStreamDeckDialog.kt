@@ -749,26 +749,27 @@ object MultiviewStreamDeckDialog {
             val cardPillUpdaters = mutableListOf<() -> Unit>()
 
             // ==========================================
-            // MASTER BUS (APP STREAM MIXER + GLOBAL QUALITY)
+            // MASTER BUS (ALL-STREAMS MIXER + GLOBAL QUALITY)
             // ==========================================
             val masterCard = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(8), dp(5), dp(8), dp(5))
                 background = GradientDrawable(
-                    GradientDrawable.Orientation.TOP_BOTTOM,
+                    GradientDrawable.Orientation.TL_BR,
                     intArrayOf(
-                        Color.parseColor("#30140E29"),
-                        Color.parseColor("#3B080712"),
+                        Color.parseColor("#3A172304"),
+                        Color.parseColor("#4A080D02"),
+                        Color.parseColor("#3D121B04"),
                     ),
                 ).apply {
                     cornerRadius = dp(9).toFloat()
-                    setStroke(dp(1), Color.parseColor("#778B5CF6"))
+                    setStroke(dp(1.25f).coerceAtLeast(1), Color.parseColor("#B8C2FF00"))
                 }
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                 ).apply {
-                    bottomMargin = dp(4)
+                    bottomMargin = dp(4.5f)
                 }
             }
             masterCardRef = masterCard
@@ -788,15 +789,15 @@ object MultiviewStreamDeckDialog {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 background = GradientDrawable().apply {
-                    setColor(Color.parseColor("#4D160D2E"))
+                    setColor(Color.parseColor("#59182604"))
                     cornerRadius = dp(5).toFloat()
-                    setStroke(dp(1), Color.parseColor("#88A855F7"))
+                    setStroke(dp(1), Color.parseColor("#AAC2FF00"))
                 }
                 setPadding(dp(6), dp(2), dp(7), dp(2))
             }
             masterBadge.addView(TextView(context).apply {
-                text = "●"
-                textSize = 8f
+                text = "◆"
+                textSize = 9.5f
                 setTextColor(Color.parseColor(COLOR_VOLT))
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -804,10 +805,12 @@ object MultiviewStreamDeckDialog {
                 ).apply { marginEnd = dp(4) }
             })
             masterBadge.addView(TextView(context).apply {
-                text = "MASTER BUS"
+                text = "MASTER · ALL STREAMS"
                 textSize = 9.5f
                 typeface = Typeface.DEFAULT_BOLD
+                letterSpacing = 0.05f
                 setTextColor(Color.WHITE)
+                setShadowLayer(4f, 0f, 1f, Color.BLACK)
             })
             masterHeader.addView(masterBadge)
 
@@ -867,8 +870,8 @@ object MultiviewStreamDeckDialog {
                     val isSelected = pillQual == selectedMasterQuality
                     val bg = if (isSelected) {
                         make3DKeycap(
-                            topColorHex = COLOR_VOLT_GLASS_TOP,
-                            bottomColorHex = COLOR_VOLT_GLASS_BOTTOM,
+                            topColorHex = "#ED273B07",
+                            bottomColorHex = "#F5121D03",
                             shadowColorHex = COLOR_VOLT_SHADOW,
                             strokeColorHex = COLOR_VOLT_STROKE,
                             cornerRadiusDp = 5.5f,
@@ -876,17 +879,17 @@ object MultiviewStreamDeckDialog {
                         )
                     } else {
                         make3DKeycap(
-                            topColorHex = COLOR_UNSEL_GLASS_TOP,
-                            bottomColorHex = COLOR_UNSEL_GLASS_BOTTOM,
-                            shadowColorHex = COLOR_UNSEL_SHADOW,
-                            strokeColorHex = COLOR_UNSEL_STROKE,
+                            topColorHex = "#BA131B07",
+                            bottomColorHex = "#CC080C04",
+                            shadowColorHex = "#85030501",
+                            strokeColorHex = "#6694C21A",
                             cornerRadiusDp = 5.5f,
                             shadowDepthDp = 2.8f,
                         )
                     }
                     pill.background = deckRipple(bg)
                     pill.setTextColor(
-                        Color.parseColor(if (isSelected) "#DCFF66" else "#CBD5E1"),
+                        Color.parseColor(if (isSelected) "#EAFF80" else "#DCE8C8"),
                     )
                     centerKeycapText(pill, depthDp = 2.8f, sidePadDp = 1f)
                 }
@@ -945,12 +948,12 @@ object MultiviewStreamDeckDialog {
                 )
             }
             val masterMuteBtn = ImageButton(context).apply {
-                val btnSize = dp(26)
+                val btnSize = dp(27)
                 layoutParams = LinearLayout.LayoutParams(btnSize, btnSize).apply {
                     marginEnd = dp(6)
                 }
                 background = deckRipple(
-                    make3DKeycap(COLOR_UNSEL_GLASS_TOP, COLOR_UNSEL_GLASS_BOTTOM, COLOR_UNSEL_SHADOW, COLOR_UNSEL_STROKE, 5.5f, 2.5f),
+                    make3DKeycap(COLOR_VOLT_GLASS_TOP, COLOR_VOLT_GLASS_BOTTOM, COLOR_VOLT_SHADOW, "#99C2FF00", 5.5f, 2.5f),
                 )
                 setPadding(dp(4), dp(4), dp(4), dp(6))
                 scaleType = ImageView.ScaleType.FIT_CENTER
@@ -979,6 +982,13 @@ object MultiviewStreamDeckDialog {
                 context = context,
                 initialVolume = masterVol,
                 isCompact = false,
+                fillHex = COLOR_VOLT,
+                thumbBorderHex = "#E4FF7A",
+                thumbFillHex = "#172204",
+                gripHex = "#65A30D",
+                trackBorderHex = "#88C2FF00",
+                majorTickHex = "#E4FF7A",
+                minorTickHex = "#6684CC16",
             ) { newVol ->
                 updateMasterAudioUi(newVol, updateFader = false)
                 stateProvider().streams.forEach { stream ->
@@ -987,7 +997,7 @@ object MultiviewStreamDeckDialog {
                     cardVolumeUpdaters[id]?.invoke(newVol)
                 }
             }.apply {
-                layoutParams = LinearLayout.LayoutParams(0, dp(22), 1f)
+                layoutParams = LinearLayout.LayoutParams(0, dp(24), 1f)
             }
             updateMasterAudioUi(masterVol, updateFader = false)
             masterFaderRow.addView(masterFader)
