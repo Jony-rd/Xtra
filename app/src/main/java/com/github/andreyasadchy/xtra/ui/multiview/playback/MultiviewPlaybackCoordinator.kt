@@ -46,6 +46,7 @@ import com.github.andreyasadchy.xtra.util.AdaptiveLivePlaybackController
 import com.github.andreyasadchy.xtra.util.FixedSpeedLivePlaybackControl
 import com.github.andreyasadchy.xtra.util.LivePlaybackPolicies
 import com.github.andreyasadchy.xtra.util.LivePlaybackSettings
+import com.github.andreyasadchy.xtra.util.LivePriorityCatchUpPolicy
 import com.github.andreyasadchy.xtra.util.NetworkUtils.proxyCandidates
 import com.github.andreyasadchy.xtra.util.prefs
 import com.github.andreyasadchy.xtra.util.m3u8.TwitchVaftDetector
@@ -459,7 +460,9 @@ class MultiviewPlaybackCoordinator(
                             C.PLAYER_VAFT_PLAYBACK_PRIORITY,
                             C.VAFT_PRIORITY_LIVE,
                         ) == C.VAFT_PRIORITY_LIVE &&
-                        liveOffsetMs - liveController.currentPolicy().targetOffsetMs > LIVE_PRIORITY_CATCH_UP_THRESHOLD_MS &&
+                        liveOffsetMs > LivePriorityCatchUpPolicy.thresholdMs(
+                            liveController.currentPolicy().targetOffsetMs,
+                        ) &&
                         (slot.lastLivePriorityCatchUpRealtimeMs == Long.MIN_VALUE ||
                             now - slot.lastLivePriorityCatchUpRealtimeMs >= LIVE_PRIORITY_CATCH_UP_COOLDOWN_MS) &&
                         player.isCommandAvailable(Player.COMMAND_SEEK_TO_DEFAULT_POSITION)
@@ -1540,7 +1543,6 @@ class MultiviewPlaybackCoordinator(
 
     companion object {
         private const val TAG = "MultiviewPlayback"
-        private const val LIVE_PRIORITY_CATCH_UP_THRESHOLD_MS = 6_000L
         private const val LIVE_PRIORITY_CATCH_UP_COOLDOWN_MS = 15_000L
         private const val MAX_RETRIES = 6
         private const val WATCHDOG_BUFFERING_TIMEOUT_MS = 6_000L
