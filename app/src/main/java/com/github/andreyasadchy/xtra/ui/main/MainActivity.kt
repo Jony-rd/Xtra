@@ -1,6 +1,4 @@
 package com.github.andreyasadchy.xtra.ui.main
-import androidx.lifecycle.ViewModelProvider
-import com.github.andreyasadchy.xtra.ui.multiview.MultiviewViewModel
 
 import android.Manifest
 import android.app.ActivityOptions
@@ -24,9 +22,6 @@ import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.widget.ImageView
-import android.widget.LinearLayout
-import com.github.andreyasadchy.xtra.ui.common.loadStreamProfileImage
 import android.os.PowerManager
 import android.os.SystemClock
 import android.os.ext.SdkExtensions
@@ -35,6 +30,8 @@ import android.view.Menu
 import android.view.View
 import android.view.ViewGroup
 import android.view.KeyEvent
+import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
@@ -56,6 +53,7 @@ import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentManager
 import androidx.fragment.app.FragmentTransaction
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.withStarted
@@ -69,6 +67,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import com.github.andreyasadchy.xtra.R
 import com.github.andreyasadchy.xtra.BuildConfig
 import com.github.andreyasadchy.xtra.databinding.ActivityMainBinding
@@ -80,6 +79,7 @@ import com.github.andreyasadchy.xtra.model.ui.Video
 import com.github.andreyasadchy.xtra.repository.auth.AuthSessionMaintenanceState
 import com.github.andreyasadchy.xtra.ui.channel.ChannelPagerFragmentDirections
 import com.github.andreyasadchy.xtra.ui.common.Scrollable
+import com.github.andreyasadchy.xtra.ui.common.loadStreamProfileImage
 import com.github.andreyasadchy.xtra.ui.download.StreamDownloadService
 import com.github.andreyasadchy.xtra.ui.download.VideoDownloadService
 import com.github.andreyasadchy.xtra.ui.game.GamePagerFragmentDirections
@@ -96,6 +96,7 @@ import com.github.andreyasadchy.xtra.ui.player.Media3Fragment
 import com.github.andreyasadchy.xtra.ui.player.Media3PlayerFragment
 import com.github.andreyasadchy.xtra.ui.player.PlayerQualityNetworkProfile
 import com.github.andreyasadchy.xtra.ui.multiview.MultiviewFragment
+import com.github.andreyasadchy.xtra.ui.multiview.MultiviewViewModel
 import com.github.andreyasadchy.xtra.ui.player.PlaybackService
 import com.github.andreyasadchy.xtra.ui.saved.SavedMediaFragment
 import com.github.andreyasadchy.xtra.ui.saved.SavedPagerFragment
@@ -1830,16 +1831,17 @@ class MainActivity : AppCompatActivity() {
         if (duration > 0L) {
             viewModel.sleepTimer = Timer().apply {
                 schedule(duration) {
-                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main.immediate).launch {
+                    lifecycleScope.launch(Dispatchers.Main.immediate) {
+                        if (isFinishing || isDestroyed) return@launch
                         (playerFragment as? Media3PlayerFragment)?.also {
                             if (!isTv) it.minimize()
                             closePlayer()
                         }
-                        try {
+                        runCatching {
                             ViewModelProvider(this@MainActivity, MultiviewViewModel.MultiviewViewModelFactory)[MultiviewViewModel::class.java].releaseAll()
-                        } catch (e: Exception) {}
+                        }
                         if (::navController.isInitialized) {
-                            navController.popBackStack(R.id.multiviewFragment, true)
+                            runCatching { navController.popBackStack(R.id.multiviewFragment, true) }
                         }
                         if (prefs.getBoolean(C.SLEEP_TIMER_LOCK, false)) {
                             if ((getSystemService(POWER_SERVICE) as PowerManager).isInteractive) {

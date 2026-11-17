@@ -21,7 +21,7 @@ import com.github.andreyasadchy.xtra.ui.drops.StreamDropsBottomSheet
 import com.github.andreyasadchy.xtra.ui.game.GamePagerFragmentDirections
 import com.github.andreyasadchy.xtra.ui.main.MainActivity
 import com.github.andreyasadchy.xtra.ui.search.SearchHistoryRecorder
-import com.github.andreyasadchy.xtra.ui.multiview.MultiviewFragment
+import com.github.andreyasadchy.xtra.ui.multiview.MultiviewLaunchHelper
 import com.github.andreyasadchy.xtra.XtraApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -445,64 +445,9 @@ class StreamsCompactAdapter(
             }
         }
 
-                private fun openMultiview(stream: Stream) {
-                    val mainActivity = fragment.activity as? MainActivity
-                    if (mainActivity?.isFinishing == true || !fragment.isAdded) return
-                    val playingStream = mainActivity?.currentPlayingStream()
-                    val streamsToLaunch = if (playingStream != null && playingStream.id != stream.id) {
-                        listOf(playingStream, stream)
-                    } else {
-                        listOf(stream)
-                    }
-                    val mvVm = fragment.activity?.let {
-                        try {
-                            androidx.lifecycle.ViewModelProvider(it, com.github.andreyasadchy.xtra.ui.multiview.MultiviewViewModel.MultiviewViewModelFactory)[com.github.andreyasadchy.xtra.ui.multiview.MultiviewViewModel::class.java]
-                        } catch (e: Exception) { null }
-                    }
-                    val activeStreams = mvVm?.state?.value?.streams.orEmpty()
-                    if (activeStreams.size >= 4 && activeStreams.none { s -> streamsToLaunch.any { it.id == s.id } }) {
-                        val streamNames = activeStreams.map {
-                            (it.channelName?.takeIf { n -> n.isNotBlank() } ?: it.channelLogin).orEmpty()
-                        }.toTypedArray()
-                        com.google.android.material.dialog.MaterialAlertDialogBuilder(fragment.requireContext())
-                            .setTitle("Multiview full. Replace which stream?")
-                            .setItems(streamNames) { _, which ->
-                                val targetIdentity = mvVm?.state?.value?.identities?.getOrNull(which) ?: mvVm?.state?.value?.identities?.lastOrNull()
-                                if (targetIdentity != null) {
-                                    mvVm?.replaceStream(targetIdentity, stream)
-                                }
-                                mainActivity?.closePlayer()
-                                runCatching {
-                                    fragment.findNavController().navigate(
-                                        R.id.multiviewFragment,
-                                        com.github.andreyasadchy.xtra.ui.multiview.MultiviewFragment.arguments(emptyList())
-                                    )
-                                }
-                            }
-                            .setNegativeButton(android.R.string.cancel) { _, _ ->
-                                val targetIdentity = mvVm?.state?.value?.identities?.lastOrNull()
-                                if (targetIdentity != null) {
-                                    mvVm?.replaceStream(targetIdentity, stream)
-                                }
-                                mainActivity?.closePlayer()
-                                runCatching {
-                                    fragment.findNavController().navigate(
-                                        R.id.multiviewFragment,
-                                        com.github.andreyasadchy.xtra.ui.multiview.MultiviewFragment.arguments(emptyList())
-                                    )
-                                }
-                            }
-                            .show()
-                        return
-                    }
-                    mainActivity?.closePlayer()
-                    runCatching {
-                        fragment.findNavController().navigate(
-                            R.id.multiviewFragment,
-                            com.github.andreyasadchy.xtra.ui.multiview.MultiviewFragment.arguments(streamsToLaunch)
-                        )
-                    }
-                }
+        private fun openMultiview(stream: Stream) {
+            MultiviewLaunchHelper.openMultiview(fragment, stream)
+        }
     }
 
     private companion object {
