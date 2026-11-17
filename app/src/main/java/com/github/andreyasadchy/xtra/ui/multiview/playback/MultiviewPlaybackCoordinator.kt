@@ -80,7 +80,18 @@ class MultiviewPlaybackCoordinator(
     private val checkStreamLive: (suspend (String) -> Boolean?)? = null,
 ) {
     private val applicationContext = context.applicationContext
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var scope = newCoordinatorScope()
+    private var lastStoppedRealtimeMs: Long? = null
+
+    private fun newCoordinatorScope(): CoroutineScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    private fun ensureScope(): CoroutineScope {
+        if (scope.coroutineContext[Job]?.isActive != true) {
+            scope = newCoordinatorScope()
+        }
+        return scope
+    }
     private val viewingStatsRecorder by lazy {
         (applicationContext as? XtraApp)?.xtraModule?.viewingStatsRecorder
     }
@@ -127,9 +138,19 @@ class MultiviewPlaybackCoordinator(
                 val newSlot = createSlot(identity, stream)
                 slots[identity] = newSlot
                 start(newSlot)
-            } else if (slot.stream !== stream) {
-                slot.stream = stream
-                updateViewingStats(slot)
+            } else {
+                if (slot.stream !== stream) {
+                    slot.stream = stream
+                    updateViewingStats(slot)
+                }
+                if (lifecycleStarted &&
+                    !slot.hasMediaSource &&
+                    slot.loadJob?.isActive != true &&
+                    slot.retryJob?.isActive != true &&
+                    slot.status == MultiviewSlotStatus.LOADING
+                ) {
+                    start(slot, force = true)
+                }
             }
         }
         slots.values.forEach { applyQuality(it) }
@@ -194,7 +215,7 @@ class MultiviewPlaybackCoordinator(
 
     private fun scheduleBufferingWatchdog(slot: MultiviewPlayerSlot) {
         slot.bufferingWatchdogJob?.cancel()
-        slot.bufferingWatchdogJob = scope.launch {
+        slot.bufferingWatchdogJob = ensureScope().launch {
             delay(WATCHDOG_BUFFERING_TIMEOUT_MS)
             if (!isActive || slots[slot.identity] !== slot) return@launch
             val isStalled = slot.loadJob?.isActive != true && (
@@ -218,8 +239,14 @@ class MultiviewPlaybackCoordinator(
     fun onStart() {
         lifecycleStarted = true
         ensureNetworkCallback()
+        ensureScope()
         foreground = true
+        val wasPlayingInBackground = backgroundPlayback
         backgroundPlayback = false
+        val stoppedAt = lastStoppedRealtimeMs
+        lastStoppedRealtimeMs = null
+        val staleAfterIdle = stoppedAt != null &&
+            (SystemClock.elapsedRealtime() - stoppedAt) >= STALE_PLAYLIST_IDLE_MS
         slots.values.forEach { slot ->
             restoreBackgroundVideo(slot)
             slot.attachedView?.let { attach(slot.identity, it) }
@@ -227,8 +254,10 @@ class MultiviewPlaybackCoordinator(
             val needsPrepare = slot.hasMediaSource &&
                 (slot.player.playbackState == Player.STATE_IDLE || slot.player.playbackState == Player.STATE_ENDED)
             val missingSource = !slot.hasMediaSource && slot.loadJob?.isActive != true
+            val staleStream = staleAfterIdle &&
+                (!wasPlayingInBackground || slot.player.playbackState != Player.STATE_READY)
             when {
-                stuckLoading || missingSource -> {
+                staleStream || stuckLoading || missingSource -> {
                     slot.reloadRequired = true
                     start(slot, force = true)
                 }
@@ -262,6 +291,7 @@ class MultiviewPlaybackCoordinator(
         }
         lifecycleStarted = false
         foreground = false
+        lastStoppedRealtimeMs = SystemClock.elapsedRealtime()
         val keepAudioInBackground = allowBackground && applicationContext.prefs()
             .getBoolean(C.SETTINGS_BACKGROUND_PLAYBACK, true)
         val canPlayInBackground = keepAudioInBackground && backgroundServicePrepared
@@ -286,6 +316,8 @@ class MultiviewPlaybackCoordinator(
     fun releaseAll() {
         unregisterNetworkCallback()
         scope.coroutineContext[Job]?.cancel()
+        scope = newCoordinatorScope()
+        lastStoppedRealtimeMs = null
         slots.values.forEach { slot ->
             releaseViewingStats(slot)
             slot.release()
@@ -449,7 +481,7 @@ class MultiviewPlaybackCoordinator(
             liveSpeedControl,
             applyLivePolicy,
         ).also { slot ->
-            slot.livePriorityCatchUpJob = scope.launch {
+            slot.livePriorityCatchUpJob = ensureScope().launch {
                 while (isActive) {
                     delay(5_000L)
                     val liveOffsetMs = player.currentLiveOffset
@@ -629,7 +661,7 @@ class MultiviewPlaybackCoordinator(
         )
         slot.liveSpeedControl.setRebufferTargetAdaptationEnabled(false)
         slot.applyLivePolicy()
-        slot.loadJob = scope.launch {
+        slot.loadJob = ensureScope().launch {
             publish(slot, MultiviewSlotStatus.LOADING)
             try {
                 val login = slot.stream.channelLogin?.trim()?.lowercase()
@@ -753,7 +785,7 @@ class MultiviewPlaybackCoordinator(
         val login = slot.stream.channelLogin?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
         if (!slot.customProxy && checkStreamLive != null && login != null) {
             slot.liveCheckJob?.cancel()
-            slot.liveCheckJob = scope.launch {
+            slot.liveCheckJob = ensureScope().launch {
                 val live = withTimeoutOrNull(LIVE_STATUS_CHECK_TIMEOUT_MS) {
                     runCatching { checkStreamLive.invoke(login) }.getOrNull()
                 }
@@ -769,7 +801,7 @@ class MultiviewPlaybackCoordinator(
         if (!hasValidatedNetwork()) {
             slot.retryJob?.cancel()
             publish(slot, MultiviewSlotStatus.RECONNECTING, retryAvailable = true)
-            slot.retryJob = scope.launch {
+            slot.retryJob = ensureScope().launch {
                 delay(NETWORK_RETRY_DELAY_MS)
                 if (!isActive || slots[slot.identity] !== slot) return@launch
                 if (hasValidatedNetwork()) {
@@ -805,7 +837,7 @@ class MultiviewPlaybackCoordinator(
         if (slot.retryCount >= MAX_RETRIES) {
             publish(slot, MultiviewSlotStatus.PLAYBACK_UNAVAILABLE, retryAvailable = true)
             slot.retryJob?.cancel()
-            slot.retryJob = scope.launch {
+            slot.retryJob = ensureScope().launch {
                 delay(10_000L)
                 if (!isActive || slots[slot.identity] !== slot) return@launch
                 debugLog("channel=${slot.identity} persistent auto-recovery after max retries")
@@ -819,7 +851,7 @@ class MultiviewPlaybackCoordinator(
         slot.retryCount++
         publish(slot, MultiviewSlotStatus.RECONNECTING, retryAvailable = true)
         slot.retryJob?.cancel()
-        slot.retryJob = scope.launch {
+        slot.retryJob = ensureScope().launch {
             delay(delayMs)
             if (!isActive || slots[slot.identity] !== slot) return@launch
             try {
@@ -881,7 +913,7 @@ class MultiviewPlaybackCoordinator(
     }
 
     private fun onNetworkValidated() {
-        scope.launch(Dispatchers.Main) {
+        ensureScope().launch(Dispatchers.Main) {
             slots.values.forEach { slot ->
                 val needsRecovery = slot.player.playbackState == Player.STATE_BUFFERING ||
                     slot.status == MultiviewSlotStatus.RECONNECTING ||
@@ -1036,7 +1068,7 @@ class MultiviewPlaybackCoordinator(
     private fun scheduleStableQualityRecovery(slot: MultiviewPlayerSlot) {
         if (slot.downgradeLevel <= 0 && !slot.resourceFailure) return
         slot.stableRecoveryJob?.cancel()
-        slot.stableRecoveryJob = scope.launch {
+        slot.stableRecoveryJob = ensureScope().launch {
             while (isActive && slots[slot.identity] === slot &&
                 (slot.downgradeLevel > 0 || slot.resourceFailure)
             ) {
@@ -1077,7 +1109,7 @@ class MultiviewPlaybackCoordinator(
                     val playerTypes = slot.vaftController.playerTypesForVaft(currentPlayerType)
                     if (playerTypes.isNotEmpty()) {
                         val login = slot.stream.channelLogin?.trim()?.lowercase() ?: return
-                        slot.vaftAvoidanceJob = scope.launch {
+                        slot.vaftAvoidanceJob = ensureScope().launch {
                             val candidate = try {
                                 loadCleanPlaylist(
                                     login,
@@ -1155,7 +1187,7 @@ class MultiviewPlaybackCoordinator(
         if (!slot.usingAlternateStream || slot.primaryRestoreJob?.isActive == true || slot.customProxy) return
         val login = slot.stream.channelLogin?.trim()?.lowercase() ?: return
         val primaryPlayerType = applicationContext.prefs().getString(C.TOKEN_PLAYER_TYPE, "site") ?: "site"
-        slot.primaryRestoreJob = scope.launch {
+        slot.primaryRestoreJob = ensureScope().launch {
             while (isActive && slots[slot.identity] === slot && slot.usingAlternateStream) {
                 delay(PRIMARY_RESTORE_INTERVAL_MS)
                 if (!isActive || slots[slot.identity] !== slot || !slot.usingAlternateStream) return@launch
@@ -1547,6 +1579,7 @@ class MultiviewPlaybackCoordinator(
         private const val MAX_RETRIES = 6
         private const val WATCHDOG_BUFFERING_TIMEOUT_MS = 6_000L
         private const val PLAYLIST_LOAD_TIMEOUT_MS = 10_000L
+        private const val STALE_PLAYLIST_IDLE_MS = 5 * 60_000L
         private const val LIVE_STATUS_CHECK_TIMEOUT_MS = 4_000L
         private const val NETWORK_RETRY_DELAY_MS = 15_000L
         private const val PRIMARY_RESTORE_INTERVAL_MS = 10_000L
