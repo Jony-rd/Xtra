@@ -560,11 +560,13 @@ class EmotesFragment : Fragment() {
             setFavoriteEditMode(false, adapter)
         }
         binding.editFavorites.isVisible = visible
+        val bottomEditSpace = resources.getDimensionPixelSize(R.dimen.emote_picker_edit_control_space)
+        val extraBottom = (56 * resources.displayMetrics.density).toInt()
         binding.emotesRecyclerView.setPadding(
             binding.emotesRecyclerView.paddingLeft,
-            if (visible) resources.getDimensionPixelSize(R.dimen.emote_picker_edit_control_space) else 0,
+            0,
             binding.emotesRecyclerView.paddingRight,
-            binding.emotesRecyclerView.paddingBottom,
+            if (visible) maxOf(bottomEditSpace, extraBottom) else 0,
         )
     }
 
