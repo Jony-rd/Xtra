@@ -226,6 +226,7 @@ class MainActivity : AppCompatActivity() {
     private var suppressBottomNavigationSelection = false
     private var playbackRestoreRequested = false
     private var playbackRestoreGeneration = 0
+    private var lastReturnButtonStreamIds: List<String>? = null
     private val bottomNavigationInteractionSource = Any()
     private val playbackDiagnosticOwner = Any()
     private var keepStateNavigator: KeepStateFragmentNavigator? = null
@@ -1647,31 +1648,36 @@ class MainActivity : AppCompatActivity() {
         val isPlayerOpen = playerFragment != null || viewModel.isPlayerOpened || activePlayerFragment() != null || (supportFragmentManager.findFragmentById(R.id.playerContainer) != null)
         val shouldShow = hasActiveMultiview && !isInMultiview && !isPlayerOpen
         binding.multiviewReturnButton.isVisible = shouldShow
-        if (shouldShow) {
-            val container = binding.multiviewAvatarsContainer
-            container.removeAllViews()
-            val sizePx = (22 * resources.displayMetrics.density).toInt()
-            val marginPx = (4 * resources.displayMetrics.density).toInt()
-            val cornerRadius = 4 * resources.displayMetrics.density
-            streams.take(4).forEach { stream ->
-                val iv = ImageView(this).apply {
-                    layoutParams = LinearLayout.LayoutParams(sizePx, sizePx).apply {
-                        marginStart = marginPx
-                    }
-                    scaleType = ImageView.ScaleType.CENTER_CROP
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                        clipToOutline = true
-                        outlineProvider = object : android.view.ViewOutlineProvider() {
-                            override fun getOutline(view: View, outline: android.graphics.Outline) {
-                                outline.setRoundRect(0, 0, view.width, view.height, cornerRadius)
-                            }
-                        }
-                    }
-                    setImageResource(R.drawable.ic_person_placeholder)
+        if (!shouldShow) {
+            lastReturnButtonStreamIds = null
+            return
+        }
+        val avatarIds = streams.take(4).map { it.channelId ?: it.channelLogin ?: it.id.orEmpty() }
+        if (avatarIds == lastReturnButtonStreamIds && binding.multiviewAvatarsContainer.childCount > 0) {
+            return
+        }
+        lastReturnButtonStreamIds = avatarIds
+        val container = binding.multiviewAvatarsContainer
+        container.removeAllViews()
+        val sizePx = (22 * resources.displayMetrics.density).toInt()
+        val marginPx = (4 * resources.displayMetrics.density).toInt()
+        val cornerRadius = 4 * resources.displayMetrics.density
+        streams.take(4).forEach { stream ->
+            val iv = ImageView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(sizePx, sizePx).apply {
+                    marginStart = marginPx
                 }
-                loadStreamProfileImage(this, iv, stream)
-                container.addView(iv)
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                clipToOutline = true
+                outlineProvider = object : android.view.ViewOutlineProvider() {
+                    override fun getOutline(view: View, outline: android.graphics.Outline) {
+                        outline.setRoundRect(0, 0, view.width, view.height, cornerRadius)
+                    }
+                }
+                setImageResource(R.drawable.ic_person_placeholder)
             }
+            loadStreamProfileImage(this, iv, stream)
+            container.addView(iv)
         }
     }
 

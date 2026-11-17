@@ -254,8 +254,9 @@ class MultiviewPlaybackCoordinator(
             val needsPrepare = slot.hasMediaSource &&
                 (slot.player.playbackState == Player.STATE_IDLE || slot.player.playbackState == Player.STATE_ENDED)
             val missingSource = !slot.hasMediaSource && slot.loadJob?.isActive != true
+            val wasSlotPlayingInBackground = wasPlayingInBackground && configuredVolume(slot) > 0f
             val staleStream = staleAfterIdle &&
-                (!wasPlayingInBackground || slot.player.playbackState != Player.STATE_READY)
+                (!wasSlotPlayingInBackground || slot.player.playbackState != Player.STATE_READY)
             when {
                 staleStream || stuckLoading || missingSource -> {
                     slot.reloadRequired = true
