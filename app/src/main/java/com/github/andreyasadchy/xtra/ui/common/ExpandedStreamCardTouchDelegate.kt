@@ -26,6 +26,8 @@ internal class ExpandedStreamCardTouchDelegate(
     private var tagDownX = 0f
     private var tagDownY = 0f
     private var tagMoved = false
+    internal var isDispatchingTagTouch = false
+        private set
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
@@ -55,7 +57,12 @@ internal class ExpandedStreamCardTouchDelegate(
                 tagDownX = event.x
                 tagDownY = event.y
                 tagMoved = false
-                dispatchTo(scrollView, event)
+                try {
+                    isDispatchingTagTouch = true
+                    dispatchTo(scrollView, event)
+                } finally {
+                    isDispatchingTagTouch = false
+                }
                 return true
             }
 
@@ -73,7 +80,12 @@ internal class ExpandedStreamCardTouchDelegate(
                 tagMoved = true
             }
 
-            dispatchTo(scrollView, event)
+            try {
+                isDispatchingTagTouch = true
+                dispatchTo(scrollView, event)
+            } finally {
+                isDispatchingTagTouch = false
+            }
             if (event.actionMasked == MotionEvent.ACTION_UP) {
                 val target = activeTagTarget
                 val shouldClick = target != null && !tagMoved && target.isShown &&

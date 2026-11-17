@@ -225,4 +225,19 @@ class ThumbnailImageRequestTest {
         assertEquals(1, avatarCancellations)
         assertEquals(1, thumbnailCancellations)
     }
+
+    @Test
+    fun forceEpochProducesFreshNetworkUrlWhileKeepingStableCacheKeys() {
+        val stream = Stream(
+            channelId = "channel-42",
+            thumbnailURL = "https://static-cdn.jtvnw.net/previews/{width}x{height}.jpg",
+        )
+
+        val normal = streamThumbnailRequestPlan(stream, bucket = 10L)
+        val forced = streamThumbnailRequestPlan(stream, bucket = 10L, forceEpoch = 1L)
+
+        assertEquals(normal!!.diskCacheKey, forced!!.diskCacheKey)
+        assertEquals(normal.memoryCacheKey, forced.memoryCacheKey)
+        assertNotEquals(normal.networkUrl, forced.networkUrl)
+    }
 }

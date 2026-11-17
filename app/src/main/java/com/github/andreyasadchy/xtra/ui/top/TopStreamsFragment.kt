@@ -20,6 +20,7 @@ import androidx.navigation.fragment.navArgs
 import androidx.navigation.ui.AppBarConfiguration
 import androidx.navigation.ui.setupWithNavController
 import androidx.paging.PagingDataAdapter
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.github.andreyasadchy.xtra.R
 import com.github.andreyasadchy.xtra.XtraApp
@@ -150,6 +151,13 @@ class TopStreamsFragment : PagedListFragment(), Scrollable, PagerScrollStateAwar
             fragment = this,
             coordinator = viewModel.refreshCoordinator,
             specProvider = viewModel::currentFeedSpec,
+            shouldAutoRevalidate = {
+                val recyclerView = _binding?.recyclerViewLayout?.recyclerView
+                    ?: return@StreamFeedScreenController false
+                val firstVisible = (recyclerView.layoutManager as? LinearLayoutManager)
+                    ?.findFirstVisibleItemPosition() ?: RecyclerView.NO_POSITION
+                !recyclerView.canScrollVertically(-1) || firstVisible in 0..6
+            },
         ).also { it.start() }
     }
 

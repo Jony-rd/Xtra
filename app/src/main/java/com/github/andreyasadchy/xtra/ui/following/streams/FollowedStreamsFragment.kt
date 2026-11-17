@@ -15,6 +15,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.fragment.findNavController
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.github.andreyasadchy.xtra.R
 import com.github.andreyasadchy.xtra.XtraApp
@@ -86,6 +87,13 @@ class FollowedStreamsFragment : PagedListFragment(), Scrollable, PagerScrollStat
             fragment = this,
             coordinator = viewModel.refreshCoordinator,
             specProvider = viewModel::currentFeedSpec,
+            shouldAutoRevalidate = {
+                val recyclerView = _binding?.recyclerView
+                    ?: return@StreamFeedScreenController false
+                val firstVisible = (recyclerView.layoutManager as? LinearLayoutManager)
+                    ?.findFirstVisibleItemPosition() ?: RecyclerView.NO_POSITION
+                !recyclerView.canScrollVertically(-1) || firstVisible in 0..6
+            },
         ).also { it.start() }
         ViewCompat.setOnApplyWindowInsetsListener(view) { _, windowInsets ->
             if (activity?.findViewById<LinearLayout>(R.id.navBarContainer)?.isVisible == false) {

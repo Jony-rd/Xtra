@@ -22,6 +22,7 @@ class StreamFeedScreenController(
     private val fragment: Fragment,
     private val coordinator: StreamFeedRefreshCoordinator,
     private val specProvider: () -> StreamFeedSpec?,
+    private val shouldAutoRevalidate: () -> Boolean = { true },
 ) {
     private var tickerJob: Job? = null
 
@@ -74,6 +75,7 @@ class StreamFeedScreenController(
         val spec = specProvider() ?: return
         coordinator.setVisibleFeed(spec)
         if (coordinator.isPlayerFullscreen) return
+        if (!shouldAutoRevalidate()) return
         if (coordinator.isFreshInMemory(spec)) return
         fragment.viewLifecycleOwner.lifecycleScope.launch {
             runCatching { coordinator.maybeRefresh(spec, reason) }

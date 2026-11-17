@@ -15,6 +15,7 @@ import androidx.paging.PagingDataAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.snackbar.Snackbar
 import com.github.andreyasadchy.xtra.databinding.CommonRecyclerViewLayoutBinding
+import com.github.andreyasadchy.xtra.repository.streamfeed.StreamThumbnailRefreshSignal
 import com.github.andreyasadchy.xtra.ui.main.MainActivity
 import com.github.andreyasadchy.xtra.R
 import com.github.andreyasadchy.xtra.util.C
@@ -60,7 +61,10 @@ abstract class PagedListFragment : BaseNetworkFragment() {
             }
             swipeRefresh.isEnabled = enableSwipeRefresh && !requireContext().isTelevision()
             if (enableSwipeRefresh) {
-                swipeRefresh.setOnRefreshListener { onRefresh() }
+                swipeRefresh.setOnRefreshListener {
+                    StreamThumbnailRefreshSignal.requestForceRefresh()
+                    onRefresh()
+                }
             }
             root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
                 updateTopInsetGuard(binding)
@@ -177,6 +181,7 @@ abstract class PagedListFragment : BaseNetworkFragment() {
         binding.swipeRefresh.isEnabled = enableSwipeRefresh && !requireContext().isTelevision()
         if (enableSwipeRefresh) {
             binding.swipeRefresh.setOnRefreshListener {
+                StreamThumbnailRefreshSignal.requestForceRefresh()
                 manualRefreshRequested = true
                 pagingAdapter.refresh()
             }

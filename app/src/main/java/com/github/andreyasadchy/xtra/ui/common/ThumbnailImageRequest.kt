@@ -668,11 +668,20 @@ private fun ImageRequest.Builder.thumbnailDebugDiagnostics(
     )
 }
 
-internal fun streamThumbnailRequestPlan(stream: Stream, bucket: Long): StreamThumbnailRequestPlan? {
+internal fun streamThumbnailRequestPlan(
+    stream: Stream,
+    bucket: Long,
+    forceEpoch: Long = 0L,
+): StreamThumbnailRequestPlan? {
     if (stream.thumbnailURL.isNullOrBlank()) return null
     val thumbnail = stream.thumbnail ?: return null
     val identity = stream.thumbnailIdentity()
     val separator = if ('?' in thumbnail) '&' else '?'
+    val networkUrl = if (forceEpoch > 0L) {
+        "$thumbnail${separator}xtra_preview_bucket=$bucket&xtra_force_epoch=$forceEpoch"
+    } else {
+        "$thumbnail${separator}xtra_preview_bucket=$bucket"
+    }
     return StreamThumbnailRequestPlan(
         diskCacheKey = "xtra:stream-thumbnail:$identity",
         // Keep one decoded in-process image per stream. The bucket belongs to
@@ -680,7 +689,7 @@ internal fun streamThumbnailRequestPlan(stream: Stream, bucket: Long): StreamThu
         // displayed. This lets a recreated holder render the last image from
         // memory immediately while the optional fresh request runs later.
         memoryCacheKey = "xtra:stream-thumbnail-memory:$identity",
-        networkUrl = "$thumbnail${separator}xtra_preview_bucket=$bucket",
+        networkUrl = networkUrl,
     )
 }
 
@@ -815,7 +824,7 @@ internal fun loadStreamThumbnail(
     val bindToken = imageView.getTag(R.id.stream_image_bind_token) as? Long
     val bucket = StreamThumbnailPolicy.bucket(System.currentTimeMillis())
     val forceEpoch = StreamThumbnailRefreshSignal.currentForceEpoch()
-    val plan = streamThumbnailRequestPlan(stream, bucket)
+    val plan = streamThumbnailRequestPlan(stream, bucket, forceEpoch)
     if (plan == null) {
         imageView.setImageDrawable(null)
         imageView.setTag(R.id.stream_thumbnail_request_key, null)

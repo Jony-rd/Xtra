@@ -663,7 +663,15 @@ class StreamPreviewCoordinator(
                 }
             }
         }
-        active.touchRelay?.isEnabled = clickTarget?.isEnabled == true
+        active.touchRelay?.let { currentRelay ->
+            currentRelay.isEnabled = clickTarget?.isEnabled == true
+            if (currentRelay.parent === candidate.surface &&
+                candidate.surface.childCount > 0 &&
+                candidate.surface.getChildAt(candidate.surface.childCount - 1) !== currentRelay
+            ) {
+                currentRelay.bringToFront()
+            }
+        }
         attachPreviewPlayer(active)
         active.playerView.alpha = if (active.firstFrameRendered) 1f else 0f
         active.playerView.visibility = View.VISIBLE
