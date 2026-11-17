@@ -1,5 +1,4 @@
 package com.github.andreyasadchy.xtra.ui.multiview
-import com.github.andreyasadchy.xtra.ui.multiview.ui.MultiviewLayoutPlan
 
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
@@ -47,6 +46,7 @@ import com.github.andreyasadchy.xtra.ui.multiview.playback.MultiviewQualityMode
 import com.github.andreyasadchy.xtra.ui.multiview.ui.AddMultiviewStreamsSheet
 import com.github.andreyasadchy.xtra.ui.multiview.ui.MultiviewLayoutManager
 import com.github.andreyasadchy.xtra.ui.multiview.ui.MultiviewLayoutMode
+import com.github.andreyasadchy.xtra.ui.multiview.ui.MultiviewLayoutPlan
 import com.github.andreyasadchy.xtra.ui.multiview.ui.MultiviewSlotView
 import com.github.andreyasadchy.xtra.ui.multiview.ui.MultiviewStreamDeckDialog
 import com.github.andreyasadchy.xtra.ui.player.SleepTimerDialog
@@ -117,7 +117,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             navBar.visibility = View.GONE
         }
 
-                // Full-immersive multiview: never pad for system bars or the display
+        // Full-immersive multiview: never pad for system bars or the display
         // cutout — the streams own the whole screen. Only the IME may push
         // content up so the chat input stays visible while typing.
         ViewCompat.setOnApplyWindowInsetsListener(binding.multiviewRoot) { root, insets ->
@@ -142,7 +142,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             }
         }
 
-                enterImmersiveMode()
+        enterImmersiveMode()
 
         binding.backButton.setOnClickListener { findNavController().popBackStack() }
         binding.orientationButton.setOnClickListener { toggleMultiviewOrientation() }
@@ -259,6 +259,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        MultiviewStreamDeckDialog.dismiss()
         if (_binding != null) {
             requireActivity().findViewById<View>(R.id.navBarContainer)?.visibility = View.GONE
             enterImmersiveMode()
@@ -842,8 +843,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         val context = context ?: return
         if (latestState.streams.isEmpty()) return
         lockControls()
+        val config = resources.configuration
         val isFloatingWindow = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && activity?.isInMultiWindowMode == true) ||
-            resources.configuration.screenHeightDp < 520
+            (config.orientation != Configuration.ORIENTATION_LANDSCAPE && config.screenHeightDp < 520)
         val anchorBottomPx = computeStreamDeckAnchorBottomPx()
         MultiviewStreamDeckDialog.show(
             context = context,
