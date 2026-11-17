@@ -453,7 +453,7 @@ object MultiviewStreamDeckDialog {
             val bottomMacros = buildMacroDeck(
                 ui = ui,
                 onAfterMacro = { firstVol ->
-                    masterBus.updateAudioUi(firstVol, updateFader = true)
+                    masterBus.updateAudioUi(firstVol, true)
                     populateCards()
                 },
                 onDismiss = ::cleanupOverlay,
