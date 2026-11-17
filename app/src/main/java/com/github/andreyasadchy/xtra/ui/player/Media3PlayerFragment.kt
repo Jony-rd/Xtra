@@ -75,6 +75,12 @@ import androidx.recyclerview.widget.RecyclerView
 import com.github.andreyasadchy.xtra.BuildConfig
 import com.github.andreyasadchy.xtra.R
 import com.github.andreyasadchy.xtra.XtraApp
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsCategory
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsField
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsFieldKey
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsPhase
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsSeverity
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsTransport
 import com.github.andreyasadchy.xtra.databinding.FragmentPlayerBinding
 import com.github.andreyasadchy.xtra.model.VideoQuality
 import com.github.andreyasadchy.xtra.model.ui.Clip
@@ -161,6 +167,7 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
     protected var chatFragment: ChatFragment? = null
 
     protected var videoType: String? = null
+    protected var pendingStreamStartReason: String? = null
     protected var restoredPlaybackController: MediaController? = null
         private set
     protected val xtraModule
@@ -210,6 +217,7 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
     private var backgroundVisible = false
     private var pipPlaying = false
     private var loadedChannelAvatarUrl: String? = null
+    private var streamRestartAttempt = 0
     private var liveRewindVod: LiveRewindVod? = null
     private var liveRewindStreamId: String? = null
     private var liveRewindStreamCreatedAt: String? = null
@@ -1535,8 +1543,45 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                         repeatOnLifecycle(Lifecycle.State.STARTED) {
                             viewModel.streamResult.collectLatest {
                                 if (it != null) {
+                                    reportStreamStartupStage(
+                                        event = "url_result_consumed",
+                                        sourceReason = pendingStreamStartReason ?: if (
+                                            requireArguments().getBoolean(KEY_RESTORED_PLAYBACK)
+                                        ) "restored_playback" else "card_selection",
+                                    )
                                     startStream(it)
                                     viewModel.streamResult.value = null
+                                }
+                            }
+                        }
+                    }
+                    viewLifecycleOwner.lifecycleScope.launch {
+                        repeatOnLifecycle(Lifecycle.State.STARTED) {
+                            viewModel.streamUrlResolutionFailure.collectLatest { failure ->
+                                if (failure != null) {
+                                    if (xtraModule.diagnosticsLogger.isEnabled) {
+                                        xtraModule.diagnosticsLogger.event(
+                                            category = DiagnosticsCategory.PLAYBACK,
+                                            severity = DiagnosticsSeverity.WARN,
+                                            transport = DiagnosticsTransport.PLAYER,
+                                            operation = "stream_source",
+                                            event = "url_resolution_failed",
+                                            phase = DiagnosticsPhase.RESULT,
+                                            code = failure.kind,
+                                            fields = listOf(
+                                                DiagnosticsField(DiagnosticsFieldKey.ATTEMPT, failure.attempt.toString()),
+                                                DiagnosticsField(
+                                                    DiagnosticsFieldKey.SOURCE_REASON,
+                                                    pendingStreamStartReason ?: if (
+                                                        requireArguments().getBoolean(KEY_RESTORED_PLAYBACK)
+                                                    ) "restored_playback" else "card_selection",
+                                                ),
+                                            ),
+                                        )
+                                    }
+                                    if (viewModel.streamUrlResolutionFailure.value == failure) {
+                                        viewModel.streamUrlResolutionFailure.value = null
+                                    }
                                 }
                             }
                         }
@@ -1628,7 +1673,7 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
                     restart.visibility = View.VISIBLE
                     restart.setOnClickListener {
                         showController(force = true)
-                        restartPlayer()
+                        restartPlayer("hud_restart")
                     }
                     seekLive.visibility = View.VISIBLE
                     seekLive.setOnClickListener {
@@ -2931,7 +2976,7 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
     }
 
     protected open fun onStreamBecameLive(eventSequence: Long?) {
-        restartPlayer()
+        restartPlayer("stream_became_live")
     }
 
     protected open fun onStreamBecameOffline(eventSequence: Long?) {
@@ -3000,19 +3045,72 @@ abstract class Media3PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFr
         channelImage: String?,
     ) = Unit
 
-    fun restartPlayer() {
+    fun restartPlayer(reason: String = "player_restart") {
         if (videoType == STREAM && isLiveRewindActiveOrSwitching()) return
         if (viewModel.quality?.name != CHAT_ONLY_QUALITY) {
             if (videoType == STREAM) {
+                val attempt = ++streamRestartAttempt
+                val elapsedNow = SystemClock.elapsedRealtime()
+                arguments?.putLong(KEY_TAP_ELAPSED_MS, elapsedNow)
+                viewModel.invalidateStreamUrlLoad()
+                if (xtraModule.diagnosticsLogger.isEnabled) {
+                    xtraModule.diagnosticsLogger.event(
+                        category = DiagnosticsCategory.PLAYBACK,
+                        severity = DiagnosticsSeverity.INFO,
+                        transport = DiagnosticsTransport.PLAYER,
+                        operation = "stream_source",
+                        event = "restart_requested",
+                        phase = DiagnosticsPhase.REQUEST,
+                        code = reason,
+                        fields = listOf(
+                            DiagnosticsField(DiagnosticsFieldKey.ATTEMPT, attempt.toString()),
+                            DiagnosticsField(DiagnosticsFieldKey.SOURCE_REASON, reason),
+                        ),
+                    )
+                }
+                pendingStreamStartReason = reason
                 onStreamQualityReset()
                 clearQualityCatalog()
                 viewModel.updateQualities = true
                 viewModel.playlistUrl = null
-                viewModel.streamResult.value = null
                 setQualityText()
             }
             loadStream()
         }
+    }
+
+    protected fun reportStreamStartupStage(
+        event: String,
+        sourceReason: String,
+        phase: DiagnosticsPhase = DiagnosticsPhase.EVENT,
+    ) {
+        if (videoType != STREAM || !xtraModule.diagnosticsLogger.isEnabled) return
+        val now = SystemClock.elapsedRealtime()
+        val urlReadyAtMs = viewModel.streamUrlAvailableElapsedMs
+        val queueWaitMs = urlReadyAtMs?.let { (now - it).takeIf { elapsed -> elapsed >= 0L } }
+        xtraModule.diagnosticsLogger.event(
+            category = DiagnosticsCategory.PLAYBACK,
+            severity = if (queueWaitMs != null && queueWaitMs >= 5_000L) {
+                DiagnosticsSeverity.WARN
+            } else {
+                DiagnosticsSeverity.INFO
+            },
+            transport = DiagnosticsTransport.PLAYER,
+            operation = "stream_startup",
+            event = event,
+            phase = phase,
+            code = sourceReason,
+            elapsedMs = queueWaitMs,
+            fields = buildList {
+                add(DiagnosticsField(DiagnosticsFieldKey.SOURCE_REASON, sourceReason))
+                add(DiagnosticsField(DiagnosticsFieldKey.URL_WARM, viewModel.streamUrlWarm.value.toString()))
+                queueWaitMs?.let { add(DiagnosticsField(DiagnosticsFieldKey.QUEUE_WAIT_MS, it.toString())) }
+                add(DiagnosticsField(
+                    DiagnosticsFieldKey.STATE,
+                    viewLifecycleOwner.lifecycle.currentState.name.lowercase(),
+                ))
+            },
+        )
     }
 
     protected open fun onStreamQualityReset() = Unit

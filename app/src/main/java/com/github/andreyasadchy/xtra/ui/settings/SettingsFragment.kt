@@ -40,7 +40,9 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.fragment.findNavController
 import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
+import androidx.preference.MultiSelectListPreference
 import androidx.preference.Preference
+import androidx.preference.PreferenceCategory
 import androidx.preference.PreferenceDataStore
 import androidx.preference.PreferenceGroupAdapter
 import androidx.preference.SeekBarPreference
@@ -1045,6 +1047,7 @@ class SettingsFragment : MaterialPreferenceFragment() {
             true
         }
         if (settingsScreen == SCREEN_CHAT_TRANSLATION) configureTranslationPreferences()
+        if (settingsScreen == SCREEN_CHAT_EMOTES) configureChatEmotePickerPreferences()
         if (settingsScreen == SCREEN_PLAYER_SEEK) configureSeekPreferences()
         if (settingsScreen == SCREEN_CHAT_APPEARANCE) {
             configureChatAppearancePreferences()
@@ -1223,6 +1226,16 @@ class SettingsFragment : MaterialPreferenceFragment() {
                 }
                 valid
             }
+        }
+    }
+
+    private fun configureChatEmotePickerPreferences() {
+        findPreference<MultiSelectListPreference>(C.CHAT_EMOTE_PICKER_TABS)?.setOnPreferenceChangeListener { _, value ->
+            val hasVisibleTab = (value as? Set<*>)?.isNotEmpty() == true
+            if (!hasVisibleTab) {
+                Toast.makeText(requireContext(), R.string.chat_emote_picker_keep_one_tab, Toast.LENGTH_SHORT).show()
+            }
+            hasVisibleTab
         }
     }
 
@@ -1414,6 +1427,7 @@ class SettingsFragment : MaterialPreferenceFragment() {
             findPreference<SwitchPreferenceCompat>("chat_translate")?.isVisible = false
             findPreference<Preference>("downloaded_languages")?.isVisible = false
             findPreference<ListPreference>("chat_translate_target")?.isVisible = false
+            findPreference<PreferenceCategory>("chat_translation_appearance")?.isVisible = false
             return
         }
         val languages = TranslateLanguage.getAllLanguages()
@@ -1452,6 +1466,9 @@ class SettingsFragment : MaterialPreferenceFragment() {
             entries = names
             entryValues = languages.toTypedArray()
         }
+        findPreference<EditTextPreference>(C.CHAT_TRANSLATION_TEXT_COLOR)?.summary = requireContext().prefs()
+            .getString(C.CHAT_TRANSLATION_TEXT_COLOR, null)
+            ?: getString(R.string.settings_chat_translation_color_default_summary)
     }
 
     private fun openExternal(url: String) {

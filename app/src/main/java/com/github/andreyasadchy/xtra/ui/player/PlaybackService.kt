@@ -97,7 +97,7 @@ import com.github.andreyasadchy.xtra.ui.player.clip.LiveClipBufferManager
 import com.github.andreyasadchy.xtra.ui.main.MainActivity
 import com.github.andreyasadchy.xtra.util.C
 import com.github.andreyasadchy.xtra.util.AdaptiveLivePlaybackController
-import com.github.andreyasadchy.xtra.util.FixedSpeedLivePlaybackControl
+import com.github.andreyasadchy.xtra.util.AdaptiveLivePlaybackSpeedControl
 import com.github.andreyasadchy.xtra.util.LivePlaybackSettings
 import com.github.andreyasadchy.xtra.util.LivePriorityCatchUpPolicy
 import com.github.andreyasadchy.xtra.util.shouldRunAdaptiveLiveSampleTicker
@@ -156,7 +156,7 @@ class PlaybackService : MediaSessionService() {
     private var lastSystemBehindSeconds: Long? = null
     private var lastLivePriorityCatchUpRealtimeMs = Long.MIN_VALUE
     private var adaptiveLiveController: AdaptiveLivePlaybackController? = null
-    private var livePlaybackSpeedControl: FixedSpeedLivePlaybackControl? = null
+    private var livePlaybackSpeedControl: AdaptiveLivePlaybackSpeedControl? = null
     private var adaptiveLiveSampleJob: Job? = null
     private val liveClipBufferManager = LiveClipBufferManager()
     private var liveClipDataSourceFactory: DataSource.Factory? = null
@@ -427,7 +427,7 @@ class PlaybackService : MediaSessionService() {
         val initialLiveSettings = LivePlaybackSettings.fromPreferences(prefs())
         val initialLivePolicies = initialLiveSettings.policies()
         val initialLivePolicy = initialLivePolicies.forMode(initialLiveSettings.mode)
-        livePlaybackSpeedControl = FixedSpeedLivePlaybackControl(
+        livePlaybackSpeedControl = AdaptiveLivePlaybackSpeedControl(
             DefaultLivePlaybackSpeedControl.Builder().build(),
         )
         livePlaybackSpeedControl?.setRebufferTargetAdaptationEnabled(false)
@@ -5924,6 +5924,7 @@ class PlaybackService : MediaSessionService() {
             mediaAgeMs = preloaded?.mediaAgeMs,
             urlWarm = urlWarm,
             previewAlreadyPlaying = previewAlreadyPlaying,
+            sourceStartReason = extras.getString(SOURCE_START_REASON) ?: "unknown",
         )
         if (BuildConfig.DEBUG) {
             Log.d(
@@ -6379,6 +6380,7 @@ class PlaybackService : MediaSessionService() {
         add(DiagnosticsField(DiagnosticsFieldKey.MEDIA_SOURCE, milestone.mediaLabel))
         add(DiagnosticsField(DiagnosticsFieldKey.URL_WARM, milestone.urlWarm.toString()))
         add(DiagnosticsField(DiagnosticsFieldKey.PREVIEW_ALREADY_PLAYING, milestone.previewAlreadyPlaying.toString()))
+        add(DiagnosticsField(DiagnosticsFieldKey.SOURCE_REASON, milestone.sourceStartReason))
         milestone.tapToUrlAvailableMs?.let { add(DiagnosticsField(DiagnosticsFieldKey.TAP_TO_URL_MS, it.toString())) }
         add(DiagnosticsField(DiagnosticsFieldKey.TAP_TO_START_MS, milestone.tapToStartStreamMs.toString()))
         milestone.tapToPrepareMs?.let { add(DiagnosticsField(DiagnosticsFieldKey.TAP_TO_PREPARE_MS, it.toString())) }
@@ -7385,6 +7387,7 @@ class PlaybackService : MediaSessionService() {
         const val URL_WARM = "urlWarm"
         const val TAP_ELAPSED_MS = "tapElapsedMs"
         const val URL_AVAILABLE_ELAPSED_MS = "urlAvailableElapsedMs"
+        const val SOURCE_START_REASON = "sourceStartReason"
         const val STREAM_ID = "streamId"
         const val VIDEO_ID = "videoId"
         const val VIDEO_ID_STRING = "videoIdString"

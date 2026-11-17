@@ -251,6 +251,7 @@ object C {
     const val PLAYER_BUFFER_REBUFFER = "player_buffer_rebuffer"
     const val PLAYER_LIVE_MIN_SPEED = "player_live_min_speed"
     const val PLAYER_LIVE_MAX_SPEED = "player_live_max_speed"
+    const val PLAYER_LIVE_MAX_SPEED_ENABLED = "player_live_max_speed_enabled"
     const val PLAYER_LIVE_TARGET_OFFSET = "player_live_target_offset"
     const val LOW_LATENCY_TARGET_OFFSET_MS = 2_000L
     const val NORMAL_LATENCY_TARGET_OFFSET_MS = 10_000L
@@ -371,6 +372,8 @@ object C {
     const val CHAT_REMEMBER_DISMISSED_PINNED_MESSAGES_DEFAULT = true
     const val CHAT_TRANSLATE = "chat_translate"
     const val CHAT_TRANSLATE_TARGET = "chat_translate_target"
+    const val CHAT_TRANSLATION_ITALIC = "chat_translation_italic"
+    const val CHAT_TRANSLATION_TEXT_COLOR = "chat_translation_text_color"
     const val CHAT_SHOW_USER_NOTICE = "chat_show_usernotice"
     const val CHAT_SHOW_CLEAR_MSG = "chat_show_clearmsg"
     const val CHAT_SHOW_CLEAR_CHAT = "chat_show_clearchat"
@@ -380,6 +383,8 @@ object C {
     const val CHAT_ENABLE_FFZ = "chat_enable_ffz"
     const val CHAT_EMOTE_AUTOCOMPLETE = "chat_emote_autocomplete"
     const val CHAT_EMOTE_RECOMMENDATIONS = "chat_emote_recommendations"
+    const val CHAT_EMOTE_PICKER_TABS = "chat_emote_picker_tabs"
+    const val CHAT_QUICK_EMOTE_EMOJIS = "chat_quick_emote_emojis"
     const val CHAT_USERNAME_RECOMMENDATIONS = "chat_username_recommendations"
     const val CHAT_COMPACT_TWITCH_EMOTE_GROUPS = "chat_compact_twitch_emote_groups"
     const val CHAT_COMPACT_PICKER_ITEM_SIZE = "chat_compact_picker_item_size"

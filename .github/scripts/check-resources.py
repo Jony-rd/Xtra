@@ -130,6 +130,13 @@ INTENTIONAL_FALLBACK_RESOURCES = {
     "use_emoji",
     "settings_twemoji",
     "settings_twemoji_summary",
+    # Emote picker controls currently use the default English wording until
+    # the new settings are translated across supported locales.
+    "chat_emote_picker_tabs",
+    "chat_emote_picker_tabs_summary",
+    "chat_emote_picker_keep_one_tab",
+    "chat_quick_emote_emojis",
+    "chat_quick_emote_emojis_summary",
     # Chat user-card details use the default English wording until translated.
     "settings_user_card_category",
     "settings_user_card_account_created",
@@ -229,6 +236,8 @@ INTENTIONAL_FALLBACK_RESOURCES = {
     "settings_live_tuning_max_buffer_description",
     "settings_live_tuning_start_buffer_description",
     "settings_live_tuning_rebuffer_description",
+    "settings_live_max_speed_enabled",
+    "settings_live_max_speed_enabled_summary",
     "settings_live_tuning_min_speed_description",
     "settings_live_tuning_max_speed_description",
     "live_speed_range",
@@ -574,6 +583,13 @@ INTENTIONAL_FALLBACK_RESOURCES = {
     "settings_chat_message_text",
     "settings_chat_metadata_text",
     "settings_chat_text_default_summary",
+    # Translation appearance settings ship in English until their labels are
+    # reviewed by native speakers.
+    "settings_chat_translation_appearance",
+    "settings_chat_translation_italic",
+    "settings_chat_translation_italic_summary",
+    "settings_chat_translation_color",
+    "settings_chat_translation_color_default_summary",
     "settings_chat_restore_text_defaults",
     "settings_chat_appearance_preview",
     "settings_chat_appearance_preview_summary",

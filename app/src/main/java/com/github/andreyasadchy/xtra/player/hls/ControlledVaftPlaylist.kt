@@ -51,9 +51,12 @@ import java.util.UUID
 import java.time.Instant
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 
 private const val VAFT_RESOLUTION_DIAGNOSTIC_INTERVAL_MS = 15_000L
+private const val VAFT_RESOLUTION_RETRY_INITIAL_DELAY_MS = 1_000L
+private const val VAFT_RESOLUTION_RETRY_MAX_DELAY_MS = 10_000L
 
 /** Owns the sequence that the HLS loader sees, before any media is queued. */
 @androidx.media3.common.util.UnstableApi
@@ -96,7 +99,9 @@ class ControlledVaftPlaylist(
         var initialResolutionStartedMs: Long? = null
         var initialResolutionStartReported = false
         var initialResolutionReported = false
-        var initialResolutionTimeoutReported = false
+        var lastInitialWaitDiagnosticMs = Long.MIN_VALUE
+        var nextResolutionAttemptMs = Long.MIN_VALUE
+        var resolutionRetryDelayMs = VAFT_RESOLUTION_RETRY_INITIAL_DELAY_MS
         var lastResolutionDiagnosticMs = Long.MIN_VALUE
         var lastResolutionDiagnosticOutcome: String? = null
         @Volatile var visible: List<Published> = emptyList()
@@ -104,6 +109,42 @@ class ControlledVaftPlaylist(
     }
 
     private data class Resolution(val candidate: Candidate?, val anchor: Pair<Int, Published>?, val primary: Boolean)
+    private class CandidateProbeStats {
+        val playerTypeCount = AtomicInteger()
+        val masterMissCount = AtomicInteger()
+        val masterFetchErrorCount = AtomicInteger()
+        val noCompatibleRenditionCount = AtomicInteger()
+        val renditionCount = AtomicInteger()
+        val fetchErrorCount = AtomicInteger()
+        val emptyPlaylistCount = AtomicInteger()
+        val partOnlyPlaylistCount = AtomicInteger()
+        val blockedTailCount = AtomicInteger()
+        val timelineMissCount = AtomicInteger()
+
+        fun outcome(): String = when {
+            renditionCount.get() > 0 && blockedTailCount.get() == renditionCount.get() -> "all_candidate_tails_blocked"
+            partOnlyPlaylistCount.get() > 0 && renditionCount.get() == partOnlyPlaylistCount.get() -> "candidate_parts_only"
+            emptyPlaylistCount.get() > 0 && renditionCount.get() == emptyPlaylistCount.get() -> "candidate_playlists_empty"
+            timelineMissCount.get() > 0 -> "candidate_timeline_unmatched"
+            fetchErrorCount.get() > 0 && renditionCount.get() == fetchErrorCount.get() -> "candidate_fetch_failed"
+            playerTypeCount.get() > 0 && masterMissCount.get() == playerTypeCount.get() -> "no_candidate_master"
+            noCompatibleRenditionCount.get() > 0 && renditionCount.get() == 0 -> "no_compatible_candidate_rendition"
+            else -> "no_candidate_media"
+        }
+
+        fun fields(): List<DiagnosticsField> = listOf(
+            DiagnosticsField(DiagnosticsFieldKey.CANDIDATE_OUTCOME, outcome()),
+            DiagnosticsField(DiagnosticsFieldKey.CANDIDATE_PLAYER_TYPE_COUNT, playerTypeCount.get().toString()),
+            DiagnosticsField(DiagnosticsFieldKey.CANDIDATE_RENDITION_COUNT, renditionCount.get().toString()),
+            DiagnosticsField(DiagnosticsFieldKey.CANDIDATE_MASTER_MISS_COUNT, masterMissCount.get().toString()),
+            DiagnosticsField(DiagnosticsFieldKey.CANDIDATE_MASTER_FETCH_ERROR_COUNT, masterFetchErrorCount.get().toString()),
+            DiagnosticsField(DiagnosticsFieldKey.CANDIDATE_FETCH_ERROR_COUNT, fetchErrorCount.get().toString()),
+            DiagnosticsField(DiagnosticsFieldKey.CANDIDATE_EMPTY_PLAYLIST_COUNT, emptyPlaylistCount.get().toString()),
+            DiagnosticsField(DiagnosticsFieldKey.CANDIDATE_PART_ONLY_COUNT, partOnlyPlaylistCount.get().toString()),
+            DiagnosticsField(DiagnosticsFieldKey.CANDIDATE_BLOCKED_TAIL_COUNT, blockedTailCount.get().toString()),
+            DiagnosticsField(DiagnosticsFieldKey.CANDIDATE_TIMELINE_MISS_COUNT, timelineMissCount.get().toString()),
+        )
+    }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile private var closed = false
 
@@ -155,6 +196,8 @@ class ControlledVaftPlaylist(
             feed.candidate = null
             feed.lastSearchMs = Long.MIN_VALUE
             feed.lastQualityRefreshMs = Long.MIN_VALUE
+            feed.nextResolutionAttemptMs = Long.MIN_VALUE
+            feed.resolutionRetryDelayMs = VAFT_RESOLUTION_RETRY_INITIAL_DELAY_MS
         } }
     }
 
@@ -259,6 +302,8 @@ class ControlledVaftPlaylist(
                         feed.generation++
                         feed.resolving?.cancel()
                         feed.resolved = null
+                        feed.nextResolutionAttemptMs = Long.MIN_VALUE
+                        feed.resolutionRetryDelayMs = VAFT_RESOLUTION_RETRY_INITIAL_DELAY_MS
                     }
                 }
             }
@@ -288,11 +333,15 @@ class ControlledVaftPlaylist(
                 feed.generation++
                 feed.resolving?.cancel()
                 feed.resolved = null
+                feed.nextResolutionAttemptMs = Long.MIN_VALUE
+                feed.resolutionRetryDelayMs = VAFT_RESOLUTION_RETRY_INITIAL_DELAY_MS
             }
             if (feed.published.isEmpty()) {
                 if (feed.initialResolutionStartedMs == null) {
                     feed.initialResolutionStartedMs = now
                 }
+                val initialBlockedCount = blocked.count { it }
+                val initialCleanCount = blocked.size - initialBlockedCount
                 if (!feed.initialResolutionStartReported && module.diagnosticsLogger.isEnabled) {
                     feed.initialResolutionStartReported = true
                     reportVaftResolution(
@@ -304,25 +353,50 @@ class ControlledVaftPlaylist(
                         format = format,
                         fields = listOf(
                             DiagnosticsField(DiagnosticsFieldKey.RESOLUTION_REASON, resolutionReason),
-                            DiagnosticsField(DiagnosticsFieldKey.COUNT, blocked.count { it }.toString()),
+                            DiagnosticsField(DiagnosticsFieldKey.COUNT, initialBlockedCount.toString()),
+                            DiagnosticsField(DiagnosticsFieldKey.SEGMENT_COUNT, playlist.segments.size.toString()),
+                            DiagnosticsField(DiagnosticsFieldKey.TRAILING_PART_COUNT, playlist.trailingParts.size.toString()),
+                            DiagnosticsField(DiagnosticsFieldKey.MEDIA_SEQUENCE, playlist.mediaSequence.toString()),
+                            DiagnosticsField(DiagnosticsFieldKey.BLOCKED_SEGMENT_COUNT, initialBlockedCount.toString()),
+                            DiagnosticsField(DiagnosticsFieldKey.CLEAN_SEGMENT_COUNT, initialCleanCount.toString()),
+                            DiagnosticsField(DiagnosticsFieldKey.TAIL_BLOCKED, (blocked.lastOrNull() == true).toString()),
                         ),
                     )
                 }
                 if (needsResolution) resolveAsync(feed, format, uri, playlist, blocked, now, resolutionReason)
-                if (now - feed.createdMs < 20_000L) throw WaitingForVerifiedMediaException()
-                if (!feed.initialResolutionTimeoutReported && module.diagnosticsLogger.isEnabled) {
-                    feed.initialResolutionTimeoutReported = true
+                val waitStartedMs = feed.initialResolutionStartedMs ?: feed.createdMs
+                val waitElapsedMs = (now - waitStartedMs).coerceAtLeast(0L)
+                if (waitElapsedMs >= VAFT_RESOLUTION_DIAGNOSTIC_INTERVAL_MS &&
+                    (feed.lastInitialWaitDiagnosticMs == Long.MIN_VALUE ||
+                        now - feed.lastInitialWaitDiagnosticMs >= VAFT_RESOLUTION_DIAGNOSTIC_INTERVAL_MS) &&
+                    module.diagnosticsLogger.isEnabled
+                ) {
+                    feed.lastInitialWaitDiagnosticMs = now
                     reportVaftResolution(
-                        event = "resolution_wait_timeout",
-                        phase = DiagnosticsPhase.ERROR,
-                        severity = DiagnosticsSeverity.ERROR,
+                        event = "resolution_wait_pending",
+                        phase = DiagnosticsPhase.EVENT,
+                        severity = DiagnosticsSeverity.WARN,
                         code = "no_verified_media",
-                        elapsedMs = (now - (feed.initialResolutionStartedMs ?: feed.createdMs)).coerceAtLeast(0L),
+                        elapsedMs = waitElapsedMs,
                         format = format,
-                        fields = listOf(DiagnosticsField(DiagnosticsFieldKey.RESOLUTION_REASON, resolutionReason)),
+                        fields = listOf(
+                            DiagnosticsField(DiagnosticsFieldKey.RESOLUTION_REASON, resolutionReason),
+                            DiagnosticsField(DiagnosticsFieldKey.COUNT, blocked.count { it }.toString()),
+                            DiagnosticsField(DiagnosticsFieldKey.SEGMENT_COUNT, playlist.segments.size.toString()),
+                            DiagnosticsField(DiagnosticsFieldKey.TRAILING_PART_COUNT, playlist.trailingParts.size.toString()),
+                            DiagnosticsField(DiagnosticsFieldKey.MEDIA_SEQUENCE, playlist.mediaSequence.toString()),
+                            DiagnosticsField(DiagnosticsFieldKey.BLOCKED_SEGMENT_COUNT, blocked.count { it }.toString()),
+                            DiagnosticsField(DiagnosticsFieldKey.CLEAN_SEGMENT_COUNT, (blocked.size - blocked.count { it }).toString()),
+                            DiagnosticsField(DiagnosticsFieldKey.TAIL_BLOCKED, (blocked.lastOrNull() == true).toString()),
+                            DiagnosticsField(DiagnosticsFieldKey.FEED_AGE_MS, (now - feed.createdMs).coerceAtLeast(0L).toString()),
+                            DiagnosticsField(DiagnosticsFieldKey.RETRY_DELAY_MS, feed.resolutionRetryDelayMs.toString()),
+                        ),
                     )
                 }
-                throw IOException("No verified live media is available yet")
+                // Keep this source alive while an ad window or an empty live edge is
+                // being resolved. Turning the wait into a terminal IOException makes
+                // the player restart the source and can repeatedly reset VAFT state.
+                throw WaitingForVerifiedMediaException()
             }
             feed.initialResolutionStartedMs?.let { startedAtMs ->
                 if (!feed.initialResolutionReported && module.diagnosticsLogger.isEnabled) {
@@ -378,6 +452,7 @@ class ControlledVaftPlaylist(
     private fun resolveAsync(feed: Feed, format: Format, uri: Uri, primary: HlsMediaPlaylist,
                              blocked: List<Boolean>, now: Long, resolutionReason: String) {
         if (closed || feed.resolving?.isActive == true ||
+            (feed.nextResolutionAttemptMs != Long.MIN_VALUE && now < feed.nextResolutionAttemptMs) ||
             (feed.lastSearchMs != Long.MIN_VALUE && now - feed.lastSearchMs < 500L)) return
         feed.lastSearchMs = now
         val probe = Feed(feed.fingerprints).also {
@@ -386,6 +461,7 @@ class ControlledVaftPlaylist(
         }
         val wanted = wantedFormat(format)
         val known = feed.candidate?.takeIf { it.format == null || it.format.height <= wanted.height }
+        val candidateStats = CandidateProbeStats().takeIf { module.diagnosticsLogger.isEnabled }
         val generation = feed.generation
         // Retain committed segments, but never publish cached prefetch while its refresh is pending.
         feed.candidate = null
@@ -397,14 +473,26 @@ class ControlledVaftPlaylist(
                 if (probe.published.lastOrNull()?.sequence != before) {
                     Resolution(Candidate(primaryType, uri, primary), primaryAnchor, true)
                 } else {
-                    resolveReplacement(wanted, probe, known) ?: Resolution(null, null, false)
+                    resolveReplacement(wanted, probe, known, candidateStats) ?: Resolution(null, null, false)
                 }
             }
+            val completedAtMs = SystemClock.elapsedRealtime()
+            var retryDelayMs = 0L
             val isCurrentResult = synchronized(feed) {
                 if (closed || generation != feed.generation) {
                     false
                 } else {
                     feed.resolved = result ?: Resolution(null, null, false)
+                    if (result?.candidate == null) {
+                        retryDelayMs = feed.resolutionRetryDelayMs
+                        feed.nextResolutionAttemptMs = completedAtMs + retryDelayMs
+                        feed.resolutionRetryDelayMs = (retryDelayMs * 2L)
+                            .coerceAtMost(VAFT_RESOLUTION_RETRY_MAX_DELAY_MS)
+                    } else {
+                        retryDelayMs = 0L
+                        feed.nextResolutionAttemptMs = Long.MIN_VALUE
+                        feed.resolutionRetryDelayMs = VAFT_RESOLUTION_RETRY_INITIAL_DELAY_MS
+                    }
                     true
                 }
             }
@@ -415,7 +503,6 @@ class ControlledVaftPlaylist(
                 result.primary -> "primary_media"
                 else -> "replacement_media"
             }
-            val completedAtMs = SystemClock.elapsedRealtime()
             val shouldReport = synchronized(feed) {
                 if (!module.diagnosticsLogger.isEnabled) return@synchronized false
                 val changed = feed.lastResolutionDiagnosticOutcome != outcome
@@ -427,6 +514,7 @@ class ControlledVaftPlaylist(
                 true
             }
             if (shouldReport) {
+                val blockedCount = blocked.count { it }
                 reportVaftResolution(
                     event = "resolution_completed",
                     phase = if (result?.candidate != null) DiagnosticsPhase.RESULT else DiagnosticsPhase.EVENT,
@@ -437,7 +525,15 @@ class ControlledVaftPlaylist(
                     fields = listOf(
                         DiagnosticsField(DiagnosticsFieldKey.RESOLUTION_REASON, resolutionReason),
                         DiagnosticsField(DiagnosticsFieldKey.RESULT_COUNT, if (result?.candidate != null) "1" else "0"),
-                    ),
+                        DiagnosticsField(DiagnosticsFieldKey.SEGMENT_COUNT, primary.segments.size.toString()),
+                        DiagnosticsField(DiagnosticsFieldKey.TRAILING_PART_COUNT, primary.trailingParts.size.toString()),
+                        DiagnosticsField(DiagnosticsFieldKey.MEDIA_SEQUENCE, primary.mediaSequence.toString()),
+                        DiagnosticsField(DiagnosticsFieldKey.BLOCKED_SEGMENT_COUNT, blockedCount.toString()),
+                        DiagnosticsField(DiagnosticsFieldKey.CLEAN_SEGMENT_COUNT, (blocked.size - blockedCount).toString()),
+                        DiagnosticsField(DiagnosticsFieldKey.TAIL_BLOCKED, (blocked.lastOrNull() == true).toString()),
+                        DiagnosticsField(DiagnosticsFieldKey.FEED_AGE_MS, (completedAtMs - feed.createdMs).coerceAtLeast(0L).toString()),
+                        DiagnosticsField(DiagnosticsFieldKey.RETRY_DELAY_MS, retryDelayMs.toString()),
+                    ) + if (result?.candidate == null) candidateStats?.fields().orEmpty() else emptyList(),
                 )
             }
             if (BuildConfig.DEBUG) Log.d("XtraVaftFeed", "event=resolve_complete channel=$channel elapsedMs=${SystemClock.elapsedRealtime() - now} ready=${result?.candidate != null}")
@@ -533,7 +629,7 @@ class ControlledVaftPlaylist(
         ((wanted.height <= 0 && candidate.height <= 0) || (wanted.height > 0 && candidate.height > 0)) &&
             candidate.codecs?.substringBefore(',')?.take(4) == wanted.codecs?.substringBefore(',')?.take(4)
 
-    private suspend fun candidateMaster(type: String): HlsMultivariantPlaylist? {
+    private suspend fun candidateMaster(type: String, stats: CandidateProbeStats? = null): HlsMultivariantPlaylist? {
         val cached = candidateMasters[type]
         val now = SystemClock.elapsedRealtime()
         if (cached != null && now - cached.fetchedMs < 10_000L) return cached.playlist
@@ -549,10 +645,20 @@ class ControlledVaftPlaylist(
             (fetch(Uri.parse(url)) as? HlsMultivariantPlaylist)?.also {
                 candidateMasters[type] = CachedMaster(it, now)
             } ?: cached?.playlist
-        } catch (error: CancellationException) { throw error } catch (_: Exception) { cached?.playlist }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            stats?.masterFetchErrorCount?.incrementAndGet()
+            cached?.playlist
+        }
     }
 
-    private suspend fun resolveReplacement(format: Format, feed: Feed, known: Candidate?): Resolution? = coroutineScope {
+    private suspend fun resolveReplacement(
+        format: Format,
+        feed: Feed,
+        known: Candidate?,
+        stats: CandidateProbeStats? = null,
+    ): Resolution? = coroutineScope {
         val results = Channel<Resolution?>(Channel.UNLIMITED)
         val jobs = mutableListOf<Job>()
         if (known != null) jobs += launch {
@@ -569,7 +675,7 @@ class ControlledVaftPlaylist(
             // A healthy cached route gets a short head start. A slow or stale route
             // must not hold up the other player types for its whole timeout.
             if (known != null) delay(150L)
-            results.send(findCandidate(format, feed)?.let { usableReplacement(feed, it) })
+            results.send(findCandidate(format, feed, stats = stats)?.let { usableReplacement(feed, it) })
         }
         try {
             repeat(jobs.size) {
@@ -632,6 +738,8 @@ class ControlledVaftPlaylist(
         feed.resolving?.cancel()
         feed.candidate = null
         feed.resolved = null
+        feed.nextResolutionAttemptMs = Long.MIN_VALUE
+        feed.resolutionRetryDelayMs = VAFT_RESOLUTION_RETRY_INITIAL_DELAY_MS
         feed.published.addAll(fresh.mapIndexed { offset, item -> item.copy(
             sequence = previous.sequence + offset + 1, discontinuity = previous.discontinuity + 1,
         ) })
@@ -828,15 +936,22 @@ class ControlledVaftPlaylist(
         )
     }
 
-    private suspend fun findCandidate(wanted: Format, feed: Feed, betterThan: Format? = null): Candidate? {
+    private suspend fun findCandidate(
+        wanted: Format,
+        feed: Feed,
+        betterThan: Format? = null,
+        stats: CandidateProbeStats? = null,
+    ): Candidate? {
         val deadline = SystemClock.elapsedRealtime() + 7_000L
         return coroutineScope {
             val results = Channel<Candidate?>(Channel.UNLIMITED)
             val types = TwitchVaftController.PLAYER_TYPES.filter { it != primaryType }
+            stats?.playerTypeCount?.set(types.size)
             val jobs = types.map { type -> launch {
                 val candidate = try {
-                    val master = candidateMaster(type)
-                    val variants = master?.variants?.filter {
+                    val master = candidateMaster(type, stats)
+                    if (master == null) stats?.masterMissCount?.incrementAndGet()
+                    val compatibleVariants = master?.variants?.filter {
                         // Keep codec compatibility and media kind; a lower temporary rung is usable.
                         compatible(it.format, wanted) &&
                             (wanted.height <= 0 || it.format.height <= wanted.height) &&
@@ -847,12 +962,14 @@ class ControlledVaftPlaylist(
                         { abs(it.format.frameRate - wanted.frameRate) },
                         { abs(it.format.bitrate.toLong() - wanted.bitrate) },
                     ))
+                    if (master != null && compatibleVariants.isNullOrEmpty()) {
+                        stats?.noCompatibleRenditionCount?.incrementAndGet()
+                    }
                     var selectedCandidate: Candidate? = null
-                    for (selected in variants.orEmpty()) {
+                    for (selected in compatibleVariants.orEmpty()) {
+                        stats?.renditionCount?.incrementAndGet()
                         val source = try {
-                            withTimeoutOrNull(1_500L) { fetch(selected.url) as? HlsMediaPlaylist }?.takeIf {
-                                it.segments.isNotEmpty() && marked(it).lastOrNull() == false
-                            }
+                            withTimeoutOrNull(1_500L) { fetch(selected.url) as? HlsMediaPlaylist }
                         } catch (error: CancellationException) {
                             throw error
                         } catch (_: IOException) {
@@ -863,7 +980,19 @@ class ControlledVaftPlaylist(
                             null
                         }
                         if (source != null) {
+                            if (source.segments.isEmpty()) {
+                                if (source.trailingParts.isEmpty()) {
+                                    stats?.emptyPlaylistCount?.incrementAndGet()
+                                } else {
+                                    stats?.partOnlyPlaylistCount?.incrementAndGet()
+                                }
+                                continue
+                            }
                             val blocked = marked(source)
+                            if (blocked.lastOrNull() != false) {
+                                stats?.blockedTailCount?.incrementAndGet()
+                                continue
+                            }
                             val probe = Feed(feed.fingerprints).also {
                                 it.published.addAll(feed.published)
                                 it.lastProgressMs = feed.lastProgressMs
@@ -875,11 +1004,20 @@ class ControlledVaftPlaylist(
                                 replacementCatalogs[type] = (replacementCatalogs[type].orEmpty() + selected.format).distinct()
                                 selectedCandidate = Candidate(type, selected.url, source, selected.format)
                                 break
+                            } else {
+                                stats?.timelineMissCount?.incrementAndGet()
                             }
+                        } else {
+                            stats?.fetchErrorCount?.incrementAndGet()
                         }
                     }
                     selectedCandidate
-                } catch (error: CancellationException) { throw error } catch (_: Exception) { null }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    stats?.fetchErrorCount?.incrementAndGet()
+                    null
+                }
                 results.trySend(candidate)
             } }
             var best: Candidate? = null

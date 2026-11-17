@@ -317,7 +317,7 @@
     <string name="settings_live_mode_custom">Custom</string>
     <string name="settings_live_mode_normal">Standard</string>
     <string name="settings_live_mode_minimum_summary">Uses a small fixed buffer to stay close to live. Playback stays at 1.0×; weak connections may rebuffer more. Restart live playback after changing.</string>
-    <string name="settings_live_mode_custom_summary">Uses the values in Custom buffer settings below. Blank fields use Standard values. Playback stays at 1.0×. Restart live playback after changing.</string>
+    <string name="settings_live_mode_custom_summary">Uses the values in Custom buffer settings below. Playback can speed up to the optional maximum to catch up. Restart live playback after changing.</string>
     <string name="settings_live_mode_normal_summary">Uses a larger fixed buffer for steadier playback. Playback stays at 1.0×. Restart live playback after changing.</string>
     <string name="settings_live_tuning">Custom buffer settings</string>
     <string name="settings_live_tuning_summary">Custom only. Blank fields use Standard.</string>
@@ -329,6 +329,8 @@
     <string name="settings_live_tuning_max_buffer_description">Maximum amount kept buffered during live playback.</string>
     <string name="settings_live_tuning_start_buffer_description">Buffer to collect before playback starts, up to the minimum buffer.</string>
     <string name="settings_live_tuning_rebuffer_description">Buffer to collect before playback resumes, up to the minimum buffer.</string>
+    <string name="settings_live_max_speed_enabled">Catch up to target</string>
+    <string name="settings_live_max_speed_enabled_summary">Allow playback to speed up when behind your target. Off keeps playback at 1.0×.</string>
     <string name="settings_live_tuning_min_speed_description">Minimum live playback speed; 1.0× is normal.</string>
     <string name="settings_live_tuning_max_speed_description">Maximum live playback speed; 1.0× is normal.</string>
     <string name="settings_live_rewind">Live stream rewind</string>
@@ -656,6 +658,11 @@
     <string name="settings_chat_message_text">Message text</string>
     <string name="settings_chat_metadata_text">Metadata text</string>
     <string name="settings_chat_text_default_summary">Use the current theme color.</string>
+    <string name="settings_chat_translation_appearance">Translated message appearance</string>
+    <string name="settings_chat_translation_italic">Use italic text</string>
+    <string name="settings_chat_translation_italic_summary">Show translated messages in italics.</string>
+    <string name="settings_chat_translation_color">Text color</string>
+    <string name="settings_chat_translation_color_default_summary">Use the theme-aware muted chat color.</string>
     <string name="settings_chat_restore_text_defaults">Restore text defaults</string>
     <string name="settings_chat_appearance_preview">Preview</string>
     <string name="settings_chat_appearance_preview_summary">Preview of your player and chat background and text colors.</string>
@@ -712,6 +719,11 @@ Metadata text</string>
     <string name="chat_emote_autocomplete_summary">Show matching emotes while typing.</string>
     <string name="chat_emote_recommendations">Recommendation strip</string>
     <string name="chat_emote_recommendations_summary">Show ranked emotes above the chat input.</string>
+    <string name="chat_emote_picker_tabs">Emote picker tabs</string>
+    <string name="chat_emote_picker_tabs_summary">Choose which tabs appear in the emote picker.</string>
+    <string name="chat_emote_picker_keep_one_tab">Keep at least one picker tab visible.</string>
+    <string name="chat_quick_emote_emojis">Emoji in quick suggestions</string>
+    <string name="chat_quick_emote_emojis_summary">Include emoji matches when typing : in chat.</string>
     <string name="chat_username_recommendations">Username suggestions</string>
     <string name="chat_username_recommendations_summary">Show ranked users from this chat when typing @.</string>
     <string name="chat_username_recommendation_login">@%1$s</string>
