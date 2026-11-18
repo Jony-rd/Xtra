@@ -63,7 +63,9 @@ class MultiviewViewModel(
         }
     }
 
-    val playbackCoordinator = MultiviewPlaybackCoordinator(
+    // Explicit type: the coordinator callbacks below reference this property, so
+    // without it the compiler has to infer a type that depends on itself.
+    val playbackCoordinator: MultiviewPlaybackCoordinator = MultiviewPlaybackCoordinator(
         context = applicationContext,
         loadPlaylist = ::loadStreamPlaylist,
         loadCleanPlaylist = ::loadCleanStreamPlaylist,
