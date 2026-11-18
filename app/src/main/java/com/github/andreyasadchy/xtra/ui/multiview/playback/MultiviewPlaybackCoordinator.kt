@@ -49,6 +49,13 @@ import com.github.andreyasadchy.xtra.util.LivePlaybackSettings
 import com.github.andreyasadchy.xtra.util.LivePriorityCatchUpPolicy
 import com.github.andreyasadchy.xtra.util.NetworkUtils.proxyCandidates
 import com.github.andreyasadchy.xtra.util.prefs
+import com.github.andreyasadchy.xtra.util.tokenPrefs
+import com.github.andreyasadchy.xtra.util.watch.WatchCreditScheduleInput
+import com.github.andreyasadchy.xtra.util.watch.WatchCreditScheduler
+import com.github.andreyasadchy.xtra.util.watch.WatchCreditSession
+import com.github.andreyasadchy.xtra.util.watch.WatchCreditTelemetry
+import kotlinx.coroutines.flow.MutableStateFlow
+import java.util.concurrent.ConcurrentHashMap
 import com.github.andreyasadchy.xtra.util.m3u8.TwitchVaftDetector
 import com.github.andreyasadchy.xtra.util.isVaftEnabled
 import kotlinx.coroutines.withTimeoutOrNull
@@ -78,6 +85,8 @@ class MultiviewPlaybackCoordinator(
     private val loadCleanPlaylist: suspend (String, List<String>, Boolean, Boolean) -> PlayerRepository.StreamPlaylistCandidate?,
     private val onSnapshot: (String, MultiviewPlaybackSnapshot) -> Unit,
     private val checkStreamLive: (suspend (String) -> Boolean?)? = null,
+    private val sendWatchCredit: (suspend (WatchCreditSession, Int, Int, String?, String?) -> Boolean)? = null,
+    private val resolveStreamMetadata: (suspend (String) -> Stream?)? = null,
 ) {
     private val applicationContext = context.applicationContext
     private var scope = newCoordinatorScope()
@@ -96,6 +105,9 @@ class MultiviewPlaybackCoordinator(
         (applicationContext as? XtraApp)?.xtraModule?.viewingStatsRecorder
     }
     private val slots = linkedMapOf<String, MultiviewPlayerSlot>()
+    private val watchCreditSnapshots = ConcurrentHashMap<Long, WatchCreditScheduleInput>()
+    private var nextWatchGeneration = 1L
+    private var nextWatchCreditStaggerSlot = 0
     private val tileBounds = mutableMapOf<String, Pair<Int, Int>>()
     private val healthWindow = Timeline.Window()
     private var activeIdentity: String? = null
@@ -137,11 +149,16 @@ class MultiviewPlaybackCoordinator(
             if (slot == null) {
                 val newSlot = createSlot(identity, stream)
                 slots[identity] = newSlot
+                ensureWatchCreditStarted(newSlot)
                 start(newSlot)
             } else {
                 if (slot.stream !== stream) {
-                    slot.stream = stream
+                    slot.stream = mergeResolvedStreamMetadata(
+                        current = stream,
+                        resolved = slot.stream,
+                    )
                     updateViewingStats(slot)
+                    ensureMetadataResolved(slot)
                 }
                 if (lifecycleStarted &&
                     !slot.hasMediaSource &&
@@ -248,6 +265,8 @@ class MultiviewPlaybackCoordinator(
         val staleAfterIdle = stoppedAt != null &&
             (SystemClock.elapsedRealtime() - stoppedAt) >= STALE_PLAYLIST_IDLE_MS
         slots.values.forEach { slot ->
+            ensureWatchCreditStarted(slot)
+            ensureMetadataResolved(slot)
             restoreBackgroundVideo(slot)
             slot.attachedView?.let { attach(slot.identity, it) }
             val stuckLoading = slot.status == MultiviewSlotStatus.LOADING && slot.loadJob?.isActive != true
@@ -268,6 +287,7 @@ class MultiviewPlaybackCoordinator(
                 }
                 else -> {
                     slot.player.playWhenReady = shouldPlayWhenReady(slot)
+                    updateViewingStats(slot)
                     if (slot.player.playbackState == Player.STATE_BUFFERING ||
                         slot.status == MultiviewSlotStatus.BUFFERING ||
                         slot.status == MultiviewSlotStatus.LOADING
@@ -324,6 +344,7 @@ class MultiviewPlaybackCoordinator(
             slot.release()
         }
         slots.clear()
+        watchCreditSnapshots.clear()
         tileBounds.clear()
         lifecycleStarted = false
         backgroundPlayback = false
@@ -473,14 +494,20 @@ class MultiviewPlaybackCoordinator(
             )
             setHandleAudioBecomingNoisy(false)
         }.build()
+        val watchGeneration = nextWatchGeneration++
+        val staggerSlot = nextWatchCreditStaggerSlot++ % WATCH_CREDIT_STAGGER_SLOTS
+        val watchCreditInitialDelayMs =
+            WATCH_CREDIT_FIRST_BEAT_BASE_MS + staggerSlot * WATCH_CREDIT_FIRST_BEAT_STEP_MS
         return MultiviewPlayerSlot(
-            identity,
-            stream,
-            player,
-            liveSettings,
-            liveController,
-            liveSpeedControl,
-            applyLivePolicy,
+            identity = identity,
+            stream = stream,
+            player = player,
+            liveSettings = liveSettings,
+            liveController = liveController,
+            liveSpeedControl = liveSpeedControl,
+            applyLivePolicy = applyLivePolicy,
+            watchGeneration = watchGeneration,
+            watchCreditInitialDelayMs = watchCreditInitialDelayMs,
         ).also { slot ->
             slot.livePriorityCatchUpJob = ensureScope().launch {
                 while (isActive) {
@@ -643,6 +670,8 @@ class MultiviewPlaybackCoordinator(
         force: Boolean = false,
         requestedSelection: PlaylistSelection? = null,
     ) {
+        ensureWatchCreditStarted(slot)
+        ensureMetadataResolved(slot)
         slot.retryJob?.cancel()
         slot.loadJob?.cancel()
         slot.liveCheckJob?.cancel()
@@ -1320,6 +1349,7 @@ class MultiviewPlaybackCoordinator(
         retryAvailable: Boolean = false,
     ) {
         slot.status = status
+        updateWatchCreditInput(slot)
         onSnapshot(slot.identity, slot.snapshot(slot.target?.label ?: "AUTO", retryAvailable))
     }
 
@@ -1448,6 +1478,123 @@ class MultiviewPlaybackCoordinator(
      * Statistics intentionally measure cumulative stream-hours: every tile is
      * a separately playing playback source and contributes independently.
      */
+    fun isWatchCreditSessionCurrent(session: WatchCreditSession): Boolean {
+        val playbackSessionId = session.playbackSessionId ?: return false
+        val currentUserId = applicationContext.tokenPrefs().getString(C.USER_ID, null)
+        if (currentUserId != session.userId) return false
+        val current = watchCreditSnapshots[playbackSessionId] ?: return false
+        return current.session == session &&
+            current.liveEligible &&
+            current.dropsStreamLive == true &&
+            current.isPlaying
+    }
+
+    private fun ensureWatchCreditStarted(slot: MultiviewPlayerSlot) {
+        val sender = sendWatchCredit ?: return
+        if (slot.watchCreditJob?.isActive == true) return
+        updateWatchCreditInput(slot)
+        slot.watchCreditJob = WatchCreditScheduler(
+            scope = ensureScope(),
+            input = slot.watchCreditInput,
+            onMinuteWatched = { session, minute, game, gameId ->
+                val success = sender(
+                    session,
+                    minute.minutesLogged,
+                    minute.secondsOffset,
+                    game,
+                    gameId,
+                )
+                Log.d(
+                    WatchCreditTelemetry.LOG_TAG,
+                    "multiview watch heartbeat channel=${session.channelLogin} success=$success minutes=${minute.minutesLogged}",
+                )
+            },
+            initialDelayMillisOverride = slot.watchCreditInitialDelayMs,
+        ).start()
+    }
+
+    private fun ensureMetadataResolved(slot: MultiviewPlayerSlot) {
+        val resolver = resolveStreamMetadata ?: return
+        val needsMetadata = slot.stream.id.isNullOrBlank() ||
+            slot.stream.channelId.isNullOrBlank() ||
+            slot.stream.gameId.isNullOrBlank()
+        if (!needsMetadata || slot.metadataResolveJob?.isActive == true) return
+        val login = slot.stream.channelLogin?.trim()?.lowercase()?.takeIf { it.isNotBlank() } ?: return
+        slot.metadataResolveJob = ensureScope().launch {
+            val resolved = runCatching {
+                withTimeoutOrNull(LIVE_STATUS_CHECK_TIMEOUT_MS) {
+                    resolver(login)
+                }
+            }.getOrNull() ?: return@launch
+            if (!isActive || slots[slot.identity] !== slot) return@launch
+            slot.stream = mergeResolvedStreamMetadata(
+                current = slot.stream,
+                resolved = resolved,
+            )
+            updateViewingStats(slot)
+        }
+    }
+
+    private fun mergeResolvedStreamMetadata(current: Stream, resolved: Stream): Stream {
+        return Stream(
+            id = current.id?.takeIf { it.isNotBlank() } ?: resolved.id,
+            channelId = current.channelId?.takeIf { it.isNotBlank() } ?: resolved.channelId,
+            channelLogin = current.channelLogin?.takeIf { it.isNotBlank() } ?: resolved.channelLogin,
+            channelName = current.channelName?.takeIf { it.isNotBlank() } ?: resolved.channelName,
+            channelImageURL = current.channelImageURL?.takeIf { it.isNotBlank() } ?: resolved.channelImageURL,
+            gameId = current.gameId?.takeIf { it.isNotBlank() } ?: resolved.gameId,
+            gameSlug = current.gameSlug?.takeIf { it.isNotBlank() } ?: resolved.gameSlug,
+            gameName = current.gameName?.takeIf { it.isNotBlank() } ?: resolved.gameName,
+            title = current.title?.takeIf { it.isNotBlank() } ?: resolved.title,
+            thumbnailURL = current.thumbnailURL?.takeIf { it.isNotBlank() } ?: resolved.thumbnailURL,
+            createdAt = current.createdAt?.takeIf { it.isNotBlank() } ?: resolved.createdAt,
+            viewerCount = current.viewerCount ?: resolved.viewerCount,
+            tags = current.tags ?: resolved.tags,
+            dropsAvailable = current.dropsAvailable ?: resolved.dropsAvailable,
+            thumbnailGeneration = current.thumbnailGeneration,
+            broadcasterType = current.broadcasterType ?: resolved.broadcasterType,
+            broadcasterTypeFetchedAtEpochMs = current.broadcasterTypeFetchedAtEpochMs
+                ?: resolved.broadcasterTypeFetchedAtEpochMs,
+        )
+    }
+
+    private fun updateWatchCreditInput(slot: MultiviewPlayerSlot, forceNotPlaying: Boolean = false) {
+        val userId = applicationContext.tokenPrefs().getString(C.USER_ID, null)?.takeIf { it.isNotBlank() }
+        val streamId = slot.stream.id?.takeIf { it.isNotBlank() }
+        val channelId = slot.stream.channelId?.takeIf { it.isNotBlank() }
+        val channelLogin = slot.stream.channelLogin?.trim()?.takeIf { it.isNotBlank() }
+        val session = if (userId != null && streamId != null && channelId != null && channelLogin != null) {
+            WatchCreditSession(
+                broadcastId = streamId,
+                channelId = channelId,
+                channelLogin = channelLogin,
+                userId = userId,
+                playbackSessionId = slot.watchGeneration,
+            )
+        } else {
+            null
+        }
+        val liveEligible = slot.hasMediaSource &&
+            slot.status != MultiviewSlotStatus.OFFLINE &&
+            slot.status != MultiviewSlotStatus.PLAYBACK_UNAVAILABLE
+        val dropsStreamLive = slot.status != MultiviewSlotStatus.OFFLINE
+        val scheduleInput = WatchCreditScheduleInput(
+            session = session,
+            liveEligible = liveEligible,
+            dropsStreamLive = dropsStreamLive,
+            isPlaying = !forceNotPlaying && slot.player.isPlaying,
+            isBuffering = slot.player.playbackState == Player.STATE_BUFFERING,
+            game = slot.stream.gameName,
+            gameId = slot.stream.gameId,
+        )
+        slot.watchCreditInput.value = scheduleInput
+        if (session != null) {
+            watchCreditSnapshots[slot.watchGeneration] = scheduleInput
+        } else {
+            watchCreditSnapshots.remove(slot.watchGeneration)
+        }
+    }
+
     private fun updateViewingStats(slot: MultiviewPlayerSlot, forceNotPlaying: Boolean = false) {
         viewingStatsRecorder?.update(
             sourceId = "multiview:${slot.identity}",
@@ -1465,10 +1612,19 @@ class MultiviewPlaybackCoordinator(
             isPlaying = !forceNotPlaying && slot.player.isPlaying,
             isBuffering = slot.player.playbackState == Player.STATE_BUFFERING,
         )
+        updateWatchCreditInput(slot, forceNotPlaying)
     }
 
     private fun releaseViewingStats(slot: MultiviewPlayerSlot) {
         viewingStatsRecorder?.release("multiview:${slot.identity}")
+        watchCreditSnapshots.remove(slot.watchGeneration)
+        slot.watchCreditInput.value = WatchCreditScheduleInput(
+            session = null,
+            liveEligible = false,
+            dropsStreamLive = null,
+            isPlaying = false,
+            isBuffering = true,
+        )
     }
 
     class MultiviewPlayerSlot(
@@ -1479,6 +1635,8 @@ class MultiviewPlaybackCoordinator(
         val liveController: AdaptiveLivePlaybackController,
         val liveSpeedControl: AdaptiveLivePlaybackSpeedControl,
         val applyLivePolicy: () -> Unit,
+        val watchGeneration: Long,
+        val watchCreditInitialDelayMs: Long,
     ) {
         var attachedView: PlayerView? = null
         var loadJob: Job? = null
@@ -1490,6 +1648,17 @@ class MultiviewPlaybackCoordinator(
         var primaryRestoreJob: Job? = null
         var bufferingWatchdogJob: Job? = null
         var liveCheckJob: Job? = null
+        internal var watchCreditJob: Job? = null
+        internal var metadataResolveJob: Job? = null
+        internal val watchCreditInput = MutableStateFlow(
+            WatchCreditScheduleInput(
+                session = null,
+                liveEligible = false,
+                dropsStreamLive = null,
+                isPlaying = false,
+                isBuffering = true,
+            ),
+        )
         val vaftController = TwitchVaftController()
         internal val bufferHealthTrend = LiveBufferHealthTrend()
         var retryCount: Int = 0
@@ -1563,6 +1732,10 @@ class MultiviewPlaybackCoordinator(
             bufferingWatchdogJob = null
             liveCheckJob?.cancel()
             liveCheckJob = null
+            watchCreditJob?.cancel()
+            watchCreditJob = null
+            metadataResolveJob?.cancel()
+            metadataResolveJob = null
             attachedView?.let { view ->
                 if (view.player === player) {
                     logVideoSurfaceBinding("multiview_detach", player, view, view.player)
@@ -1582,6 +1755,9 @@ class MultiviewPlaybackCoordinator(
         private const val PLAYLIST_LOAD_TIMEOUT_MS = 10_000L
         private const val STALE_PLAYLIST_IDLE_MS = 5 * 60_000L
         private const val LIVE_STATUS_CHECK_TIMEOUT_MS = 4_000L
+        private const val WATCH_CREDIT_FIRST_BEAT_BASE_MS = 3_000L
+        private const val WATCH_CREDIT_FIRST_BEAT_STEP_MS = 1_000L
+        private const val WATCH_CREDIT_STAGGER_SLOTS = 4
         private const val NETWORK_RETRY_DELAY_MS = 15_000L
         private const val PRIMARY_RESTORE_INTERVAL_MS = 10_000L
         private const val FRAME_RATE_TOLERANCE = 0.5f

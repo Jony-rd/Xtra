@@ -10,7 +10,12 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.github.andreyasadchy.xtra.XtraApp
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsCategory
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsField
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsFieldKey
 import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsLogger
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsSeverity
+import com.github.andreyasadchy.xtra.diagnostics.DiagnosticsTransport
 import com.github.andreyasadchy.xtra.model.chat.Raid
 import com.github.andreyasadchy.xtra.model.ui.Stream
 import com.github.andreyasadchy.xtra.repository.GraphQLRepository
@@ -64,6 +69,43 @@ class MultiviewViewModel(
         loadCleanPlaylist = ::loadCleanStreamPlaylist,
         onSnapshot = ::updatePlaybackSnapshot,
         checkStreamLive = ::isChannelLive,
+        sendWatchCredit = { session, minutesLogged, secondsOffset, game, gameId ->
+            val playbackSessionId = session.playbackSessionId
+                ?: return@MultiviewPlaybackCoordinator false
+            val networkLibrary = applicationContext.prefs().getString(C.NETWORK_LIBRARY, C.OKHTTP)
+            val success = playerRepository.sendMinuteWatched(
+                networkLibrary = networkLibrary,
+                userId = session.userId,
+                streamId = session.broadcastId,
+                channelId = session.channelId,
+                channelLogin = session.channelLogin,
+                playbackSessionId = playbackSessionId,
+                isSessionCurrent = { playbackCoordinator.isWatchCreditSessionCurrent(session) },
+                minutesLogged = minutesLogged,
+                secondsOffset = secondsOffset,
+                game = game,
+                gameId = gameId,
+            )
+            if (diagnosticsLogger?.isEnabled == true) {
+                diagnosticsLogger.event(
+                    category = DiagnosticsCategory.PROGRESSION,
+                    transport = DiagnosticsTransport.WATCH_CREDIT,
+                    operation = "WatchProgress",
+                    event = "heartbeat_result",
+                    severity = if (success) DiagnosticsSeverity.INFO else DiagnosticsSeverity.WARN,
+                    code = if (success) "success" else "heartbeat_failed",
+                    fields = listOf(
+                        DiagnosticsField(DiagnosticsFieldKey.LIVE, "true"),
+                        DiagnosticsField(DiagnosticsFieldKey.COUNT, minutesLogged.toString()),
+                        DiagnosticsField(DiagnosticsFieldKey.TARGET, secondsOffset.toString()),
+                        DiagnosticsField(DiagnosticsFieldKey.CHANNEL_ID, session.channelId),
+                        DiagnosticsField(DiagnosticsFieldKey.STREAM_ID, session.broadcastId),
+                    ),
+                )
+            }
+            success
+        },
+        resolveStreamMetadata = ::resolveLiveStream,
     )
 
     fun initialize(initialStream: Stream?) {

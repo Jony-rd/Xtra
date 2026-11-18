@@ -33,6 +33,7 @@ internal data class WatchCreditScheduleInput(
 internal class WatchCreditClock(
     private val nextSecondsOffset: () -> Int = { Random.nextInt(60) },
     private val repeatIntervalMillis: Long = WATCH_CREDIT_MINUTE_INTERVAL_MILLIS,
+    private val initialDelayMillisOverride: Long? = null,
 ) {
     var session: WatchCreditSession? = null
         private set
@@ -45,6 +46,7 @@ internal class WatchCreditClock(
 
     init {
         require(repeatIntervalMillis > 0L)
+        require(initialDelayMillisOverride == null || initialDelayMillisOverride >= 0L)
     }
 
     fun update(input: WatchCreditScheduleInput, nowElapsedMillis: Long) {
@@ -54,7 +56,8 @@ internal class WatchCreditClock(
             if (nextSession != null) {
                 session = nextSession
                 secondsOffset = nextSecondsOffset().coerceIn(0, 59)
-                remainingActiveMillis = secondsOffset!!.toLong() * 1_000L
+                remainingActiveMillis = initialDelayMillisOverride
+                    ?: (secondsOffset!!.toLong() * 1_000L)
             }
         }
 
@@ -107,8 +110,13 @@ internal class WatchCreditScheduler(
     nextSecondsOffset: () -> Int = { Random.nextInt(60) },
     private val elapsedRealtime: () -> Long = SystemClock::elapsedRealtime,
     repeatIntervalMillis: Long = WATCH_CREDIT_MINUTE_INTERVAL_MILLIS,
+    initialDelayMillisOverride: Long? = null,
 ) {
-    private val clock = WatchCreditClock(nextSecondsOffset, repeatIntervalMillis)
+    private val clock = WatchCreditClock(
+        nextSecondsOffset = nextSecondsOffset,
+        repeatIntervalMillis = repeatIntervalMillis,
+        initialDelayMillisOverride = initialDelayMillisOverride,
+    )
 
     fun start(): Job = scope.launch(Dispatchers.IO) {
         val pendingMinutes = Channel<ScheduledWatchCreditMinute>(Channel.UNLIMITED)

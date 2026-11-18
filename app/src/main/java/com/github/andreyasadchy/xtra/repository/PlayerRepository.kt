@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.net.http.HttpEngine
 import android.net.http.ProxyOptions
+import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
 import androidx.annotation.OptIn
@@ -211,18 +212,14 @@ class PlayerRepository(
         val verifiedRendition: VideoQuality? = null,
     )
 
-    private data class CachedSpadeEndpoint(
-        val session: WatchCreditSession,
-        val url: String,
-    )
-
     private data class WatchCreditHttpResponse(
         val statusCode: Int,
         val body: String,
     )
 
     private val watchCreditMutex = Mutex()
-    private var cachedSpadeEndpoint: CachedSpadeEndpoint? = null
+    private var cachedSpadeUrl: String? = null
+    private var cachedSpadeUrlElapsedMs: Long = 0L
 
     private data class ProxyClientKey(
         val host: String,
@@ -1052,108 +1049,132 @@ class PlayerRepository(
             )
         } else null
         try {
-            val result = watchCreditMutex.withLock {
-            if (userId.isNullOrBlank() || streamId.isNullOrBlank() || channelId.isNullOrBlank() || channelLogin.isNullOrBlank()) {
-                Log.w(
-                    WatchCreditTelemetry.LOG_TAG,
-                    "watch heartbeat skipped: missing userId=${!userId.isNullOrBlank()} broadcastId=${!streamId.isNullOrBlank()} channelId=${!channelId.isNullOrBlank()} channelLogin=${!channelLogin.isNullOrBlank()}",
+            val result = run {
+                if (userId.isNullOrBlank() || streamId.isNullOrBlank() || channelId.isNullOrBlank() || channelLogin.isNullOrBlank()) {
+                    Log.w(
+                        WatchCreditTelemetry.LOG_TAG,
+                        "watch heartbeat skipped: missing userId=${!userId.isNullOrBlank()} broadcastId=${!streamId.isNullOrBlank()} channelId=${!channelId.isNullOrBlank()} channelLogin=${!channelLogin.isNullOrBlank()}",
+                    )
+                    return@run false
+                }
+
+                val session = WatchCreditSession(
+                    broadcastId = streamId,
+                    channelId = channelId,
+                    channelLogin = channelLogin,
+                    userId = userId,
+                    playbackSessionId = playbackSessionId,
                 )
-                return@withLock false
-            }
 
-            val session = WatchCreditSession(
-                broadcastId = streamId,
-                channelId = channelId,
-                channelLogin = channelLogin,
-                userId = userId,
-                playbackSessionId = playbackSessionId,
-            )
-            if (!isSessionCurrent()) {
-                Log.d(WatchCreditTelemetry.LOG_TAG, "watch heartbeat skipped: session ended before discovery")
-                return@withLock false
-            }
-            val cachedEndpoint = cachedSpadeEndpoint?.takeIf { it.session == session }
-            if (logger?.isEnabled == true) {
-                logger.event(
-                    category = DiagnosticsCategory.PROGRESSION,
-                    transport = DiagnosticsTransport.SPADE,
-                    operation = "WatchCreditDiscovery",
-                    event = if (cachedEndpoint != null) "cache_hit" else "cache_miss",
-                    fields = listOf(
-                        DiagnosticsField(DiagnosticsFieldKey.CACHE_STATE, if (cachedEndpoint != null) "valid" else "empty"),
-                        DiagnosticsField(DiagnosticsFieldKey.CHANNEL_ID, session.channelId),
-                    ),
+                suspend fun resolveSpadeUrl(forceRefresh: Boolean, failedUrl: String? = null): Pair<String, Boolean>? {
+                    return watchCreditMutex.withLock {
+                        if (!isSessionCurrent()) {
+                            Log.d(WatchCreditTelemetry.LOG_TAG, "watch heartbeat skipped: session ended before discovery")
+                            return@withLock null
+                        }
+                        if (forceRefresh && (failedUrl == null || cachedSpadeUrl == failedUrl)) {
+                            cachedSpadeUrl = null
+                            cachedSpadeUrlElapsedMs = 0L
+                        }
+                        val now = SystemClock.elapsedRealtime()
+                        val validCachedUrl = cachedSpadeUrl?.takeIf {
+                            (now - cachedSpadeUrlElapsedMs) < SPADE_CACHE_TTL_MS
+                        }
+                        if (!forceRefresh && logger?.isEnabled == true) {
+                            val cacheState = when {
+                                validCachedUrl != null -> "valid"
+                                cachedSpadeUrl != null -> "expired"
+                                else -> "empty"
+                            }
+                            logger.event(
+                                category = DiagnosticsCategory.PROGRESSION,
+                                transport = DiagnosticsTransport.SPADE,
+                                operation = "WatchCreditDiscovery",
+                                event = if (validCachedUrl != null) "cache_hit" else "cache_miss",
+                                fields = listOf(
+                                    DiagnosticsField(DiagnosticsFieldKey.CACHE_STATE, cacheState),
+                                    DiagnosticsField(DiagnosticsFieldKey.CHANNEL_ID, session.channelId),
+                                ),
+                            )
+                        }
+                        if (validCachedUrl != null) {
+                            return@withLock validCachedUrl to true
+                        }
+                        val discovered = discoverSpadeUrl(networkLibrary, channelLogin)
+                        if (discovered.isNullOrBlank()) {
+                            Log.w(WatchCreditTelemetry.LOG_TAG, "Spade URL discovery failed")
+                            return@withLock null
+                        }
+                        if (!isSessionCurrent()) {
+                            Log.d(WatchCreditTelemetry.LOG_TAG, "watch heartbeat skipped: session ended during discovery")
+                            return@withLock null
+                        }
+                        cachedSpadeUrl = discovered
+                        cachedSpadeUrlElapsedMs = SystemClock.elapsedRealtime()
+                        Log.d(WatchCreditTelemetry.LOG_TAG, "Spade URL discovered and cached host=${urlHost(discovered)}")
+                        discovered to false
+                    }
+                }
+
+                if (!isSessionCurrent()) {
+                    Log.d(WatchCreditTelemetry.LOG_TAG, "watch heartbeat skipped: session ended before discovery")
+                    return@run false
+                }
+
+                val (spadeUrl, fromCache) = resolveSpadeUrl(forceRefresh = false) ?: return@run false
+                if (!isSessionCurrent()) {
+                    Log.d(WatchCreditTelemetry.LOG_TAG, "watch heartbeat skipped: session ended before post")
+                    return@run false
+                }
+
+                val body = WatchCreditTelemetry.buildMinuteWatchedPayload(
+                    session = session,
+                    minutesLogged = minutesLogged,
+                    secondsOffset = secondsOffset,
+                    game = game,
+                    gameId = gameId,
                 )
-            }
-            if (cachedSpadeEndpoint != null && cachedEndpoint == null) {
-                Log.d(WatchCreditTelemetry.LOG_TAG, "watch session changed; invalidating cached Spade URL")
-                cachedSpadeEndpoint = null
-            }
+                val spadeRequest = "data=" + Base64.encodeToString(body.toByteArray(), Base64.NO_WRAP)
 
-            val spadeUrl = cachedEndpoint?.url ?: discoverSpadeUrl(networkLibrary, channelLogin)
-            if (spadeUrl.isNullOrBlank()) {
-                Log.w(WatchCreditTelemetry.LOG_TAG, "Spade URL discovery failed")
-                return@withLock false
-            }
-            if (!isSessionCurrent()) {
-                Log.d(WatchCreditTelemetry.LOG_TAG, "watch heartbeat skipped: session ended during discovery")
-                return@withLock false
-            }
-            if (cachedEndpoint == null) {
-                cachedSpadeEndpoint = CachedSpadeEndpoint(session, spadeUrl)
-                Log.d(WatchCreditTelemetry.LOG_TAG, "Spade URL discovered and cached host=${urlHost(spadeUrl)}")
-            }
+                if (postMinuteWatched(networkLibrary, spadeUrl, spadeRequest, minutesLogged, secondsOffset)) {
+                    return@run true
+                }
+                if (!isSessionCurrent()) {
+                    Log.d(WatchCreditTelemetry.LOG_TAG, "watch heartbeat retry skipped: session ended after post")
+                    return@run false
+                }
+                if (!fromCache) {
+                    watchCreditMutex.withLock {
+                        if (cachedSpadeUrl == spadeUrl) {
+                            cachedSpadeUrl = null
+                            cachedSpadeUrlElapsedMs = 0L
+                        }
+                    }
+                    return@run false
+                }
 
-            val body = WatchCreditTelemetry.buildMinuteWatchedPayload(
-                session = session,
-                minutesLogged = minutesLogged,
-                secondsOffset = secondsOffset,
-                game = game,
-                gameId = gameId,
-            )
-            val spadeRequest = "data=" + Base64.encodeToString(body.toByteArray(), Base64.NO_WRAP)
-            if (!isSessionCurrent()) {
-                Log.d(WatchCreditTelemetry.LOG_TAG, "watch heartbeat skipped: session ended before post")
-                return@withLock false
-            }
-            if (postMinuteWatched(networkLibrary, spadeUrl, spadeRequest, minutesLogged, secondsOffset)) {
-                return@withLock true
-            }
+                Log.w(WatchCreditTelemetry.LOG_TAG, "cached Spade URL failed; rediscovering and retrying once")
+                logger?.retryRequest(
+                    token,
+                    fields = listOf(DiagnosticsField(DiagnosticsFieldKey.STATE, "cached_endpoint_failed")),
+                )
 
-            if (!isSessionCurrent()) {
-                Log.d(WatchCreditTelemetry.LOG_TAG, "watch heartbeat retry skipped: session ended after post")
-                return@withLock false
-            }
-            if (cachedEndpoint == null) {
-                cachedSpadeEndpoint = null
-                return@withLock false
-            }
+                val (retryUrl, _) = resolveSpadeUrl(forceRefresh = true, failedUrl = spadeUrl) ?: return@run false
+                if (!isSessionCurrent()) {
+                    Log.d(WatchCreditTelemetry.LOG_TAG, "watch heartbeat retry skipped: session ended before retry post")
+                    return@run false
+                }
 
-            cachedSpadeEndpoint = null
-            Log.w(WatchCreditTelemetry.LOG_TAG, "cached Spade URL failed; rediscovering and retrying once")
-            logger?.retryRequest(
-                token,
-                fields = listOf(DiagnosticsField(DiagnosticsFieldKey.STATE, "cached_endpoint_failed")),
-            )
-            if (!isSessionCurrent()) {
-                Log.d(WatchCreditTelemetry.LOG_TAG, "watch heartbeat retry skipped: session ended before rediscovery")
-                return@withLock false
-            }
-            val retryUrl = discoverSpadeUrl(networkLibrary, channelLogin)
-            if (retryUrl.isNullOrBlank()) {
-                Log.w(WatchCreditTelemetry.LOG_TAG, "Spade URL rediscovery failed after heartbeat failure")
-                return@withLock false
-            }
-            if (!isSessionCurrent()) {
-                Log.d(WatchCreditTelemetry.LOG_TAG, "watch heartbeat retry skipped: session ended during rediscovery")
-                return@withLock false
-            }
-            cachedSpadeEndpoint = CachedSpadeEndpoint(session, retryUrl)
-            val retrySucceeded = postMinuteWatched(networkLibrary, retryUrl, spadeRequest, minutesLogged, secondsOffset)
-            if (!retrySucceeded) {
-                cachedSpadeEndpoint = null
-            }
-            retrySucceeded
+                val retrySucceeded = postMinuteWatched(networkLibrary, retryUrl, spadeRequest, minutesLogged, secondsOffset)
+                if (!retrySucceeded) {
+                    watchCreditMutex.withLock {
+                        if (cachedSpadeUrl == retryUrl) {
+                            cachedSpadeUrl = null
+                            cachedSpadeUrlElapsedMs = 0L
+                        }
+                    }
+                }
+                retrySucceeded
             }
             logger?.finishRequest(
                 token,
@@ -2426,5 +2447,9 @@ class PlayerRepository(
 
     suspend fun deletePlaybackStates() = withContext(Dispatchers.IO) {
         playbackStatesDao.deleteAll()
+    }
+
+    private companion object {
+        const val SPADE_CACHE_TTL_MS = 30 * 60_000L
     }
 }

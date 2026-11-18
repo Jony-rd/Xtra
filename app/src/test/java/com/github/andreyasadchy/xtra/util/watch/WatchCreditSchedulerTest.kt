@@ -129,6 +129,24 @@ class WatchCreditSchedulerTest {
         }
     }
 
+    @Test
+    fun initialDelayOverrideAcceleratesFirstBeatWithoutChangingRepeatInterval() {
+        val clock = WatchCreditClock(
+            nextSecondsOffset = { 42 },
+            repeatIntervalMillis = 60_000L,
+            initialDelayMillisOverride = 3_000L,
+        )
+        val session = session()
+
+        clock.update(input(session), nowElapsedMillis = 0L)
+        assertEquals(3_000L, clock.remainingActiveMillis(0L))
+        assertNull(clock.takeMinuteIfDue(2_999L))
+        assertEquals(WatchCreditMinute(1, 42), clock.takeMinuteIfDue(3_000L))
+        assertEquals(60_000L, clock.remainingActiveMillis(3_000L))
+        assertNull(clock.takeMinuteIfDue(62_999L))
+        assertEquals(WatchCreditMinute(2, 42), clock.takeMinuteIfDue(63_000L))
+    }
+
     private fun session(playbackSessionId: Long = 100L) = WatchCreditSession(
         broadcastId = "broadcast-1",
         channelId = "channel-1",
