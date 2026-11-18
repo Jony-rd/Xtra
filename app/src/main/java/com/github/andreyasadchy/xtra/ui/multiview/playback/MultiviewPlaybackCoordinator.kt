@@ -1578,12 +1578,22 @@ class MultiviewPlaybackCoordinator(
             slot.status != MultiviewSlotStatus.OFFLINE &&
             slot.status != MultiviewSlotStatus.PLAYBACK_UNAVAILABLE
         val dropsStreamLive = slot.status != MultiviewSlotStatus.OFFLINE
+        // A tile counts while the viewer is sitting on it: playing normally or
+        // still buffering, because the viewer is waiting for that stream to come
+        // back. Paused, failed or finished tiles are not credited.
+        val beingWatched = !forceNotPlaying &&
+            slot.player.playWhenReady &&
+            slot.player.playerError == null &&
+            (
+                slot.player.playbackState == Player.STATE_READY ||
+                    slot.player.playbackState == Player.STATE_BUFFERING
+                )
         val scheduleInput = WatchCreditScheduleInput(
             session = session,
             liveEligible = liveEligible,
             dropsStreamLive = dropsStreamLive,
-            isPlaying = !forceNotPlaying && slot.player.isPlaying,
-            isBuffering = slot.player.playbackState == Player.STATE_BUFFERING,
+            isPlaying = beingWatched,
+            isBuffering = false,
             game = slot.stream.gameName,
             gameId = slot.stream.gameId,
         )
@@ -1755,7 +1765,9 @@ class MultiviewPlaybackCoordinator(
         private const val PLAYLIST_LOAD_TIMEOUT_MS = 10_000L
         private const val STALE_PLAYLIST_IDLE_MS = 5 * 60_000L
         private const val LIVE_STATUS_CHECK_TIMEOUT_MS = 4_000L
-        private const val WATCH_CREDIT_FIRST_BEAT_BASE_MS = 3_000L
+        // The first beacon must represent a full minute of watching, like the
+        // official player; the stagger only spreads tiles a few seconds apart.
+        private const val WATCH_CREDIT_FIRST_BEAT_BASE_MS = 60_000L
         private const val WATCH_CREDIT_FIRST_BEAT_STEP_MS = 1_000L
         private const val WATCH_CREDIT_STAGGER_SLOTS = 4
         private const val NETWORK_RETRY_DELAY_MS = 15_000L
