@@ -11,7 +11,6 @@ import android.os.Parcelable
 import android.view.DragEvent
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
-import android.view.MenuItem
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -90,23 +89,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     private var swipeGestureController: PlayerSwipeGestureController? = null
     private var swipeControllerIdentity: String? = null
 
-    // Toolbar buttons meant to hold your own artwork: full button = full
-    // image, no padding. Add a button's id here to make it swap-only too.
-    private val CUSTOM_ICON_BUTTON_IDS = setOf(
-        R.id.backButton,
-        R.id.orientationButton,
-        R.id.pipButton,
-        R.id.chatButton,
-        R.id.seekToLiveButton,
-        R.id.streamDeckButton,
-        R.id.fillButton,
-        R.id.addStreamButton,
-        R.id.layoutButton,
-    )
     private var previousRequestedOrientation: Int? = null
-
-    private val bindingOrNull: FragmentMultiviewBinding?
-        get() = _binding
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
@@ -801,26 +784,6 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             viewModel.setFocus(state.activeIdentity ?: state.identities.firstOrNull())
         }
         viewModel.setLayoutMode(newMode)
-    }
-
-    private fun showLayoutMenu() {
-        revealControls()
-        lockControls()
-        val modes = MultiviewLayoutMode.entries
-        val labels = modes.map { mode -> getString(mode.labelRes()) }.toTypedArray()
-        MaterialAlertDialogBuilder(requireContext())
-            .setTitle(R.string.multiview_layout)
-            .setSingleChoiceItems(labels, modes.indexOf(latestState.layoutMode)) { dialog, which ->
-                val selected = modes[which]
-                if (selected == MultiviewLayoutMode.FOCUS && latestState.focusedIdentity == null) {
-                    viewModel.setFocus(latestState.activeIdentity ?: latestState.identities.firstOrNull())
-                }
-                viewModel.setLayoutMode(selected)
-                dialog.dismiss()
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .setOnDismissListener { unlockControls() }
-            .show()
     }
 
     private fun computeStreamDeckAnchorBottomPx(): Int? {

@@ -75,78 +75,7 @@ object MultiviewLayoutManager {
      *   The Fragment places functional chat underneath it in the separate right column.
      */
     private fun landscape(
-        ids: List<String>,
-        primary: String,
-        chatVisible: Boolean,
-        fillVideo: Boolean = false,
-    ): MultiviewLayoutPlan {
-        val rest = ids.filterNot { it == primary }
-        if (rest.isEmpty()) {
-            return MultiviewLayoutPlan(
-                placements = listOf(
-                    TilePlacement(primary, 0f, 0f, 1f, 1f),
-                ),
-                portraitHeightWidthRatio = 1f,
-            )
-        }
 
-        // Special 2-stream case:
-        if (rest.size == 1) {
-            if (chatVisible) {
-                if (fillVideo) {
-                    // Fill mode with chat ON: 50/50 split across video area
-                    return MultiviewLayoutPlan(
-                        placements = listOf(
-                            TilePlacement(primary, 0f, 0f, 0.5f, 1f),
-                            TilePlacement(rest.first(), 0.5f, 0f, 1f, 1f),
-                        ),
-                        portraitHeightWidthRatio = 1f,
-                    )
-                }
-                // Fit mode with chat ON: preserve existing layout (75% / 25% within video area)
-                return MultiviewLayoutPlan(
-                    placements = listOf(
-                        TilePlacement(primary, 0f, 0f, 0.75f, 1f),
-                        TilePlacement(rest.first(), 0.75f, 0f, 1f, 1f),
-                    ),
-                    portraitHeightWidthRatio = 1f,
-                )
-            } else {
-                // Chat OFF: preserve special layout (main 80%, top-right 20% column for second stream)
-                return MultiviewLayoutPlan(
-                    placements = listOf(
-                        TilePlacement(primary, 0f, 0f, 0.80f, 1f),
-                        TilePlacement(rest.first(), 0.80f, 0f, 1f, 0.5f),
-                    ),
-                    portraitHeightWidthRatio = 1f,
-                )
-            }
-        }
-
-        // 3 or 4 streams:
-        val mainRight = if (chatVisible) 0.75f else 0.80f
-        val placements = mutableListOf(
-            TilePlacement(primary, 0f, 0f, mainRight, 1f),
-        )
-        val count = rest.size
-        rest.forEachIndexed { index, identity ->
-            val top = index.toFloat() / count
-            val bottom = (index + 1).toFloat() / count
-            placements += TilePlacement(
-                identity,
-                mainRight,
-                top,
-                1f,
-                bottom,
-            )
-        }
-        return MultiviewLayoutPlan(
-            placements = placements,
-            portraitHeightWidthRatio = 1f,
-        )
-    }
-
-    private fun autoPortrait(
         ids: List<String>,
         primary: String,
     ): MultiviewLayoutPlan {
