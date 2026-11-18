@@ -58,6 +58,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.withStarted
 import androidx.navigation.NavController
+import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavOptions
 import androidx.navigation.fragment.NavHostFragment
@@ -236,7 +237,9 @@ class MainActivity : AppCompatActivity() {
     private var dropsFilterKeyboardVisible = false
     private var hasNavigationDestinations = true
     private var enabledNavigationDestinations: List<RootNavigationDestination> = emptyList()
-    private var committedBottomNavigationDestinationId: Int? = null
+    private var configuredTopNavigationKeys: Set<String> = emptySet()
+    private var topNavigationDestinations: List<RootNavigationDestination> = emptyList()
+    private var phoneBottomNavigationDestinations: List<RootNavigationDestination> = emptyList()
     private val isTv: Boolean get() = isTelevision()
 
     private fun rootNavigationView(): NavigationBarView =
@@ -248,13 +251,21 @@ class MainActivity : AppCompatActivity() {
     private fun updateNavigationPresentation(configuration: Configuration) {
         useNavigationRail = isTv || configuration.smallestScreenWidthDp >= 600
         val showNavigation = isTv || hasNavigationDestinations
+        topNavigationDestinations = ROOT_NAVIGATION_DESTINATIONS.filter {
+            !useNavigationRail && it.key in configuredTopNavigationKeys
+        }.take(com.github.andreyasadchy.xtra.ui.settings.maxTopNavigationTabs(configuration.screenWidthDp))
+        phoneBottomNavigationDestinations = enabledNavigationDestinations.filterNot {
+            it in topNavigationDestinations
+        }
         binding.tvNavigationContainer.isVisible = useNavigationRail && showNavigation
         val compactDropsFilter = dropsFilterKeyboardVisible &&
             configuration.orientation == Configuration.ORIENTATION_LANDSCAPE && configuration.screenHeightDp < 480
         val inMultiview = currentMultiviewFragment() != null
         binding.navBarContainer.isVisible = !inMultiview && !useNavigationRail && showNavigation && !compactDropsFilter
-        updateBottomSearchVisibility()
-        allToolbarViews().forEach(::updateTopSearchVisibility)
+        allToolbarViews().forEach { toolbar ->
+            updateTopSearchVisibility(toolbar)
+            updateTopNavigationItems(toolbar)
+        }
         binding.tvSearch.isVisible = isTv
         binding.tvAccount.isVisible = isTv
         binding.tvSettings.isVisible = isTv
@@ -268,24 +279,32 @@ class MainActivity : AppCompatActivity() {
                     ).roundToInt()
             }
         }
-        val expressivePhoneNavigation = !useNavigationRail &&
-            prefs.getString(C.SETTINGS_UI_STYLE, "expressive") == "expressive"
-        val densePhoneNavigation = !useNavigationRail && enabledNavigationDestinations.size > 5
-        binding.navBar.labelVisibilityMode = when {
-            densePhoneNavigation -> NavigationBarView.LABEL_VISIBILITY_UNLABELED
-            expressivePhoneNavigation -> NavigationBarView.LABEL_VISIBILITY_SELECTED
-            else -> NavigationBarView.LABEL_VISIBILITY_LABELED
-        }
-        binding.navBar.setItemHorizontalTranslationEnabled(!densePhoneNavigation)
+        updatePhoneNavigationLabelVisibility()
         binding.tvNavRail.labelVisibilityMode = NavigationBarView.LABEL_VISIBILITY_LABELED
         binding.mainNavigationDivider.isVisible = !useNavigationRail &&
             prefs.getString(C.SETTINGS_UI_STYLE, "expressive") != "expressive"
     }
 
-    private fun updateBottomSearchVisibility() {
-        binding.bottomSearch.isVisible = binding.navBarContainer.isVisible &&
-            (!::navController.isInitialized || navController.currentDestination?.id != R.id.searchPagerFragment)
+    private fun updatePhoneNavigationLabelVisibility() {
+        val expressivePhoneNavigation = !useNavigationRail &&
+            prefs.getString(C.SETTINGS_UI_STYLE, "expressive") == "expressive"
+        val phoneNavigationItemCount = phoneBottomNavigationDestinations.size + 1 // Search
+        val densePhoneNavigation = !useNavigationRail && phoneNavigationItemCount > 5
+        binding.navBar.labelVisibilityMode = when {
+            densePhoneNavigation && isSearchDestination() -> NavigationBarView.LABEL_VISIBILITY_SELECTED
+            densePhoneNavigation -> NavigationBarView.LABEL_VISIBILITY_UNLABELED
+            expressivePhoneNavigation -> NavigationBarView.LABEL_VISIBILITY_SELECTED
+            else -> NavigationBarView.LABEL_VISIBILITY_LABELED
+        }
+        binding.navBar.setItemHorizontalTranslationEnabled(!densePhoneNavigation)
     }
+
+    private fun isSearchDestination(
+        destination: androidx.navigation.NavDestination? =
+            if (::navController.isInitialized) navController.currentDestination else null,
+    ): Boolean =
+        ::navController.isInitialized &&
+            destination?.hierarchy?.any { it.id == R.id.searchPagerFragment } == true
 
     fun setDropsFilterKeyboardVisible(visible: Boolean) {
         if (dropsFilterKeyboardVisible == visible) return
@@ -371,13 +390,6 @@ class MainActivity : AppCompatActivity() {
             leavePlayerForBrowsing()
             navController.navigate(R.id.action_global_searchPagerFragment)
         }
-        binding.bottomSearch.setOnClickListener {
-            navController.navigate(R.id.action_global_searchPagerFragment)
-        }
-        binding.bottomSearch.setOnLongClickListener {
-            openNavigationTabCustomization()
-            true
-        }
         binding.tvAccount.setOnClickListener { openTvAccount() }
         binding.tvSettings.setOnClickListener {
             settingsResultLauncher?.launch(Intent(this, com.github.andreyasadchy.xtra.ui.settings.SettingsActivity::class.java))
@@ -396,6 +408,7 @@ class MainActivity : AppCompatActivity() {
                     ProfileMenuBinder.bind(it, this@MainActivity)
                     TwitchInboxMenuBinder.bind(it, this@MainActivity)
                     updateTopSearchVisibility(it)
+                    updateTopNavigationItems(it)
                 }
             }
         }.also {
@@ -1124,7 +1137,7 @@ class MainActivity : AppCompatActivity() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         updateNavigationPresentation(newConfig)
-        committedBottomNavigationDestinationId?.let(::selectCommittedBottomNavigationItem)
+        navController.currentDestination?.let(::syncBottomNavigationSelection)
         setNavBarColor(newConfig.orientation == Configuration.ORIENTATION_PORTRAIT)
     }
 
@@ -2083,6 +2096,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         hasNavigationDestinations = enabledNavigationDestinations.isNotEmpty()
+        configuredTopNavigationKeys = prefs.getStringSet(C.UI_NAVIGATION_TOP_TABS, emptySet()).orEmpty().toSet()
         updateNavigationPresentation(resources.configuration)
         navController.setGraph(navController.navInflater.inflate(R.navigation.nav_graph).also {
             val defaultItem = tabList.find { it.split(':')[1] != "0" }?.split(':')[0] ?: "1"
@@ -2122,9 +2136,18 @@ class MainActivity : AppCompatActivity() {
             try {
             menu.clear()
             if (hasNavigationDestinations) {
-                enabledNavigationDestinations.forEach { destination ->
+                val destinations = if (navigationView === binding.navBar) {
+                    phoneBottomNavigationDestinations
+                } else {
+                    enabledNavigationDestinations
+                }
+                destinations.forEach { destination ->
                     menu.add(Menu.NONE, destination.id, Menu.NONE, destination.label)
                         .setIcon(destination.icon)
+                }
+                if (navigationView === binding.navBar) {
+                    menu.add(Menu.NONE, R.id.searchPagerFragment, Menu.NONE, R.string.search)
+                        .setIcon(R.drawable.baseline_search_black_24)
                 }
             }
             } finally {
@@ -2159,16 +2182,11 @@ class MainActivity : AppCompatActivity() {
             }
             }
         }
-        committedBottomNavigationDestinationId = navigationDestinationId(navController.currentDestination)
-            ?: enabledNavigationDestinations.firstOrNull()?.id
-        committedBottomNavigationDestinationId?.let(::selectCommittedBottomNavigationItem)
+        navController.currentDestination?.let(::syncBottomNavigationSelection)
         navController.addOnDestinationChangedListener { _, destination, _ ->
-            updateBottomSearchVisibility()
-            navigationDestinationId(destination)?.let { destinationId ->
-                committedBottomNavigationDestinationId = destinationId
-                rootNavigationView().post {
-                    if (!isFinishing && !isDestroyed) selectCommittedBottomNavigationItem(destinationId)
-                }
+            rootNavigationView().post {
+                if (isFinishing || isDestroyed || navController.currentDestination != destination) return@post
+                syncBottomNavigationSelection(destination)
             }
         }
     }
@@ -2210,21 +2228,61 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun bindVisibleToolbarMenu() {
-        allToolbarViews().firstOrNull(Toolbar::isShown)?.let { toolbar ->
+        allToolbarViews().forEach { toolbar ->
             SettingsUpdateIndicator.update(toolbar, this)
             ProfileMenuBinder.bind(toolbar, this)
             TwitchInboxMenuBinder.bind(toolbar, this)
             updateTopSearchVisibility(toolbar)
+            updateTopNavigationItems(toolbar)
         }
     }
 
-    private fun selectCommittedBottomNavigationItem(destinationId: Int) {
-        committedBottomNavigationDestinationId = destinationId
+    private fun updateTopNavigationItems(toolbar: Toolbar) {
+        ROOT_NAVIGATION_DESTINATIONS.forEach { toolbar.menu.removeItem(it.id) }
+        if (!::navController.isInitialized || useNavigationRail) return
+        topNavigationDestinations.forEachIndexed { index, destination ->
+            toolbar.menu.add(Menu.NONE, destination.id, 50 + index, destination.label).apply {
+                setIcon(destination.icon)
+                setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_ALWAYS)
+                setOnMenuItemClickListener {
+                    if (navigationDestinationId(navController.currentDestination) == destination.id) {
+                        reselectNavigationDestination(destination.id)
+                    } else {
+                        pendingBottomNavigationItemId = destination.id
+                        drainBottomNavigation()
+                    }
+                    true
+                }
+            }
+        }
+    }
+
+    private fun selectBottomNavigationItem(destinationId: Int) {
+        setBottomNavigationSelectedItem(destinationId)
+    }
+
+    private fun syncBottomNavigationSelection(destination: androidx.navigation.NavDestination) {
+        val rootDestinationId = navigationDestinationId(destination)
+        if (rootDestinationId != null) {
+            selectBottomNavigationItem(rootDestinationId)
+        } else {
+            val selectedItemId = R.id.searchPagerFragment.takeIf { isSearchDestination(destination) }
+            setBottomNavigationSelectedItem(selectedItemId)
+        }
+        updatePhoneNavigationLabelVisibility()
+    }
+
+    private fun setBottomNavigationSelectedItem(destinationId: Int?) {
         val navigationView = rootNavigationView()
-        if (navigationView.menu.findItem(destinationId) == null) return
         suppressBottomNavigationSelection = true
         try {
-            navigationView.selectedItemId = destinationId
+            if (destinationId != null && navigationView.menu.findItem(destinationId) != null) {
+                navigationView.selectedItemId = destinationId
+            } else {
+                for (index in 0 until navigationView.menu.size()) {
+                    navigationView.menu.getItem(index).isChecked = false
+                }
+            }
         } finally {
             suppressBottomNavigationSelection = false
         }
@@ -2249,7 +2307,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        selectCommittedBottomNavigationItem(committedDestinationId)
+        selectBottomNavigationItem(committedDestinationId)
         bindVisibleToolbarMenu()
         UiInteractionGovernor.setInteracting(bottomNavigationInteractionSource, false)
         bottomNavigationTransactionInFlight = false
@@ -2266,15 +2324,24 @@ class MainActivity : AppCompatActivity() {
             if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return@post
 
             val itemId = pendingBottomNavigationItemId ?: return@post
-            if (navigationDestinationId(navController.currentDestination) == itemId ||
-                committedBottomNavigationDestinationId == itemId
-            ) {
+            if (itemId == R.id.searchPagerFragment) {
                 pendingBottomNavigationItemId = null
-                selectCommittedBottomNavigationItem(itemId)
+                if (!isSearchDestination()) {
+                    navController.navigate(R.id.action_global_searchPagerFragment)
+                }
                 return@post
             }
 
-            if (enabledNavigationDestinations.none { it.id == itemId }) {
+            val currentRootDestinationId = navigationDestinationId(navController.currentDestination)
+            if (currentRootDestinationId == itemId) {
+                pendingBottomNavigationItemId = null
+                selectBottomNavigationItem(itemId)
+                return@post
+            }
+
+            if (enabledNavigationDestinations.none { it.id == itemId } &&
+                topNavigationDestinations.none { it.id == itemId }
+            ) {
                 pendingBottomNavigationItemId = null
                 return@post
             }
