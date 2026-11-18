@@ -246,6 +246,8 @@ class CombinedChatViewModel(
         _updates.tryEmit(Unit)
     }
 
+    private fun sessionFor(identity: String): ChannelSession? = sessions[identity]
+
     fun session(identity: String): ActiveChatSession? = sessions[identity]?.handle?.active
 
     fun channelId(identity: String): String? = sessions[identity]?.stream?.channelId

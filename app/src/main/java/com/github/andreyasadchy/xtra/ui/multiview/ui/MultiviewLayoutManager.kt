@@ -146,6 +146,18 @@ object MultiviewLayoutManager {
         )
     }
 
+    private fun autoPortrait(
+        ids: List<String>,
+        primary: String,
+    ): MultiviewLayoutPlan {
+        return when (ids.size) {
+            1 -> singlePortrait(ids.first())
+            2 -> stackedPortrait(ids)
+            3 -> focusPortrait(ids, primary)
+            else -> gridPortrait(ids)
+        }
+    }
+
     private fun focusPortrait(
         ids: List<String>,
         primary: String,
