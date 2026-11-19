@@ -4,9 +4,11 @@ import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
 import androidx.recyclerview.widget.DiffUtil
 import com.github.andreyasadchy.xtra.ui.chat.v2.assets.ChatAssetRepository
+import com.github.andreyasadchy.xtra.ui.chat.v2.domain.ChatAssetKey
 import com.github.andreyasadchy.xtra.ui.chat.v2.domain.ChatEmoteInteraction
 import com.github.andreyasadchy.xtra.ui.chat.v2.domain.ChatGifInteraction
 import com.github.andreyasadchy.xtra.ui.chat.v2.domain.ChatMessageId
+import com.github.andreyasadchy.xtra.ui.chat.v2.presentation.ChatPiece
 import com.github.andreyasadchy.xtra.ui.chat.v2.presentation.ChatRowUiModel
 
 class ChatTimelineAdapter(
@@ -60,6 +62,55 @@ class ChatTimelineAdapter(
         holder.view.setMessageTextSizeSp(textSizeSp)
         holder.view.setAnimateGifs(animateGifs)
         holder.bind(rows[position])
+        prefetchLookahead(position)
+    }
+
+    private fun prefetchLookahead(position: Int) {
+        if (rows.isEmpty()) return
+        val start = (position + 1).coerceAtLeast(0)
+        val end = (position + 1 + LOOKAHEAD_PREFETCH_ROWS).coerceAtMost(rows.size)
+        val backStart = (position - LOOKBACK_PREFETCH_ROWS).coerceAtLeast(0)
+        val badgeKeys = ArrayList<ChatAssetKey>()
+        val otherKeys = ArrayList<ChatAssetKey>()
+
+        fun collectRow(row: ChatRowUiModel) {
+            row.pieces.forEach { piece ->
+                when (piece) {
+                    is ChatPiece.Badge -> {
+                        badgeKeys += piece.asset.key
+                        piece.asset.overlays.forEach { badgeKeys += it.key }
+                    }
+                    is ChatPiece.Emote -> {
+                        otherKeys += piece.asset.key
+                        piece.asset.overlays.forEach { otherKeys += it.key }
+                    }
+                    is ChatPiece.Gif -> {
+                        otherKeys += piece.asset.key
+                        piece.asset.overlays.forEach { otherKeys += it.key }
+                    }
+                    is ChatPiece.Cheermote -> {
+                        otherKeys += piece.asset.key
+                        piece.asset.overlays.forEach { otherKeys += it.key }
+                    }
+                    is ChatPiece.RewardIcon -> {
+                        otherKeys += piece.asset.key
+                        piece.asset.overlays.forEach { otherKeys += it.key }
+                    }
+                    is ChatPiece.Username -> {
+                        piece.paint?.imageUrl
+                            ?.takeIf(String::isNotBlank)
+                            ?.let { otherKeys += ChatAssetKey(it) }
+                    }
+                    else -> Unit
+                }
+            }
+        }
+
+        for (index in start until end) collectRow(rows[index])
+        for (index in backStart until position) collectRow(rows[index])
+
+        if (badgeKeys.isNotEmpty()) assets.prefetchPriority(badgeKeys)
+        if (otherKeys.isNotEmpty()) assets.prefetch(otherKeys)
     }
 
     /** Replaces the complete snapshot for reconciliation and presentation-wide updates. */
@@ -175,6 +226,11 @@ class ChatTimelineAdapter(
 
     class Holder(val view: ChatMessageTextView) : RecyclerView.ViewHolder(view) {
         fun bind(row: ChatRowUiModel) = view.bind(row)
+    }
+
+    private companion object {
+        const val LOOKAHEAD_PREFETCH_ROWS = 12
+        const val LOOKBACK_PREFETCH_ROWS = 4
     }
 
 }

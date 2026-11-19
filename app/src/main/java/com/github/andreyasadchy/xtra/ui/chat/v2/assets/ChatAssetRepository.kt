@@ -31,9 +31,14 @@ class ChatAssetRepository(
     private val maxQueuedPrefetch: Int = 16,
     private val nowMs: () -> Long = { SystemClock.elapsedRealtime() },
     private val wait: suspend (Long) -> Unit = { delay(it) },
+    /** High-priority assets (chat badges) get an isolated cache & lane so fast chat never starves or evicts them. */
+    private val isPriorityAsset: (ChatAssetKey) -> Boolean = { false },
+    private val maxPriorityEntries: Int = 512,
+    private val maxConcurrentPriorityLoads: Int = 6,
 ) {
     private val repositoryJob: Job? = scope.coroutineContext[Job]
     private val states = LinkedHashMap<ChatAssetKey, ChatAssetState>(maxEntries, .75f, true)
+    private val priorityStates = LinkedHashMap<ChatAssetKey, ChatAssetState>(maxPriorityEntries, .75f, true)
     private val listeners = HashMap<ChatAssetKey, MutableSet<() -> Unit>>()
     private val retryJobs = HashMap<ChatAssetKey, Job>()
     private val loadJobs = HashMap<ChatAssetKey, Job>()
@@ -41,34 +46,90 @@ class ChatAssetRepository(
     private val activeLoads = HashSet<ChatAssetKey>()
     private val loadPermits = Semaphore(maxConcurrentLoads.coerceAtLeast(1))
     private val bulkLoadPermits = Semaphore(maxConcurrentBulkLoads.coerceAtLeast(1))
+    private val priorityLoadPermits = Semaphore(maxConcurrentPriorityLoads.coerceAtLeast(1))
     private val queuedPrefetch = LinkedHashSet<ChatAssetKey>()
     private val _changes = MutableStateFlow<ChatAssetKey?>(null)
     val changes: StateFlow<ChatAssetKey?> = _changes.asStateFlow()
 
-    @Synchronized fun peek(key: ChatAssetKey): ChatAssetState = states[key] ?: ChatAssetState.Missing
+    private fun storeFor(key: ChatAssetKey): LinkedHashMap<ChatAssetKey, ChatAssetState> =
+        if (isPriorityAsset(key)) priorityStates else states
 
-    @Synchronized internal fun cachedStateCount(): Int = states.size
+    @Synchronized fun peek(key: ChatAssetKey): ChatAssetState = storeFor(key)[key] ?: ChatAssetState.Missing
+
+    @Synchronized internal fun cachedStateCount(): Int = states.size + priorityStates.size
     @Synchronized internal fun observerCount(key: ChatAssetKey): Int = listeners[key]?.size ?: 0
 
     /** Warms shareable assets without attaching work to a transient RecyclerView row. */
     fun prefetch(keys: Iterable<ChatAssetKey>) {
         keys.asSequence().distinct().forEach { key ->
             val shouldRequest = synchronized(this) {
-                if (states.containsKey(key)) {
+                val store = storeFor(key)
+                if (store.containsKey(key)) {
                     false
                 } else {
-                    states[key] = ChatAssetState.Missing
+                    store[key] = ChatAssetState.Missing
                     trimCacheLocked()
                     updateDiagnosticsLocked()
                     true
                 }
             }
             if (shouldRequest) {
-                synchronized(this) { queuedPrefetch += key }
+                if (!isPriorityAsset(key)) {
+                    synchronized(this) { queuedPrefetch += key }
+                }
                 request(key)
             }
         }
         dropStalePrefetch()
+    }
+
+    /** Pre-warms high-priority badge assets into the isolated priority cache without eviction cap drops. */
+    fun prefetchPriority(keys: Iterable<ChatAssetKey>) {
+        val toLoad = ArrayList<ChatAssetKey>()
+        synchronized(this) {
+            keys.asSequence().distinct().forEach { key ->
+                val store = storeFor(key)
+                val current = store[key]
+                if (current == null || current is ChatAssetState.Missing) {
+                    store[key] = ChatAssetState.Missing
+                    toLoad += key
+                }
+            }
+            trimCacheLocked()
+            updateDiagnosticsLocked()
+        }
+        toLoad.forEach(::request)
+    }
+
+    /** Clears transient network failure backoffs and immediately retries all observed failed assets. */
+    fun onNetworkAvailable() {
+        val now = nowMs()
+        val toRetry = synchronized(this) {
+            val observedFailed = ArrayList<ChatAssetKey>()
+            fun resetMap(map: LinkedHashMap<ChatAssetKey, ChatAssetState>) {
+                val iter = map.entries.iterator()
+                while (iter.hasNext()) {
+                    val (key, state) = iter.next()
+                    if (state is ChatAssetState.Failed) {
+                        val permanentUntil = state.permanentUntilMs
+                        if (permanentUntil == null || permanentUntil <= now) {
+                            retryJobs.remove(key)?.cancel()
+                            if (!listeners[key].isNullOrEmpty()) {
+                                map[key] = ChatAssetState.Missing
+                                observedFailed += key
+                            } else {
+                                iter.remove()
+                            }
+                        }
+                    }
+                }
+            }
+            resetMap(states)
+            resetMap(priorityStates)
+            updateDiagnosticsLocked()
+            observedFailed
+        }
+        toRetry.forEach(::request)
     }
 
     /** Fast scrolling must not leave a long queue of rows nobody can see anymore. */
@@ -97,11 +158,12 @@ class ChatAssetRepository(
 
     fun observe(key: ChatAssetKey, listener: () -> Unit) {
         val readyImage = synchronized(this) {
+            val store = storeFor(key)
             listeners.getOrPut(key) { LinkedHashSet() }.add(listener)
-            if (states[key] == null) states[key] = ChatAssetState.Missing
+            if (store[key] == null) store[key] = ChatAssetState.Missing
             trimCacheLocked()
             updateDiagnosticsLocked()
-            (states[key] as? ChatAssetState.Ready)?.image
+            (store[key] as? ChatAssetState.Ready)?.image
         }
         readyImage?.intrinsicDimensions()?.let { dimensions ->
             ChatAssetDimensionsResolver.recordDecoded(key, dimensions.width, dimensions.height)
@@ -112,19 +174,20 @@ class ChatAssetRepository(
     fun removeObserver(key: ChatAssetKey, listener: () -> Unit) {
         var loadJob: Job? = null
         synchronized(this) {
+            val store = storeFor(key)
             listeners[key]?.remove(listener)
             if (listeners[key].isNullOrEmpty()) {
                 listeners.remove(key)
                 retryJobs.remove(key)?.cancel()
                 // RecyclerView can briefly recycle the last row using this asset while a
-                // batched publication is being applied. Keep an already-started request alive
-                // so the next bind can reuse its result; queued work is still canceled promptly.
-                if (key !in activeLoads) {
+                // batched publication is being applied. Keep already-started loads and priority badge
+                // downloads alive so they complete once and cover all upcoming rows.
+                if (key !in activeLoads && !isPriorityAsset(key)) {
                     loadJob = loadJobs.remove(key)
-                    if (states[key] is ChatAssetState.Loading) states.remove(key)
+                    if (store[key] is ChatAssetState.Loading) store.remove(key)
                 }
-                if ((states[key] as? ChatAssetState.Ready)?.image?.evictWhenUnobserved() == true) {
-                    states.remove(key)
+                if ((store[key] as? ChatAssetState.Ready)?.image?.evictWhenUnobserved() == true) {
+                    store.remove(key)
                 }
             }
             trimCacheLocked()
@@ -136,7 +199,10 @@ class ChatAssetRepository(
     /** Catalog revisions can make a previous negative result valid again. */
     fun invalidate(keys: Set<ChatAssetKey>) {
         val interested = synchronized(this) {
-            keys.forEach { key -> if (states[key] is ChatAssetState.Failed) states.remove(key) }
+            keys.forEach { key ->
+                val store = storeFor(key)
+                if (store[key] is ChatAssetState.Failed) store.remove(key)
+            }
             trimCacheLocked()
             updateDiagnosticsLocked()
             keys.filter { !listeners[it].isNullOrEmpty() }
@@ -146,8 +212,10 @@ class ChatAssetRepository(
 
     private fun request(key: ChatAssetKey) {
         val now = nowMs()
+        val priority = isPriorityAsset(key)
         val loadJob = synchronized(this) {
-            val attempt = when (val state = states[key]) {
+            val store = storeFor(key)
+            val attempt = when (val state = store[key]) {
                 is ChatAssetState.Ready, ChatAssetState.Loading -> return
                 is ChatAssetState.Failed if state.nextRetryAtMs > now -> {
                     scheduleRetry(key, state.nextRetryAtMs - now)
@@ -155,13 +223,18 @@ class ChatAssetRepository(
                 }
                 is ChatAssetState.Failed -> state.attempts + 1
                 ChatAssetState.Missing, null -> 1
-            }.also { states[key] = ChatAssetState.Loading }
+            }.also { store[key] = ChatAssetState.Loading }
             scope.launch(start = CoroutineStart.LAZY) {
                 val currentJob = coroutineContext[Job]
                 try {
                     var completedAt: Long
                     val state = try {
-                        val loaded = (if (isBulkAsset(key)) bulkLoadPermits else loadPermits).withPermit {
+                        val permitPool = when {
+                            priority -> priorityLoadPermits
+                            isBulkAsset(key) -> bulkLoadPermits
+                            else -> loadPermits
+                        }
+                        val loaded = permitPool.withPermit {
                             synchronized(this@ChatAssetRepository) { activeLoads += key }
                             try {
                                 loader.load(key)
@@ -182,14 +255,15 @@ class ChatAssetRepository(
                             !listeners[key].isNullOrEmpty()
                         }
                         if (repositoryJob?.isActive == false) throw e
-                        if (!stillObserved) {
+                        if (!stillObserved && !priority) {
                             synchronized(this@ChatAssetRepository) {
+                                val store = storeFor(key)
                                 if (
                                     loadJobs[key] === currentJob &&
                                     listeners[key].isNullOrEmpty() &&
-                                    states[key] is ChatAssetState.Loading
+                                    store[key] is ChatAssetState.Loading
                                 ) {
-                                    states.remove(key)
+                                    store.remove(key)
                                 }
                             }
                             return@launch
@@ -208,16 +282,18 @@ class ChatAssetRepository(
                     }
                     val callbacks = synchronized(this@ChatAssetRepository) {
                         if (loadJobs[key] !== currentJob) null else {
+                            val store = storeFor(key)
                             val observers = listeners[key]?.toList().orEmpty()
                             if (
+                                !priority &&
                                 observers.isEmpty() &&
                                 (state as? ChatAssetState.Ready)?.image?.evictWhenUnobserved() == true
                             ) {
                                 // Do not retain a non-shareable decoded handle after a transient
                                 // observer disappears while its request is completing.
-                                states.remove(key)
+                                store.remove(key)
                             } else {
-                                states[key] = state
+                                store[key] = state
                             }
                             retryJobs.remove(key)
                             trimCacheLocked()
@@ -245,8 +321,9 @@ class ChatAssetRepository(
             synchronized(this) {
                 if (loadJobs[key] === loadJob) {
                     loadJobs.remove(key)
-                    if (listeners[key].isNullOrEmpty() && states[key] is ChatAssetState.Loading) {
-                        states.remove(key)
+                    val store = storeFor(key)
+                    if (listeners[key].isNullOrEmpty() && store[key] is ChatAssetState.Loading) {
+                        store.remove(key)
                     }
                     updateDiagnosticsLocked()
                 }
@@ -257,10 +334,11 @@ class ChatAssetRepository(
     /** Reopens a Ready state if Coil evicted the decoded value before this row needed a drawable. */
     internal fun retryIfDrawableUnavailable(key: ChatAssetKey) {
         val shouldRequest = synchronized(this) {
-            if (listeners[key].isNullOrEmpty() || states[key] !is ChatAssetState.Ready) {
+            val store = storeFor(key)
+            if (listeners[key].isNullOrEmpty() || store[key] !is ChatAssetState.Ready) {
                 false
             } else {
-                states[key] = ChatAssetState.Missing
+                store[key] = ChatAssetState.Missing
                 updateDiagnosticsLocked()
                 true
             }
@@ -287,9 +365,14 @@ class ChatAssetRepository(
     }
 
     private fun trimCacheLocked() {
-        if (states.size <= maxEntries) return
-        val iterator = states.entries.iterator()
-        while (states.size > maxEntries && iterator.hasNext()) {
+        trimMapLocked(states, maxEntries)
+        trimMapLocked(priorityStates, maxPriorityEntries)
+    }
+
+    private fun trimMapLocked(map: LinkedHashMap<ChatAssetKey, ChatAssetState>, limit: Int) {
+        if (map.size <= limit) return
+        val iterator = map.entries.iterator()
+        while (map.size > limit && iterator.hasNext()) {
             val entry = iterator.next()
             if (listeners[entry.key].isNullOrEmpty() && entry.value !is ChatAssetState.Loading) {
                 iterator.remove()
@@ -299,13 +382,17 @@ class ChatAssetRepository(
 
     private fun updateDiagnosticsLocked() {
         if (!BuildConfig.PERF_DIAGNOSTICS) return
+        val totalCached = states.size + priorityStates.size
+        val decodedCount = states.values.count { state ->
+            (state as? ChatAssetState.Ready)?.image?.holdsDecodedImage() == true
+        } + priorityStates.values.count { state ->
+            (state as? ChatAssetState.Ready)?.image?.holdsDecodedImage() == true
+        }
         ChatRenderDiagnostics.setAssetRepositoryState(
             activeObservers = listeners.values.sumOf { it.size },
             inFlightLoads = loadJobs.size,
-            cachedStates = states.size,
-            decodedHandles = states.values.count { state ->
-                (state as? ChatAssetState.Ready)?.image?.holdsDecodedImage() == true
-            },
+            cachedStates = totalCached,
+            decodedHandles = decodedCount,
         )
     }
 }

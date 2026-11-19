@@ -65,6 +65,7 @@
     <string name="multiview_buffering">Buffering…</string>
     <string name="multiview_reconnecting">Reconnecting…</string>
     <string name="multiview_offline">Stream is offline</string>
+    <string name="multiview_offline_tap_retry">Stream is offline\nTap to check live</string>
     <string name="multiview_playback_unavailable">Playback unavailable</string>
     <string name="multiview_retry_description">%s. Retry playback</string>
     <string name="multiview_audio_active_short">Audio active</string>

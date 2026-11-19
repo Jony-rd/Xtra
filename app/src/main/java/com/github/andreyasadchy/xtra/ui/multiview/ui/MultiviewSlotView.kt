@@ -266,7 +266,10 @@ class MultiviewSlotView(context: Context) : FrameLayout(context) {
             MultiviewSlotStatus.LOADING -> context.getString(R.string.multiview_loading)
             MultiviewSlotStatus.BUFFERING -> context.getString(R.string.multiview_buffering)
             MultiviewSlotStatus.RECONNECTING -> context.getString(R.string.multiview_reconnecting)
-            MultiviewSlotStatus.OFFLINE -> context.getString(R.string.multiview_offline)
+            MultiviewSlotStatus.OFFLINE -> context.getString(
+                if (snapshot?.retryAvailable == true) R.string.multiview_offline_tap_retry
+                else R.string.multiview_offline,
+            )
             MultiviewSlotStatus.PLAYBACK_UNAVAILABLE ->
                 context.getString(R.string.multiview_playback_unavailable)
             MultiviewSlotStatus.LIVE -> null

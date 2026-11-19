@@ -5,13 +5,19 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.ColorStateList
+import android.annotation.SuppressLint
 import android.content.res.Configuration
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Outline
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.Shader
 import android.graphics.Typeface
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
@@ -22,10 +28,13 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.text.TextUtils
+import android.util.LruCache
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.animation.DecelerateInterpolator
@@ -35,9 +44,17 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import androidx.annotation.ColorInt
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.ColorUtils
 import androidx.core.view.isVisible
 import androidx.core.widget.TextViewCompat
+import coil3.BitmapImage
+import coil3.asDrawable
+import coil3.imageLoader
+import coil3.request.ImageRequest
+import coil3.request.SuccessResult
+import coil3.request.allowHardware
 import com.github.andreyasadchy.xtra.R
 import com.github.andreyasadchy.xtra.model.ui.Stream
 import com.github.andreyasadchy.xtra.ui.common.loadStreamProfileImage
@@ -46,6 +63,14 @@ import com.github.andreyasadchy.xtra.ui.multiview.MultiviewSessionState
 import com.github.andreyasadchy.xtra.ui.multiview.MultiviewViewModel
 import com.github.andreyasadchy.xtra.ui.multiview.playback.MultiviewLiveHealth
 import com.github.andreyasadchy.xtra.ui.multiview.playback.MultiviewPlaybackSnapshot
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 object MultiviewStreamDeckDialog {
@@ -81,18 +106,166 @@ object MultiviewStreamDeckDialog {
     private const val COLOR_AMBER_SHADOW = "#090301"
     private const val COLOR_AMBER_STROKE = "#FF5E1A"
 
-    private const val COLOR_UNSEL_GLASS_TOP = "#AD131524"
-    private const val COLOR_UNSEL_GLASS_BOTTOM = "#BF090B14"
-    private const val COLOR_UNSEL_SHADOW = "#85020206"
-    private const val COLOR_UNSEL_STROKE = "#665B4B8A"
+    // High-contrast frosted slate glass for unselected controls so they pop immediately on dark glass
+    private const val COLOR_UNSEL_GLASS_TOP = "#D62B3350"
+    private const val COLOR_UNSEL_GLASS_BOTTOM = "#E01B2036"
+    private const val COLOR_UNSEL_SHADOW = "#9905070F"
+    private const val COLOR_UNSEL_STROKE = "#A694A3B8"
+    private const val COLOR_UNSEL_TEXT = "#F1F5F9"
 
     private const val AUTO_DISMISS_MS = 3_000L
     private const val HEALTH_REFRESH_MS = 1_000L
+    private const val STEP_HOLD_INITIAL_DELAY_MS = 320L
+    private const val STEP_HOLD_REPEAT_MS = 75L
     private val STANDARD_QUALITIES = listOf("1080p", "720p", "480p", "360p", "160p")
+
+    private data class StreamerPalette(
+        @ColorInt val primary: Int,
+        @ColorInt val secondary: Int,
+        @ColorInt val highlight: Int,
+    )
+
+    private object StreamerPaletteCache {
+        private val cache = LruCache<String, StreamerPalette>(64)
+
+        fun getCached(url: String?): StreamerPalette? =
+            url?.takeIf { it.isNotBlank() }?.let(cache::get)
+
+        fun fallback(seedKey: String): StreamerPalette {
+            val baseHue = ((seedKey.hashCode() and 0x7FFFFFFF) % 360).toFloat()
+            val primary = ColorUtils.HSLToColor(floatArrayOf(baseHue, 0.72f, 0.58f))
+            val secondary = ColorUtils.HSLToColor(floatArrayOf((baseHue + 38f) % 360f, 0.68f, 0.52f))
+            val highlight = ColorUtils.HSLToColor(floatArrayOf(baseHue, 0.82f, 0.78f))
+            return StreamerPalette(primary, secondary, highlight)
+        }
+
+        suspend fun loadOrExtract(
+            context: Context,
+            url: String?,
+            seedKey: String,
+        ): StreamerPalette {
+            val cleanUrl = url?.trim()?.takeIf { it.isNotEmpty() } ?: return fallback(seedKey)
+            cache.get(cleanUrl)?.let { return it }
+            val appContext = context.applicationContext
+            val bitmap = withContext(Dispatchers.IO) {
+                runCatching {
+                    val request = ImageRequest.Builder(appContext)
+                        .data(cleanUrl)
+                        .size(32, 32)
+                        .allowHardware(false)
+                        .build()
+                    val result = appContext.imageLoader.execute(request)
+                    val image = (result as? SuccessResult)?.image ?: return@runCatching null
+                    when (image) {
+                        is BitmapImage -> image.bitmap
+                        else -> drawableToSmallBitmap(image.asDrawable(appContext.resources))
+                    }
+                }.getOrNull()
+            } ?: return fallback(seedKey)
+            val extracted = withContext(Dispatchers.Default) {
+                extractFromBitmap(bitmap, seedKey)
+            }
+            cache.put(cleanUrl, extracted)
+            return extracted
+        }
+
+        private fun drawableToSmallBitmap(drawable: Drawable): Bitmap {
+            if (drawable is BitmapDrawable && drawable.bitmap.config != Bitmap.Config.HARDWARE) {
+                return drawable.bitmap
+            }
+            val w = drawable.intrinsicWidth.coerceIn(1, 32)
+            val h = drawable.intrinsicHeight.coerceIn(1, 32)
+            return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { bmp ->
+                val canvas = Canvas(bmp)
+                drawable.setBounds(0, 0, canvas.width, canvas.height)
+                drawable.draw(canvas)
+            }
+        }
+
+        private fun extractFromBitmap(bitmap: Bitmap, seedKey: String): StreamerPalette {
+            val scaled = if (bitmap.width > 24 || bitmap.height > 24) {
+                Bitmap.createScaledBitmap(bitmap, 24, 24, true)
+            } else {
+                bitmap
+            }
+            val bucketWeight = FloatArray(24)
+            val bucketHueSum = FloatArray(24)
+            val bucketSatSum = FloatArray(24)
+            val hsl = FloatArray(3)
+            var totalColorfulWeight = 0f
+            for (y in 0 until scaled.height) {
+                for (x in 0 until scaled.width) {
+                    val px = scaled.getPixel(x, y)
+                    if (Color.alpha(px) < 140) continue
+                    ColorUtils.colorToHSL(px, hsl)
+                    val hue = hsl[0]
+                    val sat = hsl[1]
+                    val light = hsl[2]
+                    if (sat < 0.14f || light < 0.12f || light > 0.92f) continue
+                    val weight = sat * (1.25f - abs(light - 0.52f) * 1.4f).coerceAtLeast(0.15f)
+                    val bucket = ((hue / 15f).toInt()).coerceIn(0, 23)
+                    bucketWeight[bucket] += weight
+                    bucketHueSum[bucket] += hue * weight
+                    bucketSatSum[bucket] += sat * weight
+                    totalColorfulWeight += weight
+                }
+            }
+            if (scaled !== bitmap) scaled.recycle()
+            if (totalColorfulWeight <= 0.05f) {
+                return fallback(seedKey)
+            }
+            var bestBucket = 0
+            for (i in 1 until 24) {
+                if (bucketWeight[i] > bucketWeight[bestBucket]) bestBucket = i
+            }
+            val primaryHue = if (bucketWeight[bestBucket] > 0f) {
+                (bucketHueSum[bestBucket] / bucketWeight[bestBucket]).coerceIn(0f, 360f)
+            } else {
+                bestBucket * 15f + 7.5f
+            }
+            val primarySat = if (bucketWeight[bestBucket] > 0f) {
+                (bucketSatSum[bestBucket] / bucketWeight[bestBucket]).coerceIn(0.62f, 0.90f)
+            } else {
+                0.76f
+            }
+            var secondBucket = -1
+            for (i in 0 until 24) {
+                val hueDiff = abs(i - bestBucket).let { d -> minOf(d, 24 - d) }
+                if (hueDiff >= 2 && bucketWeight[i] > 0f) {
+                    if (secondBucket == -1 || bucketWeight[i] > bucketWeight[secondBucket]) {
+                        secondBucket = i
+                    }
+                }
+            }
+            val secondaryHue = if (secondBucket >= 0 && bucketWeight[secondBucket] > bucketWeight[bestBucket] * 0.22f) {
+                (bucketHueSum[secondBucket] / bucketWeight[secondBucket]).coerceIn(0f, 360f)
+            } else {
+                (primaryHue + 38f) % 360f
+            }
+            val secondarySat = if (secondBucket >= 0 && bucketWeight[secondBucket] > bucketWeight[bestBucket] * 0.22f) {
+                (bucketSatSum[secondBucket] / bucketWeight[secondBucket]).coerceIn(0.58f, 0.88f)
+            } else {
+                (primarySat * 0.92f).coerceIn(0.58f, 0.86f)
+            }
+
+            val primary = ColorUtils.HSLToColor(floatArrayOf(primaryHue, primarySat, 0.58f))
+            val secondary = ColorUtils.HSLToColor(floatArrayOf(secondaryHue, secondarySat, 0.52f))
+            val highlight = ColorUtils.HSLToColor(floatArrayOf(primaryHue, (primarySat + 0.1f).coerceAtMost(0.95f), 0.78f))
+            return StreamerPalette(primary, secondary, highlight)
+        }
+    }
 
     private class ActiveOverlay(
         val hostContainer: FrameLayout,
         val dismissFn: () -> Unit,
+    )
+
+    private class StreamCardSlot(
+        val index: Int,
+        val identity: String,
+        val card: LinearLayout,
+        val rowParent: View?,
+        val setDropHighlight: (Boolean) -> Unit,
     )
 
     private class DeckUiContext(
@@ -104,6 +277,9 @@ object MultiviewStreamDeckDialog {
         val stateProvider: () -> MultiviewSessionState,
         val playbackProvider: () -> Map<String, MultiviewPlaybackSnapshot>,
         val healthProvider: () -> Map<String, MultiviewLiveHealth>,
+        val overlayScope: CoroutineScope,
+        val uiHandler: Handler,
+        val onHoldStateChanged: (Boolean) -> Unit,
     ) {
         fun dp(value: Int): Int = (value * density).roundToInt()
         fun dp(value: Float): Int = (value * density).roundToInt()
@@ -120,6 +296,22 @@ object MultiviewStreamDeckDialog {
             strokeColorHex: String,
             cornerRadiusDp: Float = 6f,
             shadowDepthDp: Float = 3f,
+        ): Drawable = make3DKeycapInt(
+            topColor = Color.parseColor(topColorHex),
+            bottomColor = Color.parseColor(bottomColorHex),
+            shadowColor = Color.parseColor(shadowColorHex),
+            strokeColor = Color.parseColor(strokeColorHex),
+            cornerRadiusDp = cornerRadiusDp,
+            shadowDepthDp = shadowDepthDp,
+        )
+
+        fun make3DKeycapInt(
+            @ColorInt topColor: Int,
+            @ColorInt bottomColor: Int,
+            @ColorInt shadowColor: Int,
+            @ColorInt strokeColor: Int,
+            cornerRadiusDp: Float = 6f,
+            shadowDepthDp: Float = 3f,
         ): Drawable {
             fun shade(c: Int, f: Float): Int = Color.argb(
                 Color.alpha(c),
@@ -133,16 +325,14 @@ object MultiviewStreamDeckDialog {
                 val plinth = GradientDrawable(
                     GradientDrawable.Orientation.TOP_BOTTOM,
                     intArrayOf(
-                        Color.parseColor(shadowColorHex),
-                        shade(Color.parseColor(shadowColorHex), 0.7f),
+                        shadowColor,
+                        shade(shadowColor, 0.7f),
                     ),
                 ).apply {
                     cornerRadius = radiusPx
                     setStroke(dp(0.8f).coerceAtLeast(1), Color.parseColor("#66000000"))
                 }
 
-                val topColor = Color.parseColor(topColorHex)
-                val bottomColor = Color.parseColor(bottomColorHex)
                 val faceColors = if (pressed) {
                     intArrayOf(shade(topColor, 0.84f), shade(bottomColor, 0.84f))
                 } else {
@@ -155,14 +345,14 @@ object MultiviewStreamDeckDialog {
                     cornerRadius = radiusPx
                     setStroke(
                         dp(1.1f).coerceAtLeast(1),
-                        Color.parseColor(if (pressed) "#FFFFFF" else strokeColorHex),
+                        if (pressed) Color.WHITE else strokeColor,
                     )
                 }
 
                 val topGloss = GradientDrawable(
                     GradientDrawable.Orientation.TOP_BOTTOM,
                     intArrayOf(
-                        Color.parseColor("#30FFFFFF"),
+                        Color.parseColor("#38FFFFFF"),
                         Color.TRANSPARENT,
                     ),
                 ).apply {
@@ -273,22 +463,13 @@ object MultiviewStreamDeckDialog {
                 (initialState.layoutMode == MultiviewLayoutMode.FOCUS || initialState.streams.size <= 1) &&
                 localAnchorBottom != null
 
-            val ui = DeckUiContext(
-                context = context,
-                density = metrics.density,
-                isLandscape = isLandscape,
-                autoLabel = context.getString(R.string.multiview_quality_auto),
-                viewModel = viewModel,
-                stateProvider = stateProvider,
-                playbackProvider = playbackProvider,
-                healthProvider = healthProvider,
-            )
-
             val appContext = context.applicationContext
             val uiHandler = Handler(Looper.getMainLooper())
+            val overlayScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
             var overlayRef: ActiveOverlay? = null
             var cleanedUp = false
             var volumeReceiver: BroadcastReceiver? = null
+            var holdCount = 0
 
             val healthUpdaters = mutableMapOf<String, (MultiviewLiveHealth?) -> Unit>()
             val cardVolumeUpdaters = mutableMapOf<String, (Float) -> Unit>()
@@ -298,8 +479,33 @@ object MultiviewStreamDeckDialog {
             val dismissRunnable = Runnable { overlayRef?.dismissFn?.invoke() }
             fun resetDismissTimer() {
                 uiHandler.removeCallbacks(dismissRunnable)
-                uiHandler.postDelayed(dismissRunnable, AUTO_DISMISS_MS)
+                if (holdCount <= 0 && !cleanedUp) {
+                    uiHandler.postDelayed(dismissRunnable, AUTO_DISMISS_MS)
+                }
             }
+            fun setInteractionHold(held: Boolean) {
+                if (held) {
+                    holdCount++
+                    uiHandler.removeCallbacks(dismissRunnable)
+                } else {
+                    holdCount = (holdCount - 1).coerceAtLeast(0)
+                    if (holdCount == 0) resetDismissTimer()
+                }
+            }
+
+            val ui = DeckUiContext(
+                context = context,
+                density = metrics.density,
+                isLandscape = isLandscape,
+                autoLabel = context.getString(R.string.multiview_quality_auto),
+                viewModel = viewModel,
+                stateProvider = stateProvider,
+                playbackProvider = playbackProvider,
+                healthProvider = healthProvider,
+                overlayScope = overlayScope,
+                uiHandler = uiHandler,
+                onHoldStateChanged = ::setInteractionHold,
+            )
 
             val healthTickerRunnable = object : Runnable {
                 override fun run() {
@@ -323,6 +529,7 @@ object MultiviewStreamDeckDialog {
                 }
                 uiHandler.removeCallbacks(dismissRunnable)
                 uiHandler.removeCallbacks(healthTickerRunnable)
+                overlayScope.cancel()
                 volumeReceiver?.let { receiver ->
                     try {
                         appContext.unregisterReceiver(receiver)
@@ -415,6 +622,8 @@ object MultiviewStreamDeckDialog {
             }.apply {
                 isVerticalScrollBarEnabled = false
                 isFillViewport = false
+                clipChildren = false
+                clipToPadding = false
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -422,6 +631,8 @@ object MultiviewStreamDeckDialog {
             }
             val streamListLayout = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
+                clipChildren = false
+                clipToPadding = false
                 layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -1113,16 +1324,16 @@ object MultiviewStreamDeckDialog {
                     )
                 } else {
                     ui.make3DKeycap(
-                        topColorHex = "#BA131B07",
-                        bottomColorHex = "#CC080C04",
-                        shadowColorHex = "#85030501",
-                        strokeColorHex = "#6694C21A",
+                        topColorHex = "#D6263218",
+                        bottomColorHex = "#E0151C0C",
+                        shadowColorHex = "#99030501",
+                        strokeColorHex = "#A6A3E635",
                         cornerRadiusDp = 5.5f,
                         shadowDepthDp = 2.8f,
                     )
                 }
                 pill.background = ui.deckRipple(bg)
-                pill.setTextColor(Color.parseColor(if (isSelected) "#EAFF80" else "#DCE8C8"))
+                pill.setTextColor(Color.parseColor(if (isSelected) "#F4FF99" else COLOR_UNSEL_TEXT))
                 ui.centerKeycapText(pill, depthDp = 2.8f, sidePadDp = 1f)
             }
         }
@@ -1218,6 +1429,7 @@ object MultiviewStreamDeckDialog {
             trackBorderHex = "#88C2FF00",
             majorTickHex = "#E4FF7A",
             minorTickHex = "#6684CC16",
+            onDragStateChanged = ui.onHoldStateChanged,
         ) { newVol ->
             updateMasterAudioUi(newVol, updateFader = false)
             ui.stateProvider().streams.forEach { stream ->
@@ -1267,11 +1479,14 @@ object MultiviewStreamDeckDialog {
 
         val streams = ui.stateProvider().streams.toList()
         val useTwoColumns = ui.isLandscape && streams.size > 1
+        val cardSlots = mutableListOf<StreamCardSlot>()
         if (useTwoColumns) {
             val rows = streams.chunked(2)
             rows.forEachIndexed { rowIdx, pair ->
                 val rowContainer = LinearLayout(ui.context).apply {
                     orientation = LinearLayout.HORIZONTAL
+                    clipChildren = false
+                    clipToPadding = false
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -1284,7 +1499,10 @@ object MultiviewStreamDeckDialog {
                     index = rowIdx * 2,
                     stream = pair[0],
                     isGridCell = true,
+                    useTwoColumns = true,
                     totalCount = streams.size,
+                    rowParent = rowContainer,
+                    cardSlots = cardSlots,
                     cardPillUpdaters = cardPillUpdaters,
                     cardVolumeUpdaters = cardVolumeUpdaters,
                     healthUpdaters = healthUpdaters,
@@ -1303,7 +1521,10 @@ object MultiviewStreamDeckDialog {
                         index = rowIdx * 2 + 1,
                         stream = pair[1],
                         isGridCell = true,
+                        useTwoColumns = true,
                         totalCount = streams.size,
+                        rowParent = rowContainer,
+                        cardSlots = cardSlots,
                         cardPillUpdaters = cardPillUpdaters,
                         cardVolumeUpdaters = cardVolumeUpdaters,
                         healthUpdaters = healthUpdaters,
@@ -1332,7 +1553,10 @@ object MultiviewStreamDeckDialog {
                         index = index,
                         stream = stream,
                         isGridCell = false,
+                        useTwoColumns = false,
                         totalCount = streams.size,
+                        rowParent = null,
+                        cardSlots = cardSlots,
                         cardPillUpdaters = cardPillUpdaters,
                         cardVolumeUpdaters = cardVolumeUpdaters,
                         healthUpdaters = healthUpdaters,
@@ -1353,12 +1577,16 @@ object MultiviewStreamDeckDialog {
         healthUpdaters.forEach { (id, updater) -> updater(initialHealth[id]) }
     }
 
+    @SuppressLint("ClickableViewAccessibility")
     private fun buildStreamCard(
         ui: DeckUiContext,
         index: Int,
         stream: Stream,
         isGridCell: Boolean,
+        useTwoColumns: Boolean,
         totalCount: Int,
+        rowParent: View?,
+        cardSlots: MutableList<StreamCardSlot>,
         cardPillUpdaters: MutableList<() -> Unit>,
         cardVolumeUpdaters: MutableMap<String, (Float) -> Unit>,
         healthUpdaters: MutableMap<String, (MultiviewLiveHealth?) -> Unit>,
@@ -1368,23 +1596,21 @@ object MultiviewStreamDeckDialog {
         onCardsChanged: () -> Unit,
     ): LinearLayout {
         val identity = MultiviewSessionReducer.stableIdentity(stream) ?: ""
+        val seedKey = stream.channelLogin?.takeIf { it.isNotBlank() }
+            ?: stream.channelName?.takeIf { it.isNotBlank() }
+            ?: identity
+        var palette = StreamerPaletteCache.getCached(stream.channelImage)
+            ?: StreamerPaletteCache.fallback(seedKey)
         var vol = ui.viewModel.audioVolume(identity)
+        var dropHighlighted = false
+        fun blendRgb(@ColorInt color: Int, @ColorInt into: Int, ratio: Float): Int =
+            ColorUtils.blendARGB(color, into, ratio)
 
         val card = LinearLayout(ui.context).apply {
             orientation = LinearLayout.VERTICAL
-            val pSide = ui.dp(7.5f)
+            val pSide = ui.dp(8f)
             val pVert = ui.dp(5f)
             setPadding(pSide, pVert, pSide, pVert)
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                intArrayOf(Color.parseColor("#380D0F1C"), Color.parseColor("#47070811")),
-            ).apply {
-                cornerRadius = ui.dp(9).toFloat()
-                setStroke(
-                    ui.dp(1.1f).coerceAtLeast(1),
-                    Color.parseColor(if (vol > 0f) "#AA9D4EDD" else "#4D453969"),
-                )
-            }
             layoutParams = if (isGridCell) {
                 LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             } else {
@@ -1397,7 +1623,67 @@ object MultiviewStreamDeckDialog {
             }
         }
 
-        // Row 1: #N + Avatar + Streamer Name + Health Pill + Open Player + Remove
+        fun applyCardBackground() {
+            val radius = ui.dp(9).toFloat()
+            val topTint = ColorUtils.setAlphaComponent(
+                blendRgb(palette.primary, 0xFF0B0C16.toInt(), 0.56f),
+                0x92,
+            )
+            val midCore = ColorUtils.setAlphaComponent(
+                blendRgb(palette.primary, 0xFF070810.toInt(), 0.76f),
+                0x84,
+            )
+            val bottomTint = ColorUtils.setAlphaComponent(
+                blendRgb(palette.secondary, 0xFF090A14.toInt(), 0.60f),
+                0x8E,
+            )
+            val base = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(topTint, midCore, bottomTint),
+            ).apply {
+                cornerRadius = radius
+                val strokeColor = when {
+                    dropHighlighted -> Color.WHITE
+                    vol > 0f -> ColorUtils.setAlphaComponent(palette.highlight, 0xE6)
+                    else -> ColorUtils.setAlphaComponent(palette.primary, 0x99)
+                }
+                val strokeWidth = ui.dp(if (dropHighlighted) 2f else if (vol > 0f) 1.35f else 1.1f).coerceAtLeast(1)
+                setStroke(strokeWidth, strokeColor)
+            }
+            val topSheen = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(
+                    ColorUtils.setAlphaComponent(palette.highlight, if (dropHighlighted) 0x4A else 0x36),
+                    ColorUtils.setAlphaComponent(palette.secondary, 0x10),
+                    Color.TRANSPARENT,
+                ),
+            ).apply {
+                cornerRadius = (radius - ui.dp(1)).coerceAtLeast(0f)
+            }
+            val barAlpha = if (vol > 0f || dropHighlighted) 0xF2 else 0xA6
+            val accentBar = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(
+                    ColorUtils.setAlphaComponent(palette.highlight, barAlpha),
+                    ColorUtils.setAlphaComponent(palette.primary, barAlpha),
+                    ColorUtils.setAlphaComponent(palette.secondary, barAlpha),
+                ),
+            ).apply {
+                val r = ui.dp(3).toFloat()
+                cornerRadii = floatArrayOf(r, 0f, 0f, r, r, 0f, 0f, r)
+            }
+            val barInsetV = ui.dp(5)
+            val layer = LayerDrawable(arrayOf(base, topSheen, accentBar)).apply {
+                setLayerInset(1, ui.dp(1), ui.dp(1), ui.dp(1), ui.dp(1))
+                setLayerGravity(2, Gravity.START or Gravity.FILL_VERTICAL)
+                setLayerWidth(2, ui.dp(3).coerceAtLeast(2))
+                setLayerInset(2, ui.dp(1.5f), barInsetV, 0, barInsetV)
+            }
+            card.background = layer
+        }
+        applyCardBackground()
+
+        // Row 1: #N (direct drag handle) + Avatar + Streamer Name + Health Pill + Open Player + Remove
         val row1 = LinearLayout(ui.context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1406,24 +1692,170 @@ object MultiviewStreamDeckDialog {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             )
         }
-        row1.addView(TextView(ui.context).apply {
-            text = "#${index + 1}"
-            setTextColor(Color.parseColor("#E9D5FF"))
-            textSize = 9f
+        val dragBadge = TextView(ui.context).apply {
+            text = if (totalCount > 1) "⋮#${index + 1}" else "#${index + 1}"
+            textSize = 9.5f
             typeface = Typeface.DEFAULT_BOLD
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#66160D2E"))
-                cornerRadius = ui.dp(4).toFloat()
-                setStroke(ui.dp(1), Color.parseColor("#88A855F7"))
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            minWidth = ui.dp(if (isGridCell) 33 else 36)
+            minHeight = ui.dp(25)
+            setPadding(ui.dp(5), ui.dp(2), ui.dp(6), ui.dp(2))
+            contentDescription = "Drag #${index + 1} to reorder stream"
+        }
+        fun applyDragBadgeStyle() {
+            dragBadge.setTextColor(palette.highlight)
+            dragBadge.background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(
+                    ColorUtils.setAlphaComponent(blendRgb(palette.primary, Color.BLACK, 0.72f), 0xCC),
+                    ColorUtils.setAlphaComponent(blendRgb(palette.secondary, Color.BLACK, 0.80f), 0xD8),
+                ),
+            ).apply {
+                cornerRadius = ui.dp(5).toFloat()
+                setStroke(ui.dp(1), ColorUtils.setAlphaComponent(palette.highlight, 0xB8))
             }
-            setPadding(ui.dp(4.5f), ui.dp(1.5f), ui.dp(4.5f), ui.dp(1.5f))
-        })
+        }
+        applyDragBadgeStyle()
+        run {
+            val touchSlop = ViewConfiguration.get(ui.context).scaledTouchSlop.toFloat()
+            var downRawX = 0f
+            var downRawY = 0f
+            var dragging = false
+            var holdingDrag = false
+            var hoveredIndex: Int? = null
+            var slotRects: List<Pair<StreamCardSlot, Rect>> = emptyList()
+            fun findHoveredSlot(rawX: Int, rawY: Int): StreamCardSlot? {
+                slotRects.firstOrNull { (_, rect) -> rect.contains(rawX, rawY) }?.let { return it.first }
+                return slotRects.minByOrNull { (_, rect) ->
+                    val cx = rect.exactCenterX()
+                    val cy = rect.exactCenterY()
+                    hypot(rawX - cx, rawY - cy)
+                }?.takeIf { (_, rect) ->
+                    val maxDist = maxOf(rect.width(), rect.height()).toFloat()
+                    hypot(rawX - rect.exactCenterX(), rawY - rect.exactCenterY()) <= maxDist
+                }?.first
+            }
+            fun finishDrag(commit: Boolean) {
+                dragBadge.isPressed = false
+                dragBadge.parent?.requestDisallowInterceptTouchEvent(false)
+                if (holdingDrag) {
+                    holdingDrag = false
+                    ui.onHoldStateChanged(false)
+                }
+                if (dragging) {
+                    card.translationX = 0f
+                    card.translationY = 0f
+                    card.scaleX = 1f
+                    card.scaleY = 1f
+                    card.alpha = 1f
+                    card.elevation = 0f
+                    card.translationZ = 0f
+                    rowParent?.translationZ = 0f
+                    cardSlots.forEach { it.setDropHighlight(false) }
+                    val target = hoveredIndex
+                    dragging = false
+                    hoveredIndex = null
+                    slotRects = emptyList()
+                    if (commit && target != null && target != index) {
+                        ui.viewModel.reorder(identity, target)
+                        onCardsChanged()
+                    }
+                }
+            }
+            dragBadge.setOnTouchListener { view, event ->
+                if (totalCount <= 1) return@setOnTouchListener false
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        view.parent?.requestDisallowInterceptTouchEvent(true)
+                        if (!holdingDrag) {
+                            holdingDrag = true
+                            ui.onHoldStateChanged(true)
+                        }
+                        downRawX = event.rawX
+                        downRawY = event.rawY
+                        dragging = false
+                        hoveredIndex = null
+                        view.isPressed = true
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = event.rawX - downRawX
+                        val dy = event.rawY - downRawY
+                        if (!dragging && hypot(dx, dy) >= touchSlop) {
+                            dragging = true
+                            card.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                            slotRects = cardSlots.map { slot ->
+                                val loc = IntArray(2)
+                                slot.card.getLocationOnScreen(loc)
+                                slot to Rect(loc[0], loc[1], loc[0] + slot.card.width, loc[1] + slot.card.height)
+                            }
+                            rowParent?.translationZ = ui.dp(14).toFloat()
+                            card.translationZ = ui.dp(14).toFloat()
+                            card.animate().cancel()
+                            card.scaleX = 1.03f
+                            card.scaleY = 1.03f
+                            card.alpha = 0.94f
+                            card.elevation = ui.dp(12).toFloat()
+                        }
+                        if (dragging) {
+                            card.translationX = if (useTwoColumns) dx else dx * 0.25f
+                            card.translationY = dy
+                            val nextHovered = findHoveredSlot(event.rawX.roundToInt(), event.rawY.roundToInt())?.index
+                            if (nextHovered != hoveredIndex) {
+                                hoveredIndex?.let { prev ->
+                                    cardSlots.firstOrNull { it.index == prev }?.setDropHighlight(false)
+                                }
+                                hoveredIndex = nextHovered
+                                if (nextHovered != null && nextHovered != index) {
+                                    cardSlots.firstOrNull { it.index == nextHovered }?.setDropHighlight(true)
+                                    card.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                                }
+                            }
+                        }
+                        true
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        finishDrag(commit = true)
+                        true
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        finishDrag(commit = false)
+                        true
+                    }
+                    else -> false
+                }
+            }
+            dragBadge.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(v: View) = Unit
+                override fun onViewDetachedFromWindow(v: View) {
+                    finishDrag(commit = false)
+                }
+            })
+        }
+        row1.addView(dragBadge)
 
-        val avatar = ImageView(ui.context).apply {
-            val avSize = ui.dp(if (isGridCell) 18 else 19)
-            layoutParams = LinearLayout.LayoutParams(avSize, avSize).apply {
+        val avSize = ui.dp(if (isGridCell) 19 else 20)
+        val avatarFrame = FrameLayout(ui.context).apply {
+            val pad = ui.dp(1.2f).coerceAtLeast(1)
+            layoutParams = LinearLayout.LayoutParams(avSize + pad * 2, avSize + pad * 2).apply {
                 marginStart = ui.dp(5)
             }
+            setPadding(pad, pad, pad, pad)
+        }
+        fun applyAvatarRingStyle() {
+            avatarFrame.background = GradientDrawable().apply {
+                setColor(Color.parseColor("#66070810"))
+                cornerRadius = ui.dp(5).toFloat()
+                setStroke(ui.dp(1.2f).coerceAtLeast(1), ColorUtils.setAlphaComponent(palette.highlight, 0xCC))
+            }
+        }
+        applyAvatarRingStyle()
+        val avatar = ImageView(ui.context).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
             scaleType = ImageView.ScaleType.CENTER_CROP
             clipToOutline = true
             outlineProvider = object : ViewOutlineProvider() {
@@ -1437,7 +1869,8 @@ object MultiviewStreamDeckDialog {
             loadStreamProfileImage(ui.context, avatar, stream)
         } catch (_: Throwable) {
         }
-        row1.addView(avatar)
+        avatarFrame.addView(avatar)
+        row1.addView(avatarFrame)
 
         row1.addView(TextView(ui.context).apply {
             text = ui.displayName(stream)
@@ -1466,6 +1899,17 @@ object MultiviewStreamDeckDialog {
             ).apply {
                 marginEnd = ui.dp(4)
             }
+            setOnClickListener {
+                ui.viewModel.playbackCoordinator.seekToLive(identity)
+                performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                text = "LIVE"
+                setTextColor(Color.parseColor("#5EEAD4"))
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#7A04181E"))
+                    cornerRadius = ui.dp(4.5f).toFloat()
+                    setStroke(ui.dp(1), Color.parseColor("#9900E5FF"))
+                }
+            }
         }
         healthUpdaters[identity] = { health ->
             val label: String
@@ -1475,32 +1919,32 @@ object MultiviewStreamDeckDialog {
             when {
                 health == null -> {
                     label = "--/--"
-                    textHex = "#94A3B8"
-                    strokeHex = "#55475569"
-                    fillHex = "#66090B12"
+                    textHex = "#CBD5E1"
+                    strokeHex = "#7764748B"
+                    fillHex = "#800E1322"
                 }
-                health.isBuffering -> {
-                    label = if (health.liveOffsetSeconds > 0) {
-                        "${health.bufferSeconds}/${health.liveOffsetSeconds}s"
-                    } else {
+                health.isBuffering || health.liveOffsetSeconds >= 20 || (health.bufferSeconds == 0 && !health.isLiveReady) -> {
+                    label = if (health.isBuffering && health.liveOffsetSeconds <= 0) {
                         "BUF"
+                    } else {
+                        "${health.bufferSeconds}/${health.liveOffsetSeconds}s"
                     }
                     textHex = "#FF7096"
-                    strokeHex = "#AAFF2E63"
-                    fillHex = "#7A1F0610"
+                    strokeHex = "#CCFF2E63"
+                    fillHex = "#8C260612"
                 }
-                health.bufferSeconds <= 1 || health.isDecreasing || health.liveOffsetSeconds >= 9 -> {
-                    val arrow = if (health.isDecreasing) "↓" else ""
+                health.liveOffsetSeconds >= 10 || health.bufferSeconds <= 1 -> {
+                    val arrow = if (health.isDecreasing && health.bufferSeconds <= 1) "↓" else ""
                     label = "${health.bufferSeconds}$arrow/${health.liveOffsetSeconds}s"
                     textHex = "#FCD34D"
-                    strokeHex = "#AAF59E0B"
-                    fillHex = "#7A1E1304"
+                    strokeHex = "#CCF59E0B"
+                    fillHex = "#8C241604"
                 }
                 else -> {
                     label = "${health.bufferSeconds}/${health.liveOffsetSeconds}s"
                     textHex = "#5EEAD4"
-                    strokeHex = "#9900E5FF"
-                    fillHex = "#7A04181E"
+                    strokeHex = "#B300E5FF"
+                    fillHex = "#8C041A22"
                 }
             }
             healthPill.text = label
@@ -1521,10 +1965,10 @@ object MultiviewStreamDeckDialog {
                 marginEnd = ui.dp(5)
             }
             background = ui.deckRipple(
-                ui.make3DKeycap(COLOR_UNSEL_GLASS_TOP, COLOR_UNSEL_GLASS_BOTTOM, COLOR_UNSEL_SHADOW, "#8864748B", 5f, 2f),
+                ui.make3DKeycap(COLOR_UNSEL_GLASS_TOP, COLOR_UNSEL_GLASS_BOTTOM, COLOR_UNSEL_SHADOW, COLOR_UNSEL_STROKE, 5f, 2f),
             )
             setImageResource(R.drawable.ic_pref_fullscreen)
-            setColorFilter(Color.parseColor("#E2E8F0"))
+            setColorFilter(Color.parseColor("#F8FAFC"))
             setPadding(ui.dp(5.5f), ui.dp(4.5f), ui.dp(5.5f), ui.dp(6.5f))
             scaleType = ImageView.ScaleType.FIT_CENTER
             contentDescription = ui.context.getString(R.string.multiview_open_player)
@@ -1552,7 +1996,7 @@ object MultiviewStreamDeckDialog {
         })
         card.addView(row1)
 
-        // Row 2: Mute + Cyber DJ Fader + % + Reorder ▲ ▼
+        // Row 2: Mute + Wide [−] + Cyber DJ Fader + Wide [+] + %
         val row2 = LinearLayout(ui.context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1560,55 +2004,101 @@ object MultiviewStreamDeckDialog {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply {
-                topMargin = ui.dp(3)
-                bottomMargin = ui.dp(3)
+                topMargin = ui.dp(3.5f)
+                bottomMargin = ui.dp(3.5f)
             }
         }
 
+        val muteBtnSize = ui.dp(if (isGridCell) 26 else 28)
         val muteBtn = ImageButton(ui.context).apply {
-            layoutParams = LinearLayout.LayoutParams(ui.dp(26), ui.dp(24)).apply {
-                marginEnd = ui.dp(4)
+            layoutParams = LinearLayout.LayoutParams(muteBtnSize, muteBtnSize).apply {
+                marginEnd = ui.dp(if (isGridCell) 3 else 4)
             }
-            background = ui.deckRipple(
-                ui.make3DKeycap(COLOR_UNSEL_GLASS_TOP, COLOR_UNSEL_GLASS_BOTTOM, COLOR_UNSEL_SHADOW, "#776D28D9", 4.5f, 2f),
-            )
-            setPadding(ui.dp(3.5f), ui.dp(3f), ui.dp(3.5f), ui.dp(5f))
+            setPadding(ui.dp(4f), ui.dp(3.5f), ui.dp(4f), ui.dp(5.5f))
             scaleType = ImageView.ScaleType.FIT_CENTER
         }
         row2.addView(muteBtn)
 
-        val percentView = TextView(ui.context).apply {
-            textSize = 9f
+        val stepBtnW = ui.dp(if (isGridCell) 38 else 42)
+        val stepBtnH = ui.dp(if (isGridCell) 30 else 32)
+        fun makeStepButton(symbol: String): TextView = TextView(ui.context).apply {
+            text = symbol
+            textSize = if (isGridCell) 15f else 16f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(ui.dp(30), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                marginStart = ui.dp(3)
-                marginEnd = ui.dp(3)
+            setTextColor(Color.parseColor("#F8FAFC"))
+            ui.centerKeycapText(this, depthDp = 2f, sidePadDp = 0f)
+        }
+        val minusBtn = makeStepButton("−").apply {
+            layoutParams = LinearLayout.LayoutParams(stepBtnW, stepBtnH).apply {
+                marginEnd = ui.dp(4)
             }
+            contentDescription = "Decrease ${ui.displayName(stream)} volume by 1%"
+        }
+        val plusBtn = makeStepButton("+").apply {
+            layoutParams = LinearLayout.LayoutParams(stepBtnW, stepBtnH).apply {
+                marginStart = ui.dp(4)
+                marginEnd = ui.dp(if (isGridCell) 3 else 4)
+            }
+            contentDescription = "Increase ${ui.displayName(stream)} volume by 1%"
+        }
+
+        val percentView = TextView(ui.context).apply {
+            textSize = if (isGridCell) 8.8f else 9.5f
+            typeface = Typeface.DEFAULT_BOLD
+            maxLines = 1
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(ui.dp(if (isGridCell) 29 else 34), ViewGroup.LayoutParams.WRAP_CONTENT)
         }
 
         lateinit var fader: DjFaderView
+        fun renderMuteButtonStyle() {
+            if (vol > 0f) {
+                muteBtn.background = ui.deckRipple(
+                    ui.make3DKeycapInt(
+                        topColor = ColorUtils.setAlphaComponent(blendRgb(palette.primary, Color.BLACK, 0.56f), 0xE6),
+                        bottomColor = ColorUtils.setAlphaComponent(blendRgb(palette.secondary, Color.BLACK, 0.72f), 0xF0),
+                        shadowColor = Color.parseColor("#080212"),
+                        strokeColor = palette.highlight,
+                        cornerRadiusDp = 5f,
+                        shadowDepthDp = 2f,
+                    ),
+                )
+            } else {
+                muteBtn.background = ui.deckRipple(
+                    ui.make3DKeycap(COLOR_UNSEL_GLASS_TOP, COLOR_UNSEL_GLASS_BOTTOM, COLOR_UNSEL_SHADOW, COLOR_UNSEL_STROKE, 5f, 2f),
+                )
+            }
+        }
         fun renderCardAudio(newVol: Float, updateFader: Boolean) {
             vol = newVol.coerceIn(0f, 1f)
             if (updateFader) fader.setVolume(vol)
             percentView.text = "${(vol * 100).roundToInt()}%"
-            percentView.setTextColor(Color.parseColor(if (vol > 0f) COLOR_PURPLE_BRIGHT else "#94A3B8"))
+            percentView.setTextColor(if (vol > 0f) palette.highlight else Color.parseColor("#CBD5E1"))
             muteBtn.setImageResource(
                 if (vol > 0f) R.drawable.baseline_volume_up_black_24
                 else R.drawable.baseline_volume_off_black_24,
             )
-            muteBtn.setColorFilter(Color.parseColor(if (vol > 0f) COLOR_PURPLE_BRIGHT else COLOR_CRIMSON))
-            (card.background as? GradientDrawable)?.setStroke(
-                ui.dp(1.1f).coerceAtLeast(1),
-                Color.parseColor(if (vol > 0f) "#AA9D4EDD" else "#4D453969"),
-            )
+            muteBtn.setColorFilter(if (vol > 0f) palette.highlight else Color.parseColor(COLOR_CRIMSON))
+            renderMuteButtonStyle()
+            val stepStroke = if (vol > 0f) ColorUtils.setAlphaComponent(palette.highlight, 0xB8) else Color.parseColor(COLOR_UNSEL_STROKE)
+            val stepTop = if (vol > 0f) ColorUtils.setAlphaComponent(blendRgb(palette.primary, Color.BLACK, 0.62f), 0xE0) else Color.parseColor(COLOR_UNSEL_GLASS_TOP)
+            val stepBottom = if (vol > 0f) ColorUtils.setAlphaComponent(blendRgb(palette.secondary, Color.BLACK, 0.76f), 0xEB) else Color.parseColor(COLOR_UNSEL_GLASS_BOTTOM)
+            val stepShadow = Color.parseColor(COLOR_UNSEL_SHADOW)
+            minusBtn.background = ui.deckRipple(ui.make3DKeycapInt(stepTop, stepBottom, stepShadow, stepStroke, 5.5f, 2f))
+            plusBtn.background = ui.deckRipple(ui.make3DKeycapInt(stepTop, stepBottom, stepShadow, stepStroke, 5.5f, 2f))
+            applyCardBackground()
         }
 
-        fader = DjFaderView(ui.context, vol, isCompact = false) { newVol ->
+        fader = DjFaderView(
+            ui.context,
+            vol,
+            isCompact = isGridCell,
+            onDragStateChanged = ui.onHoldStateChanged,
+        ) { newVol ->
             ui.viewModel.setAudioVolume(identity, newVol)
             renderCardAudio(newVol, updateFader = false)
         }.apply {
+            setAccentPalette(palette.primary, palette.secondary, palette.highlight)
             layoutParams = LinearLayout.LayoutParams(0, ui.dp(23), 1f)
         }
         renderCardAudio(vol, updateFader = false)
@@ -1620,49 +2110,70 @@ object MultiviewStreamDeckDialog {
             renderCardAudio(target, updateFader = true)
         }
 
+        fun stepVolumeBy(deltaPercent: Int) {
+            val currentPct = (vol * 100f).roundToInt().coerceIn(0, 100)
+            val nextPct = (currentPct + deltaPercent).coerceIn(0, 100)
+            if (nextPct == currentPct) return
+            val target = nextPct / 100f
+            ui.viewModel.setAudioVolume(identity, target)
+            renderCardAudio(target, updateFader = true)
+        }
+
+        fun installHoldStepListener(button: TextView, deltaPercent: Int) {
+            var repeatRunnable: Runnable? = null
+            var isHolding = false
+            fun stopHold() {
+                repeatRunnable?.let(ui.uiHandler::removeCallbacks)
+                repeatRunnable = null
+                button.isPressed = false
+                button.parent?.requestDisallowInterceptTouchEvent(false)
+                if (isHolding) {
+                    isHolding = false
+                    ui.onHoldStateChanged(false)
+                }
+            }
+            button.setOnTouchListener { v, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        v.parent?.requestDisallowInterceptTouchEvent(true)
+                        button.isPressed = true
+                        isHolding = true
+                        ui.onHoldStateChanged(true)
+                        button.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                        stepVolumeBy(deltaPercent)
+                        val r = object : Runnable {
+                            override fun run() {
+                                if (!isHolding || !button.isAttachedToWindow) return
+                                stepVolumeBy(deltaPercent)
+                                ui.uiHandler.postDelayed(this, STEP_HOLD_REPEAT_MS)
+                            }
+                        }
+                        repeatRunnable = r
+                        ui.uiHandler.postDelayed(r, STEP_HOLD_INITIAL_DELAY_MS)
+                        true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        stopHold()
+                        true
+                    }
+                    else -> false
+                }
+            }
+            button.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(v: View) = Unit
+                override fun onViewDetachedFromWindow(v: View) {
+                    stopHold()
+                }
+            })
+        }
+
+        installHoldStepListener(minusBtn, -1)
+        installHoldStepListener(plusBtn, +1)
+
+        row2.addView(minusBtn)
         row2.addView(fader)
+        row2.addView(plusBtn)
         row2.addView(percentView)
-
-        val orderBtnSize = ui.dp(24)
-        row2.addView(TextView(ui.context).apply {
-            text = "▲"
-            setTextColor(Color.parseColor(if (index > 0) COLOR_PURPLE_BRIGHT else "#4A4366"))
-            textSize = 9f
-            typeface = Typeface.DEFAULT_BOLD
-            layoutParams = LinearLayout.LayoutParams(orderBtnSize, orderBtnSize).apply { marginEnd = ui.dp(3) }
-            if (index > 0) {
-                background = ui.deckRipple(
-                    ui.make3DKeycap(COLOR_UNSEL_GLASS_TOP, COLOR_UNSEL_GLASS_BOTTOM, COLOR_UNSEL_SHADOW, "#776D28D9", 4f, 2f),
-                )
-                ui.centerKeycapText(this, depthDp = 2f, sidePadDp = 0f)
-                setOnClickListener {
-                    ui.viewModel.reorder(identity, index - 1)
-                    onCardsChanged()
-                }
-            } else {
-                ui.centerKeycapText(this, depthDp = 0f, sidePadDp = 0f)
-            }
-        })
-
-        row2.addView(TextView(ui.context).apply {
-            text = "▼"
-            setTextColor(Color.parseColor(if (index < totalCount - 1) COLOR_PURPLE_BRIGHT else "#4A4366"))
-            textSize = 9f
-            typeface = Typeface.DEFAULT_BOLD
-            layoutParams = LinearLayout.LayoutParams(orderBtnSize, orderBtnSize)
-            if (index < totalCount - 1) {
-                background = ui.deckRipple(
-                    ui.make3DKeycap(COLOR_UNSEL_GLASS_TOP, COLOR_UNSEL_GLASS_BOTTOM, COLOR_UNSEL_SHADOW, "#776D28D9", 4f, 2f),
-                )
-                ui.centerKeycapText(this, depthDp = 2f, sidePadDp = 0f)
-                setOnClickListener {
-                    ui.viewModel.reorder(identity, index + 1)
-                    onCardsChanged()
-                }
-            } else {
-                ui.centerKeycapText(this, depthDp = 0f, sidePadDp = 0f)
-            }
-        })
         card.addView(row2)
 
         // Row 3: Transparent 3D glass quality pills
@@ -1694,11 +2205,11 @@ object MultiviewStreamDeckDialog {
                     else -> false
                 }
                 val bg = if (isSelected) {
-                    ui.make3DKeycap(
-                        topColorHex = COLOR_PURPLE_GLASS_TOP,
-                        bottomColorHex = COLOR_PURPLE_GLASS_BOTTOM,
-                        shadowColorHex = COLOR_PURPLE_SHADOW,
-                        strokeColorHex = COLOR_PURPLE_STROKE,
+                    ui.make3DKeycapInt(
+                        topColor = ColorUtils.setAlphaComponent(blendRgb(palette.primary, Color.BLACK, 0.50f), 0xEB),
+                        bottomColor = ColorUtils.setAlphaComponent(blendRgb(palette.secondary, Color.BLACK, 0.68f), 0xF2),
+                        shadowColor = Color.parseColor(COLOR_PURPLE_SHADOW),
+                        strokeColor = palette.highlight,
                         cornerRadiusDp = 4.5f,
                         shadowDepthDp = 2.2f,
                     )
@@ -1713,7 +2224,7 @@ object MultiviewStreamDeckDialog {
                     )
                 }
                 pill.background = ui.deckRipple(bg)
-                pill.setTextColor(Color.parseColor(if (isSelected) "#EFE1FF" else "#CBD5E1"))
+                pill.setTextColor(if (isSelected) Color.WHITE else Color.parseColor(COLOR_UNSEL_TEXT))
                 ui.centerKeycapText(pill, depthDp = 2.2f, sidePadDp = 1f)
             }
         }
@@ -1757,6 +2268,35 @@ object MultiviewStreamDeckDialog {
         }
         refreshThisPills()
         card.addView(row3)
+
+        cardSlots += StreamCardSlot(
+            index = index,
+            identity = identity,
+            card = card,
+            rowParent = rowParent,
+            setDropHighlight = { highlighted ->
+                if (dropHighlighted != highlighted) {
+                    dropHighlighted = highlighted
+                    card.alpha = if (highlighted) 0.80f else 1f
+                    applyCardBackground()
+                }
+            },
+        )
+
+        val imageUrl = stream.channelImage
+        if (StreamerPaletteCache.getCached(imageUrl) == null && !imageUrl.isNullOrBlank()) {
+            ui.overlayScope.launch {
+                val extracted = StreamerPaletteCache.loadOrExtract(ui.context, imageUrl, seedKey)
+                if (!card.isAttachedToWindow) return@launch
+                palette = extracted
+                fader.setAccentPalette(palette.primary, palette.secondary, palette.highlight)
+                applyDragBadgeStyle()
+                applyAvatarRingStyle()
+                renderCardAudio(vol, updateFader = false)
+                refreshThisPills()
+            }
+        }
+
         return card
     }
 
@@ -1957,9 +2497,50 @@ class DjFaderView(
         color = Color.parseColor("#5905050B")
         style = Paint.Style.FILL
     }
+    private var fillStartColor: Int = Color.parseColor(fillHex)
+    private var fillEndColor: Int = Color.parseColor(fillHex)
+    private var useGradientFill: Boolean = false
     private val trackFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor(fillHex)
+        color = fillStartColor
         style = Paint.Style.FILL
+    }
+
+    fun setAccentPalette(@ColorInt primary: Int, @ColorInt secondary: Int, @ColorInt highlight: Int) {
+        fillStartColor = primary
+        fillEndColor = secondary
+        useGradientFill = true
+        trackFillPaint.color = primary
+        capBorderPaint.color = highlight
+        capBodyPaint.color = ColorUtils.blendARGB(primary, Color.BLACK, 0.72f)
+        knobGripPaint.color = primary
+        trackBorderPaint.color = ColorUtils.setAlphaComponent(primary, 0xB3)
+        majorTickPaint.color = highlight
+        minorTickPaint.color = ColorUtils.setAlphaComponent(secondary, 0x99)
+        updateFillShader()
+        invalidate()
+    }
+
+    private fun updateFillShader() {
+        if (!useGradientFill || width <= 0) {
+            trackFillPaint.shader = null
+            return
+        }
+        val pad = capWidth / 2f + dpToPx(if (isCompact) 3f else 4f)
+        val trackW = (width.toFloat() - pad * 2f).coerceAtLeast(1f)
+        trackFillPaint.shader = LinearGradient(
+            pad,
+            0f,
+            pad + trackW,
+            0f,
+            fillStartColor,
+            fillEndColor,
+            Shader.TileMode.CLAMP,
+        )
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h)
+        updateFillShader()
     }
     private val trackBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor(trackBorderHex)

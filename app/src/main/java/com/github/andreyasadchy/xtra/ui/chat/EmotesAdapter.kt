@@ -165,6 +165,7 @@ class EmotesAdapter(
     }
 
     override fun onViewRecycled(holder: ViewHolder) {
+        holder.clearImageTarget()
         holder.resetReorderVisuals()
         super.onViewRecycled(holder)
     }
@@ -172,6 +173,7 @@ class EmotesAdapter(
     override fun onViewAttachedToWindow(holder: ViewHolder) {
         super.onViewAttachedToWindow(holder)
         holder.restoreReorderVisuals()
+        holder.retryImageIfMissing()
     }
 
     override fun onViewDetachedFromWindow(holder: ViewHolder) {
@@ -232,23 +234,32 @@ class EmotesAdapter(
                         true
                     }
                 } else null)
-                if (item != null) {
+                if (item == null) {
+                    EmotePickerImageLoader.clearTarget(emote)
+                    emote.setTag(R.id.emote_image_url_key, null)
+                    emote.setImageDrawable(null)
+                    emote.contentDescription = null
+                    emote.isFocusable = false
+                } else {
                     emote.contentDescription = fragment.getString(
                         if (canReorder) reorderContentDescriptionRes else R.string.use_emote,
                         item.name,
                     )
                     emote.isFocusable = true
                     val imageUrl = EmotePickerImageLoader.urlFor(fragment.requireContext(), item, emoteQuality)
-                    // Rebinds (scroll, list resubmission) must not reload an
-                    // image that is already displayed.
-                    val alreadyLoaded = emote.getTag(R.id.emote_image_url_key) == imageUrl && emote.drawable != null
-                    if (alreadyLoaded) {
-                        // Keep the current drawable; fall through to listeners.
+                    // Rebinds (scroll, list resubmission, notifyDataSetChanged) must not
+                    // cancel or restart an image that is already displayed or downloading.
+                    val alreadyBoundOrLoading = emote.getTag(R.id.emote_image_url_key) == imageUrl &&
+                        (emote.drawable != null || (imageUrl != null && EmotePickerImageLoader.isInFlight(emote, imageUrl)))
+                    if (alreadyBoundOrLoading) {
+                        // Keep the current drawable or active request; fall through to listeners.
                     } else if (imageUrl != null && (imageLibrary == "0" || (imageLibrary == "1" && !item.format.equals("webp", true)))) {
+                        EmotePickerImageLoader.clearTarget(emote)
                         emote.setTag(R.id.emote_image_url_key, imageUrl)
                         emote.setImageDrawable(null)
                         EmotePickerImageLoader.loadInto(fragment.requireContext(), item, emoteQuality, emote)
                     } else {
+                        EmotePickerImageLoader.clearTarget(emote)
                         emote.setTag(R.id.emote_image_url_key, imageUrl)
                         emote.setImageDrawable(null)
                         Glide.with(fragment)
@@ -306,6 +317,20 @@ class EmotesAdapter(
                         )
                     }
                 }
+            }
+        }
+
+        fun clearImageTarget() {
+            EmotePickerImageLoader.clearTarget(binding.emote)
+        }
+
+        fun retryImageIfMissing() {
+            val item = boundItem ?: return
+            val context = fragment.context ?: return
+            if (binding.emote.drawable != null) return
+            val usesCoil = imageLibrary == "0" || (imageLibrary == "1" && !item.format.equals("webp", true))
+            if (usesCoil) {
+                EmotePickerImageLoader.retryIfNeeded(context, item, emoteQuality, binding.emote)
             }
         }
 

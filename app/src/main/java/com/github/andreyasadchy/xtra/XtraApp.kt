@@ -4,6 +4,10 @@ import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.app.ApplicationExitInfo
 import android.app.Application
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Process
 import android.os.SystemClock
@@ -135,11 +139,56 @@ class XtraApp : Application(), SingletonImageLoader.Factory {
         restoreMigrationPending = SettingsRestoreCoordinator.hasPendingSettingsMigration(this)
         registerActivityLifecycleCallbacks(createActivityLifecycleCallbacks())
         PocketTouchGuard.install(this)
+        if (processName == packageName) registerChatAssetNetworkRecovery()
         if (!restoreMigrationPending) startDeferredStartupTasks()
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             val conscrypt = Conscrypt.newProvider()
             Security.insertProviderAt(conscrypt, 1)
         }
+    }
+
+    private fun registerChatAssetNetworkRecovery() {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        val recoveryLock = Any()
+        var hadNetworkLoss = false
+        var lastNetwork = cm.activeNetwork
+        fun triggerRecovery(network: Network) {
+            val shouldRecover = synchronized(recoveryLock) {
+                val networkChanged = lastNetwork != null && lastNetwork != network
+                val recover = hadNetworkLoss || networkChanged
+                hadNetworkLoss = false
+                lastNetwork = network
+                recover
+            }
+            if (shouldRecover) {
+                xtraModule.chatAssetRepository.onNetworkAvailable()
+                com.github.andreyasadchy.xtra.ui.chat.EmotePickerImageLoader.onNetworkAvailable(applicationContext)
+            }
+        }
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                triggerRecovery(network)
+            }
+
+            override fun onLost(network: Network) {
+                val active = cm.activeNetwork
+                val caps = active?.let(cm::getNetworkCapabilities)
+                synchronized(recoveryLock) {
+                    if (caps == null || !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) || network == lastNetwork) {
+                        hadNetworkLoss = true
+                    }
+                }
+            }
+
+            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                if (networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                    networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                ) {
+                    triggerRecovery(network)
+                }
+            }
+        }
+        runCatching { cm.registerDefaultNetworkCallback(callback) }
     }
 
     private fun recordPreviousProcessExit() {

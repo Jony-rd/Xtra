@@ -372,7 +372,12 @@ class XtraModule(private val application: Application) {
         }
     }
     val okHttpClient = lazy {
+        val dispatcher = okhttp3.Dispatcher().apply {
+            maxRequests = 64
+            maxRequestsPerHost = 16
+        }
         OkHttpClient.Builder().apply {
+            dispatcher(dispatcher)
             if (BuildConfig.DEBUG) {
                 val sensitiveQueryParameter = Regex(
                     "([?&](?:token|access_token|client_secret|password|code)=)[^&\\s]+",
@@ -866,8 +871,20 @@ class XtraModule(private val application: Application) {
         ChatAssetRepository(
             scope = (application as XtraApp).applicationScope,
             loader = chatAssetLoader,
+            maxEntries = 1024,
+            maxConcurrentLoads = 10,
             isBulkAsset = { key -> Twemoji.isAsset(key) },
+            isPriorityAsset = { key -> isPriorityBadgeAsset(key.value) },
+            maxPriorityEntries = 512,
+            maxConcurrentPriorityLoads = 6,
         )
+    }
+
+    private fun isPriorityBadgeAsset(url: String): Boolean {
+        val lower = url.lowercase()
+        return lower.contains("/badges/") ||
+            lower.contains("/badge/") ||
+            lower.contains("badges.twitch.tv")
     }
 
     val chatClipPreviewRepository by lazy {

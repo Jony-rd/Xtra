@@ -8325,7 +8325,9 @@ class ChatViewModel(
         viewModelScope.launch {
             pickerCatalogUpdates.collectLatest {
                 delay(PICKER_WARM_DELAY_MILLIS)
-                val emotes = withContext(Dispatchers.Default) { currentPickerEmotes() }
+                val emotes = withContext(Dispatchers.Default) {
+                    availableFavoriteEmotes.value + currentPickerEmotes()
+                }
                 EmotePickerImageLoader.warm(applicationContext, emotes, "4")
             }
         }

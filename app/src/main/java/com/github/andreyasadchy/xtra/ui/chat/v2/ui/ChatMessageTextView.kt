@@ -622,15 +622,33 @@ open class ChatMessageTextView private constructor(
 
     private fun latchTerminalAssetFailures(): Boolean {
         var geometryChanged = false
-        initialAssetSpecs
-            .filter { assetRenderState(it) == ChatAssetRenderState.FAILED }
-            .forEach { spec ->
-                if (latchedFailedCompositionKeys.add(spec.compositionKey) &&
-                    spec.compositionKey in geometryChangingCompositionKeys
-                ) {
-                    geometryChanged = true
+        initialAssetSpecs.forEach { spec ->
+            val liveState = liveAssetRenderState(spec.flatten())
+            when (liveState) {
+                ChatAssetRenderState.FAILED -> {
+                    if (latchedFailedCompositionKeys.add(spec.compositionKey) &&
+                        spec.compositionKey in geometryChangingCompositionKeys
+                    ) {
+                        geometryChanged = true
+                    }
                 }
+                ChatAssetRenderState.READY -> {
+                    if (latchedFailedCompositionKeys.remove(spec.compositionKey) &&
+                        spec.compositionKey in geometryChangingCompositionKeys
+                    ) {
+                        geometryChanged = true
+                    }
+                }
+                ChatAssetRenderState.PENDING -> Unit
             }
+        }
+        val directIter = latchedFailedDirectKeys.iterator()
+        while (directIter.hasNext()) {
+            val key = directIter.next()
+            if (assets.peek(key) is ChatAssetState.Ready) {
+                directIter.remove()
+            }
+        }
         (initialDirectAssetKeys + clipPreviewAssetKeys).forEach { key ->
             val state = assets.peek(key)
             if (state is ChatAssetState.Failed && state.isPresentationTerminal) {
@@ -1521,11 +1539,7 @@ open class ChatMessageTextView private constructor(
         return assetRenderState(spec.compositionKey, flattened)
     }
 
-    private fun assetRenderState(
-        compositionKey: String,
-        flattened: List<ChatAssetSpec>,
-    ): ChatAssetRenderState {
-        if (compositionKey in latchedFailedCompositionKeys) return ChatAssetRenderState.FAILED
+    private fun liveAssetRenderState(flattened: List<ChatAssetSpec>): ChatAssetRenderState {
         for (layerSpec in flattened) {
             when (val state = assets.peek(layerSpec.key)) {
                 is ChatAssetState.Ready -> Unit
@@ -1539,6 +1553,16 @@ open class ChatMessageTextView private constructor(
             }
         }
         return ChatAssetRenderState.READY
+    }
+
+    private fun assetRenderState(
+        compositionKey: String,
+        flattened: List<ChatAssetSpec>,
+    ): ChatAssetRenderState {
+        val liveState = liveAssetRenderState(flattened)
+        if (liveState == ChatAssetRenderState.READY) return ChatAssetRenderState.READY
+        if (compositionKey in latchedFailedCompositionKeys) return ChatAssetRenderState.FAILED
+        return liveState
     }
 
     private fun updateDrawableAnimations() {
@@ -1574,7 +1598,9 @@ open class ChatMessageTextView private constructor(
             if (isAttachedToWindow) clipPreviewAssetKeys.forEach(::observeClipThumbnail)
             if (isAttachedToWindow) {
                 refreshClipPreviewAssets()
-                maybeApplyStagedRow()
+                var layoutChanged = maybeApplyStagedRow()
+                layoutChanged = latchTerminalAssetFailures() || layoutChanged
+                if (layoutChanged) requestLayout()
             }
             if (isAttachedToWindow) updateDrawableAnimations()
             invalidateClipDrawCache()
@@ -1636,8 +1662,11 @@ open class ChatMessageTextView private constructor(
             clipPreviewSlugs.forEach(::observeClipMetadata)
             clipPreviewAssetKeys.forEach(::observeClipThumbnail)
             refreshClipPreviewAssets()
-            maybeApplyStagedRow()
+            var layoutChanged = maybeApplyStagedRow()
+            layoutChanged = latchTerminalAssetFailures() || layoutChanged
+            if (layoutChanged) requestLayout()
             updateDrawableAnimations()
+            invalidate()
         }
     }
 

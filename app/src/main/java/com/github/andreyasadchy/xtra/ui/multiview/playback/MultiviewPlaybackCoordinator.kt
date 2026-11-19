@@ -213,7 +213,35 @@ class MultiviewPlaybackCoordinator(
             slot.retryJob?.cancel()
             slot.loadJob?.cancel()
             slot.liveCheckJob?.cancel()
-            start(slot, force = true)
+            val login = slot.stream.channelLogin?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
+            if (slot.status == MultiviewSlotStatus.OFFLINE && !slot.customProxy && checkStreamLive != null && login != null) {
+                publish(slot, MultiviewSlotStatus.LOADING, retryAvailable = false)
+                slot.liveCheckJob = ensureScope().launch {
+                    val live = withTimeoutOrNull(LIVE_STATUS_CHECK_TIMEOUT_MS) {
+                        runCatching { checkStreamLive.invoke(login) }.getOrNull()
+                    }
+                    if (!isActive || slots[slot.identity] !== slot) return@launch
+                    if (live == false) {
+                        publish(slot, MultiviewSlotStatus.OFFLINE, retryAvailable = true)
+                    } else {
+                        start(slot, force = true)
+                    }
+                }
+            } else {
+                start(slot, force = true)
+            }
+        }
+    }
+
+    fun seekToLive(identity: String) {
+        val slot = slots[identity] ?: return
+        val player = slot.player
+        if (player.isCurrentMediaItemLive || player.isCurrentMediaItemDynamic) {
+            player.playWhenReady = true
+            player.seekToDefaultPosition()
+            if (player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED) {
+                player.prepare()
+            }
         }
     }
 
@@ -559,7 +587,7 @@ class MultiviewPlaybackCoordinator(
                         Player.STATE_ENDED -> {
                             slot.bufferingWatchdogJob?.cancel()
                             slot.bufferingWatchdogJob = null
-                            publish(slot, MultiviewSlotStatus.OFFLINE)
+                            publish(slot, MultiviewSlotStatus.OFFLINE, retryAvailable = true)
                         }
                         Player.STATE_IDLE -> {
                             if (slot.hasMediaSource &&

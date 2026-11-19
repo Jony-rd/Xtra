@@ -10,6 +10,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.github.andreyasadchy.xtra.BuildConfig
 import com.github.andreyasadchy.xtra.ui.chat.v2.assets.ChatAssetRepository
+import com.github.andreyasadchy.xtra.ui.chat.v2.domain.ChatAssetKey
 import com.github.andreyasadchy.xtra.ui.chat.v2.domain.ChatMessageId
 import com.github.andreyasadchy.xtra.ui.chat.v2.domain.ChatMessage
 import com.github.andreyasadchy.xtra.ui.chat.v2.domain.ChatRewardCatalog
@@ -20,6 +21,7 @@ import com.github.andreyasadchy.xtra.ui.chat.v2.catalog.ChatCatalogState
 import com.github.andreyasadchy.xtra.ui.chat.v2.catalog.ChatCatalogSnapshot
 import com.github.andreyasadchy.xtra.ui.chat.v2.presentation.ChatColorResolver
 import com.github.andreyasadchy.xtra.ui.chat.v2.presentation.ChatMetadataSettlement
+import com.github.andreyasadchy.xtra.ui.chat.v2.presentation.ChatPiece
 import com.github.andreyasadchy.xtra.ui.chat.v2.presentation.ChatPresentationSnapshot
 import com.github.andreyasadchy.xtra.ui.chat.v2.presentation.ChatPresentationResolver
 import com.github.andreyasadchy.xtra.ui.chat.v2.presentation.ChatRowCompiler
@@ -167,6 +169,7 @@ class ChatV2RendererController(
     private var externalCatalog = ChatCatalogSnapshot(revision = 0L)
     private var externalTimelineVersion = 0L
     private var externalTimelineDelta: ChatTimelineDelta = ChatTimelineDelta.Full
+    private var lastWarmedBadgeCatalogRevision: Long? = null
 
     init {
         recyclerView.itemAnimator = null
@@ -326,6 +329,7 @@ class ChatV2RendererController(
         hasPreviousIds = false
         previousTailId = null
         currentKey = null
+        lastWarmedBadgeCatalogRevision = null
         reuseIndex.clear()
         presentationSnapshot.clear()
         requestedTranslationIds.clear()
@@ -484,6 +488,7 @@ class ChatV2RendererController(
                 hasPreviousIds = false
                 previousIds.clear()
                 previousTailId = null
+                lastWarmedBadgeCatalogRevision = null
                 reuseIndex.clear()
             }
             val delta = compiled.appendInfo?.let {
@@ -552,6 +557,7 @@ class ChatV2RendererController(
             }
             previousTailId = latestMessages.lastOrNull()?.id
             committedPublication = preparedPublication
+            warmBadgeAssets(preparedPublication.catalog, rows)
             ChatRenderDiagnostics.recordPublication(
                 messageCount = latestMessages.size,
                 changed = compiled.result.messagesChanged,
@@ -859,8 +865,87 @@ class ChatV2RendererController(
         val catalog: com.github.andreyasadchy.xtra.ui.chat.v2.catalog.ChatCatalogSnapshot,
     )
 
+    private fun warmBadgeAssets(
+        catalog: ChatCatalogSnapshot,
+        rows: List<ChatRowUiModel>,
+    ) {
+        if (!renderStyle.showBadges && !showThirdPartyBadges) return
+        val keys = LinkedHashSet<ChatAssetKey>()
+        rows.forEach { row ->
+            row.pieces.forEach { piece ->
+                if (piece is ChatPiece.Badge) {
+                    if (piece.asset.key.value.startsWith("http", ignoreCase = true)) {
+                        keys += piece.asset.key
+                    }
+                    piece.asset.overlays.forEach { overlay ->
+                        if (overlay.key.value.startsWith("http", ignoreCase = true)) {
+                            keys += overlay.key
+                        }
+                    }
+                }
+            }
+        }
+        if (lastWarmedBadgeCatalogRevision != catalog.revision && (catalog.badges.isNotEmpty() || catalog.sevenTvBadges.isNotEmpty())) {
+            lastWarmedBadgeCatalogRevision = catalog.revision
+            if (renderStyle.showBadges) {
+                var catalogCount = 0
+                catalog.badges.values.forEach { badge ->
+                    if (catalogCount >= MAX_CATALOG_BADGE_WARM) return@forEach
+                    if (badge.setId in PRIORITY_BADGE_SET_IDS) {
+                        val url = badge.asset.key.value
+                        if (url.startsWith("http", ignoreCase = true)) {
+                            keys += badge.asset.key
+                            catalogCount++
+                        }
+                    }
+                }
+            }
+            if (showThirdPartyBadges) {
+                var stvCount = 0
+                catalog.sevenTvBadges.values.forEach { badge ->
+                    if (stvCount >= MAX_STV_BADGE_WARM) return@forEach
+                    val url = badge.asset.key.value
+                    if (url.startsWith("http", ignoreCase = true)) {
+                        keys += badge.asset.key
+                        stvCount++
+                    }
+                }
+            }
+        }
+        if (keys.isNotEmpty()) {
+            assets.prefetchPriority(keys)
+        }
+    }
+
     private companion object {
         private const val EXTERNAL_SESSION_GENERATION = Long.MIN_VALUE
+        private const val MAX_CATALOG_BADGE_WARM = 96
+        private const val MAX_STV_BADGE_WARM = 48
+        private val PRIORITY_BADGE_SET_IDS = setOf(
+            "subscriber",
+            "bits",
+            "bits-leader",
+            "founder",
+            "moderator",
+            "lead_moderator",
+            "vip",
+            "broadcaster",
+            "staff",
+            "admin",
+            "global_mod",
+            "partner",
+            "turbo",
+            "premium",
+            "sub-gifter",
+            "sub-gift-leader",
+            "predictions",
+            "hype-train",
+            "artist-badge",
+            "glhf-pledge",
+            "no_audio",
+            "no_video",
+            "game-developer",
+        )
     }
 }
 
