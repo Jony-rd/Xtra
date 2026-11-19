@@ -2392,7 +2392,7 @@ class DjFaderView(
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        super.onSizeChanged(w, h)
+        super.onSizeChanged(w, h, oldw, oldh)
         updateFillShader()
     }
     private val trackBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {

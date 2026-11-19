@@ -275,7 +275,7 @@ internal object MultiviewReplaceDialog {
             sizeDp: Int,
             ringCornerDp: Float,
             palette: StreamerPalette,
-        ): Pair<FrameLayout, (@ColorInt Int) -> Unit> {
+        ): Pair<FrameLayout, (Int) -> Unit> {
             val avPx = dp(sizeDp)
             val pad = dp(1.5f).coerceAtLeast(1)
             val frame = FrameLayout(context).apply {
@@ -686,7 +686,7 @@ internal object MultiviewReplaceDialog {
         val shellCard = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(14), dp(16), dp(14))
-            background = makeShellBackground(Color.parseColor(COLOR_PURPLE_STROKE))
+            background = makeShellBackground(Color.parseColor(COLOR_PURPLE_ACCENT))
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
