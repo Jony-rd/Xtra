@@ -6,7 +6,7 @@ import androidx.navigation.fragment.findNavController
 import com.github.andreyasadchy.xtra.R
 import com.github.andreyasadchy.xtra.model.ui.Stream
 import com.github.andreyasadchy.xtra.ui.main.MainActivity
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.github.andreyasadchy.xtra.ui.multiview.ui.MultiviewReplaceDialog
 
 object MultiviewLaunchHelper {
     private const val MAX_STREAMS = 4
@@ -14,19 +14,6 @@ object MultiviewLaunchHelper {
     fun openMultiview(fragment: Fragment, stream: Stream) {
         val mainActivity = fragment.activity as? MainActivity ?: return
         if (mainActivity.isFinishing || mainActivity.isDestroyed || !fragment.isAdded) return
-
-        val playingStream = mainActivity.currentPlayingStream()
-        val clickedId = MultiviewSessionReducer.stableIdentity(stream)
-        val playingId = playingStream?.let(MultiviewSessionReducer::stableIdentity)
-        val streamsToLaunch = if (
-            playingStream != null &&
-            (playingId == null || !playingId.equals(clickedId, ignoreCase = true)) &&
-            playingStream.id != stream.id
-        ) {
-            listOf(playingStream, stream)
-        } else {
-            listOf(stream)
-        }
 
         val multiviewVm = runCatching {
             ViewModelProvider(
@@ -36,33 +23,117 @@ object MultiviewLaunchHelper {
         }.getOrNull()
 
         val activeStreams = multiviewVm?.state?.value?.streams.orEmpty()
-        val launchIds = streamsToLaunch.mapNotNull { MultiviewSessionReducer.stableIdentity(it)?.lowercase() }.toSet()
-        val alreadyInMultiview = activeStreams.any { active ->
-            val activeId = MultiviewSessionReducer.stableIdentity(active)?.lowercase()
-            (activeId != null && activeId in launchIds) || streamsToLaunch.any { it.id == active.id }
+        val playingStream = mainActivity.currentPlayingStream()
+        val clickedIsPlaying = playingStream != null && matches(playingStream, stream)
+        val clickedInMultiview = activeStreams.any { matches(it, stream) }
+        val extraMiniPlayer = playingStream?.takeIf { mini ->
+            !clickedIsPlaying && activeStreams.none { active -> matches(active, mini) }
         }
 
-        if (activeStreams.size >= MAX_STREAMS && !alreadyInMultiview && multiviewVm != null) {
-            val streamNames = activeStreams.map {
-                (it.channelName?.takeIf { n -> n.isNotBlank() } ?: it.channelLogin).orEmpty()
-            }.toTypedArray()
+        val incomingStreams = buildList {
+            if (extraMiniPlayer != null) add(extraMiniPlayer)
+            if (!clickedInMultiview) add(stream)
+        }
 
-            MaterialAlertDialogBuilder(fragment.requireContext())
-                .setTitle("Multiview full. Replace which stream?")
-                .setItems(streamNames) { _, which ->
-                    val targetIdentity = multiviewVm.state.value.identities.getOrNull(which)
-                        ?: multiviewVm.state.value.identities.lastOrNull()
-                    if (targetIdentity != null) {
-                        multiviewVm.replaceStream(targetIdentity, stream)
-                    }
-                    navigateToMultiview(fragment, mainActivity, emptyList())
-                }
-                .setNegativeButton(android.R.string.cancel, null)
-                .show()
+        if (multiviewVm == null || activeStreams.size + incomingStreams.size <= MAX_STREAMS) {
+            navigateToMultiview(fragment, mainActivity, incomingStreams)
             return
         }
 
-        navigateToMultiview(fragment, mainActivity, streamsToLaunch)
+        val dialogContext = fragment.context ?: mainActivity
+        val plan: MultiviewReplaceDialog.Plan = when {
+            activeStreams.size < MAX_STREAMS && extraMiniPlayer != null && !clickedInMultiview -> {
+                MultiviewReplaceDialog.Plan.ThreeStreamsOverflow(
+                    clickedStream = stream,
+                    miniPlayerStream = extraMiniPlayer,
+                    activeStreams = activeStreams,
+                    onAddClickedToFreeSlotOnly = {
+                        multiviewVm.addStreams(listOf(stream))
+                        navigateToMultiview(fragment, mainActivity, emptyList())
+                    },
+                    onReplaceSlotWithMiniAndAddClicked = { slotIndex ->
+                        val targetId = multiviewVm.state.value.identities.getOrNull(slotIndex)
+                        if (targetId != null) {
+                            multiviewVm.replaceStream(targetId, extraMiniPlayer)
+                        }
+                        multiviewVm.addStreams(listOf(stream))
+                        navigateToMultiview(fragment, mainActivity, emptyList())
+                    },
+                )
+            }
+
+            clickedInMultiview && extraMiniPlayer != null -> {
+                MultiviewReplaceDialog.Plan.HandleMiniPlayerOnly(
+                    miniPlayerStream = extraMiniPlayer,
+                    activeStreams = activeStreams,
+                    onOpenWithoutMiniPlayer = {
+                        navigateToMultiview(fragment, mainActivity, emptyList())
+                    },
+                    onReplaceSlotWithMiniPlayer = { slotIndex ->
+                        val targetId = multiviewVm.state.value.identities.getOrNull(slotIndex)
+                            ?: multiviewVm.state.value.identities.lastOrNull()
+                        if (targetId != null) {
+                            multiviewVm.replaceStream(targetId, extraMiniPlayer)
+                        }
+                        navigateToMultiview(fragment, mainActivity, emptyList())
+                    },
+                )
+            }
+
+            extraMiniPlayer != null -> {
+                MultiviewReplaceDialog.Plan.FourStreamsWithMiniPlayer(
+                    clickedStream = stream,
+                    miniPlayerStream = extraMiniPlayer,
+                    activeStreams = activeStreams,
+                    onReplaceOnlyClicked = { slotIndex ->
+                        val targetId = multiviewVm.state.value.identities.getOrNull(slotIndex)
+                            ?: multiviewVm.state.value.identities.lastOrNull()
+                        if (targetId != null) {
+                            multiviewVm.replaceStream(targetId, stream)
+                        }
+                        navigateToMultiview(fragment, mainActivity, emptyList())
+                    },
+                    onReplaceBoth = { clickedSlotIndex, miniPlayerSlotIndex ->
+                        val identities = multiviewVm.state.value.identities
+                        val clickedTargetId = identities.getOrNull(clickedSlotIndex)
+                        val miniTargetId = identities.getOrNull(miniPlayerSlotIndex)
+                        if (clickedTargetId != null) {
+                            multiviewVm.replaceStream(clickedTargetId, stream)
+                        }
+                        if (miniTargetId != null && !miniTargetId.equals(clickedTargetId, ignoreCase = true)) {
+                            multiviewVm.replaceStream(miniTargetId, extraMiniPlayer)
+                        }
+                        navigateToMultiview(fragment, mainActivity, emptyList())
+                    },
+                )
+            }
+
+            else -> {
+                MultiviewReplaceDialog.Plan.PickSlotForClicked(
+                    clickedStream = stream,
+                    activeStreams = activeStreams,
+                    onPickSlot = { slotIndex ->
+                        val targetId = multiviewVm.state.value.identities.getOrNull(slotIndex)
+                            ?: multiviewVm.state.value.identities.lastOrNull()
+                        if (targetId != null) {
+                            multiviewVm.replaceStream(targetId, stream)
+                        }
+                        navigateToMultiview(fragment, mainActivity, emptyList())
+                    },
+                )
+            }
+        }
+
+        MultiviewReplaceDialog.show(dialogContext, plan)
+    }
+
+    private fun matches(a: Stream, b: Stream): Boolean {
+        val idA = MultiviewSessionReducer.stableIdentity(a)
+        val idB = MultiviewSessionReducer.stableIdentity(b)
+        if (idA != null && idB != null && idA.equals(idB, ignoreCase = true)) {
+            return true
+        }
+        return !a.id.isNullOrBlank() && a.id == b.id
     }
 
     private fun navigateToMultiview(
