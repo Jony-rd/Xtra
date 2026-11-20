@@ -56,6 +56,7 @@ import com.github.andreyasadchy.xtra.util.watch.WatchCreditSession
 import com.github.andreyasadchy.xtra.util.watch.WatchCreditTelemetry
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.roundToInt
 import com.github.andreyasadchy.xtra.util.m3u8.TwitchVaftDetector
 import com.github.andreyasadchy.xtra.util.isVaftEnabled
 import kotlinx.coroutines.withTimeoutOrNull
@@ -456,6 +457,29 @@ class MultiviewPlaybackCoordinator(
             }
             val allowReading = player.playWhenReady && hasVideo &&
                 (state == Player.STATE_READY || state == Player.STATE_BUFFERING)
+            val targetFps = player.videoFormat?.frameRate?.takeIf { it > 0f }?.roundToInt()
+            val renderedFrames = player.videoDecoderCounters?.renderedOutputBufferCount?.toLong() ?: -1L
+            val renderedFps = if (!allowReading || renderedFrames < 0L) {
+                slot.lastFpsSampleMs = 0L
+                slot.lastRenderedFrames = -1L
+                slot.lastRenderedFps = null
+                null
+            } else {
+                if (slot.lastFpsSampleMs <= 0L || slot.lastRenderedFrames < 0L || renderedFrames < slot.lastRenderedFrames) {
+                    slot.lastFpsSampleMs = nowMs
+                    slot.lastRenderedFrames = renderedFrames
+                } else {
+                    val elapsedMs = nowMs - slot.lastFpsSampleMs
+                    if (elapsedMs >= 450L) {
+                        val deltaFrames = (renderedFrames - slot.lastRenderedFrames).coerceAtLeast(0L)
+                        val rawFps = ((deltaFrames * 1000.0) / elapsedMs).roundToInt()
+                        slot.lastRenderedFps = targetFps?.let { rawFps.coerceIn(0, it) } ?: rawFps.coerceAtLeast(0)
+                        slot.lastFpsSampleMs = nowMs
+                        slot.lastRenderedFrames = renderedFrames
+                    }
+                }
+                slot.lastRenderedFps ?: targetFps
+            }
             val reading = if (allowReading && liveOffsetMs != null) {
                 slot.bufferHealthTrend.update(bufferMs, liveOffsetMs, nowMs)
             } else {
@@ -469,6 +493,8 @@ class MultiviewPlaybackCoordinator(
                     isDecreasing = reading.isDecreasing,
                     isBuffering = state == Player.STATE_BUFFERING,
                     isLiveReady = state == Player.STATE_READY,
+                    renderedFps = renderedFps,
+                    targetFps = targetFps,
                 )
             } else if (
                 state == Player.STATE_BUFFERING ||
@@ -481,6 +507,8 @@ class MultiviewPlaybackCoordinator(
                     isDecreasing = false,
                     isBuffering = true,
                     isLiveReady = false,
+                    renderedFps = if (state == Player.STATE_BUFFERING && allowReading) renderedFps else null,
+                    targetFps = targetFps,
                 )
             }
         }
@@ -1699,6 +1727,9 @@ class MultiviewPlaybackCoordinator(
         )
         val vaftController = TwitchVaftController()
         internal val bufferHealthTrend = LiveBufferHealthTrend()
+        internal var lastFpsSampleMs: Long = 0L
+        internal var lastRenderedFrames: Long = -1L
+        internal var lastRenderedFps: Int? = null
         var retryCount: Int = 0
         private var recoveryState = MultiviewQualityRecoveryState()
         val downgradeLevel: Int get() = recoveryState.downgradeLevel
@@ -1830,4 +1861,6 @@ data class MultiviewLiveHealth(
     val isDecreasing: Boolean,
     val isBuffering: Boolean,
     val isLiveReady: Boolean,
+    val renderedFps: Int? = null,
+    val targetFps: Int? = null,
 )

@@ -1452,7 +1452,8 @@ object MultiviewStreamDeckDialog {
         val seedKey = stream.channelLogin?.takeIf { it.isNotBlank() }
             ?: stream.channelName?.takeIf { it.isNotBlank() }
             ?: identity
-        var palette = StreamerPaletteCache.getCached(stream.channelImage)
+        val initialBannerUrl = ui.viewModel.cachedBannerUrl(stream)
+        var palette = StreamerPaletteCache.getCached(stream.channelImage, initialBannerUrl)
             ?: StreamerPaletteCache.fallback(seedKey)
         var vol = ui.viewModel.audioVolume(identity)
         var dropHighlighted = false
@@ -1479,16 +1480,16 @@ object MultiviewStreamDeckDialog {
         fun applyCardBackground() {
             val radius = ui.dp(9).toFloat()
             val topTint = ColorUtils.setAlphaComponent(
-                blendRgb(palette.primary, 0xFF0B0C16.toInt(), 0.56f),
-                0x92,
+                blendRgb(palette.primary, 0xFF0B0C16.toInt(), 0.48f),
+                0x96,
             )
             val midCore = ColorUtils.setAlphaComponent(
-                blendRgb(palette.primary, 0xFF070810.toInt(), 0.76f),
-                0x84,
+                blendRgb(palette.primary, 0xFF070810.toInt(), 0.68f),
+                0x88,
             )
             val bottomTint = ColorUtils.setAlphaComponent(
-                blendRgb(palette.secondary, 0xFF090A14.toInt(), 0.60f),
-                0x8E,
+                blendRgb(palette.secondary, 0xFF090A14.toInt(), 0.52f),
+                0x92,
             )
             val base = GradientDrawable(
                 GradientDrawable.Orientation.TL_BR,
@@ -1513,30 +1514,14 @@ object MultiviewStreamDeckDialog {
             ).apply {
                 cornerRadius = (radius - ui.dp(1)).coerceAtLeast(0f)
             }
-            val barAlpha = if (vol > 0f || dropHighlighted) 0xF2 else 0xA6
-            val accentBar = GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(
-                    ColorUtils.setAlphaComponent(palette.highlight, barAlpha),
-                    ColorUtils.setAlphaComponent(palette.primary, barAlpha),
-                    ColorUtils.setAlphaComponent(palette.secondary, barAlpha),
-                ),
-            ).apply {
-                val r = ui.dp(3).toFloat()
-                cornerRadii = floatArrayOf(r, 0f, 0f, r, r, 0f, 0f, r)
-            }
-            val barInsetV = ui.dp(5)
-            val layer = LayerDrawable(arrayOf(base, topSheen, accentBar)).apply {
+            val layer = LayerDrawable(arrayOf(base, topSheen)).apply {
                 setLayerInset(1, ui.dp(1), ui.dp(1), ui.dp(1), ui.dp(1))
-                setLayerGravity(2, Gravity.START or Gravity.FILL_VERTICAL)
-                setLayerWidth(2, ui.dp(3).coerceAtLeast(2))
-                setLayerInset(2, ui.dp(1.5f), barInsetV, 0, barInsetV)
             }
             card.background = layer
         }
         applyCardBackground()
 
-        // Row 1: #N (direct drag handle) + Avatar + Streamer Name + Health Pill + Open Player + Remove
+        // Row 1: #N (direct drag handle) + Avatar + Streamer Name + FPS Pill + Health Pill + Open Player + 2-Tap Remove
         val row1 = LinearLayout(ui.context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1551,7 +1536,7 @@ object MultiviewStreamDeckDialog {
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
             includeFontPadding = false
-            minWidth = ui.dp(if (isGridCell) 33 else 36)
+            minWidth = ui.dp(if (isGridCell) 31 else 36)
             minHeight = ui.dp(25)
             setPadding(ui.dp(5), ui.dp(2), ui.dp(6), ui.dp(2))
             contentDescription = "Drag #${index + 1} to reorder stream"
@@ -1692,7 +1677,7 @@ object MultiviewStreamDeckDialog {
         val avatarFrame = FrameLayout(ui.context).apply {
             val pad = ui.dp(1.2f).coerceAtLeast(1)
             layoutParams = LinearLayout.LayoutParams(avSize + pad * 2, avSize + pad * 2).apply {
-                marginStart = ui.dp(5)
+                marginStart = ui.dp(if (isGridCell) 4 else 5)
             }
             setPadding(pad, pad, pad, pad)
         }
@@ -1734,10 +1719,27 @@ object MultiviewStreamDeckDialog {
             ellipsize = TextUtils.TruncateAt.END
             setShadowLayer(6f, 0f, 1.5f, Color.BLACK)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginStart = ui.dp(6)
-                marginEnd = ui.dp(4)
+                marginStart = ui.dp(if (isGridCell) 5 else 6)
+                marginEnd = ui.dp(if (isGridCell) 3 else 4)
             }
         })
+
+        val fpsPill = TextView(ui.context).apply {
+            textSize = if (isGridCell) 8f else 8.5f
+            typeface = Typeface.MONOSPACE
+            setTypeface(typeface, Typeface.BOLD)
+            maxLines = 1
+            includeFontPadding = false
+            setPadding(ui.dp(4), ui.dp(2), ui.dp(4), ui.dp(2))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                marginEnd = ui.dp(3.5f)
+            }
+            visibility = View.GONE
+        }
+        row1.addView(fpsPill)
 
         val healthPill = TextView(ui.context).apply {
             textSize = if (isGridCell) 8.5f else 9f
@@ -1745,12 +1747,12 @@ object MultiviewStreamDeckDialog {
             setTypeface(typeface, Typeface.BOLD)
             maxLines = 1
             includeFontPadding = false
-            setPadding(ui.dp(5), ui.dp(2), ui.dp(5), ui.dp(2))
+            setPadding(ui.dp(if (isGridCell) 4 else 5), ui.dp(2), ui.dp(if (isGridCell) 4 else 5), ui.dp(2))
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply {
-                marginEnd = ui.dp(4)
+                marginEnd = ui.dp(if (isGridCell) 3.5f else 4f)
             }
             setOnClickListener {
                 ui.viewModel.playbackCoordinator.seekToLive(identity)
@@ -1765,6 +1767,26 @@ object MultiviewStreamDeckDialog {
             }
         }
         healthUpdaters[identity] = { health ->
+            val fps = health?.renderedFps
+            if (fps == null) {
+                fpsPill.visibility = View.GONE
+            } else {
+                fpsPill.visibility = View.VISIBLE
+                fpsPill.text = "${fps}f"
+                val targetFps = health.targetFps?.takeIf { it > 0 } ?: 60
+                val ratio = fps.toFloat() / targetFps.toFloat()
+                val (fpsTextHex, fpsStrokeHex, fpsFillHex) = when {
+                    ratio >= 0.88f -> Triple("#4ADE80", "#9922C55E", "#80051F10")
+                    ratio >= 0.65f -> Triple("#FCD34D", "#B3F59E0B", "#80221604")
+                    else -> Triple("#FF7096", "#CCFF2E63", "#80260612")
+                }
+                fpsPill.setTextColor(Color.parseColor(fpsTextHex))
+                fpsPill.background = GradientDrawable().apply {
+                    setColor(Color.parseColor(fpsFillHex))
+                    cornerRadius = ui.dp(4.5f).toFloat()
+                    setStroke(ui.dp(1), Color.parseColor(fpsStrokeHex))
+                }
+            }
             val label: String
             val textHex: String
             val strokeHex: String
@@ -1810,12 +1832,12 @@ object MultiviewStreamDeckDialog {
         }
         row1.addView(healthPill)
 
-        val actionBtnW = ui.dp(if (isGridCell) 30 else 32)
+        val actionBtnW = ui.dp(if (isGridCell) 28 else 31)
         val actionBtnH = ui.dp(if (isGridCell) 27 else 28)
 
         row1.addView(ImageView(ui.context).apply {
             layoutParams = LinearLayout.LayoutParams(actionBtnW, actionBtnH).apply {
-                marginEnd = ui.dp(5)
+                marginEnd = ui.dp(if (isGridCell) 4 else 5)
             }
             background = ui.deckRipple(
                 ui.make3DKeycap(COLOR_UNSEL_GLASS_TOP, COLOR_UNSEL_GLASS_BOTTOM, COLOR_UNSEL_SHADOW, COLOR_UNSEL_STROKE, 5f, 2f),
@@ -1828,28 +1850,75 @@ object MultiviewStreamDeckDialog {
             setOnClickListener { onOpenNormalPlayer(identity) }
         })
 
-        row1.addView(ImageView(ui.context).apply {
+        var removeArmed = false
+        lateinit var removeBtn: TextView
+        val disarmRemoveRunnable = Runnable {
+            if (!removeArmed || !removeBtn.isAttachedToWindow) return@Runnable
+            removeArmed = false
+            removeBtn.text = "✕"
+            removeBtn.textSize = if (isGridCell) 11.5f else 12.5f
+            removeBtn.setTextColor(Color.parseColor("#FF7096"))
+            removeBtn.background = ui.deckRipple(
+                ui.make3DKeycap(COLOR_CRIMSON_GLASS_TOP, COLOR_CRIMSON_GLASS_BOTTOM, COLOR_CRIMSON_SHADOW, COLOR_CRIMSON_STROKE, 5f, 2f),
+            )
+            removeBtn.layoutParams = (removeBtn.layoutParams as LinearLayout.LayoutParams).apply {
+                width = actionBtnW
+            }
+            ui.centerKeycapText(removeBtn, depthDp = 2f, sidePadDp = 0f)
+            removeBtn.requestLayout()
+        }
+        removeBtn = TextView(ui.context).apply {
+            text = "✕"
+            textSize = if (isGridCell) 11.5f else 12.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#FF7096"))
             layoutParams = LinearLayout.LayoutParams(actionBtnW, actionBtnH)
             background = ui.deckRipple(
                 ui.make3DKeycap(COLOR_CRIMSON_GLASS_TOP, COLOR_CRIMSON_GLASS_BOTTOM, COLOR_CRIMSON_SHADOW, COLOR_CRIMSON_STROKE, 5f, 2f),
             )
-            setImageResource(R.drawable.ic_close)
-            setColorFilter(Color.parseColor("#FF7096"))
-            setPadding(ui.dp(6f), ui.dp(5f), ui.dp(6f), ui.dp(7f))
-            scaleType = ImageView.ScaleType.FIT_CENTER
+            ui.centerKeycapText(this, depthDp = 2f, sidePadDp = 0f)
             contentDescription = ui.context.getString(R.string.multiview_remove_stream)
+            addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(v: View) = Unit
+                override fun onViewDetachedFromWindow(v: View) {
+                    ui.uiHandler.removeCallbacks(disarmRemoveRunnable)
+                    removeArmed = false
+                }
+            })
             setOnClickListener {
-                ui.viewModel.remove(identity)
-                if (ui.stateProvider().streams.isEmpty()) {
-                    onDismissIfEmpty()
+                if (!removeArmed) {
+                    removeArmed = true
+                    performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                    text = "DEL?"
+                    textSize = if (isGridCell) 8.5f else 9f
+                    setTextColor(Color.WHITE)
+                    background = ui.deckRipple(
+                        ui.make3DKeycap("#FF991B3C", "#FF5E0D22", COLOR_CRIMSON_SHADOW, "#FFFF7096", 5f, 2f),
+                    )
+                    layoutParams = (layoutParams as LinearLayout.LayoutParams).apply {
+                        width = ui.dp(if (isGridCell) 35 else 39)
+                    }
+                    ui.centerKeycapText(this, depthDp = 2f, sidePadDp = 2f)
+                    requestLayout()
+                    ui.uiHandler.removeCallbacks(disarmRemoveRunnable)
+                    ui.uiHandler.postDelayed(disarmRemoveRunnable, 2_500L)
                 } else {
-                    onCardsChanged()
+                    ui.uiHandler.removeCallbacks(disarmRemoveRunnable)
+                    removeArmed = false
+                    performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    ui.viewModel.remove(identity)
+                    if (ui.stateProvider().streams.isEmpty()) {
+                        onDismissIfEmpty()
+                    } else {
+                        onCardsChanged()
+                    }
                 }
             }
-        })
+        }
+        row1.addView(removeBtn)
         card.addView(row1)
 
-        // Row 2: Mute + Wide [−] + Cyber DJ Fader + Wide [+] + %
+        // Row 2: Mute + % + Cyber DJ Fader + [−] + [+]
         val row2 = LinearLayout(ui.context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1857,7 +1926,7 @@ object MultiviewStreamDeckDialog {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply {
-                topMargin = ui.dp(3.5f)
+                topMargin = ui.dp(4.5f)
                 bottomMargin = ui.dp(3.5f)
             }
         }
@@ -1872,7 +1941,17 @@ object MultiviewStreamDeckDialog {
         }
         row2.addView(muteBtn)
 
-        val stepBtnW = ui.dp(if (isGridCell) 38 else 42)
+        val percentView = TextView(ui.context).apply {
+            textSize = if (isGridCell) 8.8f else 9.5f
+            typeface = Typeface.DEFAULT_BOLD
+            maxLines = 1
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(ui.dp(if (isGridCell) 28 else 32), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                marginEnd = ui.dp(if (isGridCell) 3 else 4)
+            }
+        }
+
+        val stepBtnW = ui.dp(if (isGridCell) 36 else 40)
         val stepBtnH = ui.dp(if (isGridCell) 30 else 32)
         fun makeStepButton(symbol: String): TextView = TextView(ui.context).apply {
             text = symbol
@@ -1888,19 +1967,8 @@ object MultiviewStreamDeckDialog {
             contentDescription = "Decrease ${ui.displayName(stream)} volume by 1%"
         }
         val plusBtn = makeStepButton("+").apply {
-            layoutParams = LinearLayout.LayoutParams(stepBtnW, stepBtnH).apply {
-                marginStart = ui.dp(4)
-                marginEnd = ui.dp(if (isGridCell) 3 else 4)
-            }
+            layoutParams = LinearLayout.LayoutParams(stepBtnW, stepBtnH)
             contentDescription = "Increase ${ui.displayName(stream)} volume by 1%"
-        }
-
-        val percentView = TextView(ui.context).apply {
-            textSize = if (isGridCell) 8.8f else 9.5f
-            typeface = Typeface.DEFAULT_BOLD
-            maxLines = 1
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(ui.dp(if (isGridCell) 29 else 34), ViewGroup.LayoutParams.WRAP_CONTENT)
         }
 
         lateinit var fader: DjFaderView
@@ -1952,7 +2020,9 @@ object MultiviewStreamDeckDialog {
             renderCardAudio(newVol, updateFader = false)
         }.apply {
             setAccentPalette(palette.primary, palette.secondary, palette.highlight)
-            layoutParams = LinearLayout.LayoutParams(0, ui.dp(23), 1f)
+            layoutParams = LinearLayout.LayoutParams(0, ui.dp(23), 1f).apply {
+                marginEnd = ui.dp(4)
+            }
         }
         renderCardAudio(vol, updateFader = false)
         cardVolumeUpdaters[identity] = { newVol -> renderCardAudio(newVol, updateFader = true) }
@@ -2023,10 +2093,10 @@ object MultiviewStreamDeckDialog {
         installHoldStepListener(minusBtn, -1)
         installHoldStepListener(plusBtn, +1)
 
-        row2.addView(minusBtn)
-        row2.addView(fader)
-        row2.addView(plusBtn)
         row2.addView(percentView)
+        row2.addView(fader)
+        row2.addView(minusBtn)
+        row2.addView(plusBtn)
         card.addView(row2)
 
         // Row 3: Transparent 3D glass quality pills
@@ -2137,16 +2207,34 @@ object MultiviewStreamDeckDialog {
         )
 
         val imageUrl = stream.channelImage
-        if (StreamerPaletteCache.getCached(imageUrl) == null && !imageUrl.isNullOrBlank()) {
+        val needsBannerResolve = !ui.viewModel.hasResolvedBanner(stream)
+        val cachedBannerPalette = StreamerPaletteCache.getCached(imageUrl, initialBannerUrl)
+        val hasLookupSource = !imageUrl.isNullOrBlank() ||
+            !stream.channelLogin.isNullOrBlank() ||
+            !stream.channelId.isNullOrBlank()
+        if ((needsBannerResolve || cachedBannerPalette == null) && hasLookupSource) {
             ui.overlayScope.launch {
-                val extracted = StreamerPaletteCache.loadOrExtract(ui.context, imageUrl, seedKey)
+                val bannerUrl = if (needsBannerResolve) {
+                    ui.viewModel.resolveChannelBannerUrl(stream)
+                } else {
+                    initialBannerUrl
+                }
                 if (!card.isAttachedToWindow) return@launch
-                palette = extracted
-                fader.setAccentPalette(palette.primary, palette.secondary, palette.highlight)
-                applyDragBadgeStyle()
-                applyAvatarRingStyle()
-                renderCardAudio(vol, updateFader = false)
-                refreshThisPills()
+                val extracted = StreamerPaletteCache.loadOrExtract(
+                    context = ui.context,
+                    avatarUrl = imageUrl,
+                    bannerUrl = bannerUrl,
+                    seedKey = seedKey,
+                )
+                if (!card.isAttachedToWindow) return@launch
+                if (extracted != palette) {
+                    palette = extracted
+                    fader.setAccentPalette(palette.primary, palette.secondary, palette.highlight)
+                    applyDragBadgeStyle()
+                    applyAvatarRingStyle()
+                    renderCardAudio(vol, updateFader = false)
+                    refreshThisPills()
+                }
             }
         }
 

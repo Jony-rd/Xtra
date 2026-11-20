@@ -37,6 +37,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
 import javax.net.ssl.X509TrustManager
 
 class MultiviewViewModel(
@@ -53,6 +54,7 @@ class MultiviewViewModel(
 
     private val _playback = MutableStateFlow<Map<String, MultiviewPlaybackSnapshot>>(emptyMap())
     val playback: StateFlow<Map<String, MultiviewPlaybackSnapshot>> = _playback.asStateFlow()
+    private val bannerUrlCache = ConcurrentHashMap<String, String>()
     private var raidMonitoringJob: Job? = null
     private var raidMonitor: MultiviewRaidMonitor? = null
     private var raidMonitoringGeneration: Any? = null
@@ -326,6 +328,58 @@ class MultiviewViewModel(
     fun releaseAll() = playbackCoordinator.releaseAll()
     fun onStop(allowBackground: Boolean = true, inPictureInPicture: Boolean = false) =
         playbackCoordinator.onStop(allowBackground, inPictureInPicture)
+
+    private fun bannerCacheKey(stream: Stream): String? =
+        stream.channelId?.takeIf { it.isNotBlank() }
+            ?: stream.channelLogin?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
+
+    fun hasResolvedBanner(stream: Stream): Boolean =
+        bannerCacheKey(stream)?.let(bannerUrlCache::containsKey) == true
+
+    fun cachedBannerUrl(stream: Stream): String? =
+        bannerCacheKey(stream)?.let(bannerUrlCache::get)?.takeIf { it.isNotEmpty() }
+
+    suspend fun resolveChannelBannerUrl(stream: Stream): String? {
+        val key = bannerCacheKey(stream) ?: return null
+        bannerUrlCache[key]?.let { cached ->
+            return cached.takeIf { it.isNotEmpty() }
+        }
+        var confirmedNoBanner = false
+        val resolved = try {
+            val fromCache = (applicationContext as? XtraApp)?.xtraModule?.metadataCache
+                ?.readChannel(stream.channelId, stream.channelLogin)
+                ?.user?.bannerImageURL?.trim()?.takeIf { it.isNotEmpty() }
+            if (fromCache != null) {
+                fromCache
+            } else {
+                val preferences = applicationContext.prefs()
+                val networkLibrary = preferences.getString(C.NETWORK_LIBRARY, C.OKHTTP)
+                val gqlHeaders = TwitchApiHelper.getGQLHeaders(applicationContext, true)
+                val user = graphQLRepository.loadQueryUserChannelPage(
+                    networkLibrary = networkLibrary,
+                    headers = gqlHeaders,
+                    id = stream.channelId,
+                    login = if (stream.channelId.isNullOrBlank()) stream.channelLogin else null,
+                ).data?.user
+                if (user != null) {
+                    val banner = user.bannerImageURL?.trim()?.takeIf { it.isNotEmpty() }
+                    if (banner == null) confirmedNoBanner = true
+                    banner
+                } else {
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            null
+        }
+        if (resolved != null) {
+            bannerUrlCache[key] = resolved
+        } else if (confirmedNoBanner) {
+            bannerUrlCache[key] = ""
+        }
+        return resolved
+    }
 
     private suspend fun isChannelLive(channelLogin: String): Boolean? {
         return try {
