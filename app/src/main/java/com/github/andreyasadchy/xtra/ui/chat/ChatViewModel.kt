@@ -425,6 +425,7 @@ class ChatViewModel(
         val thirdParty: List<Emote>,
         val twitchLoading: Boolean = false,
         val twitchFailed: Boolean = false,
+        val thirdPartyFailed: Boolean = false,
     ) {
         val all: List<Emote> by lazy {
             FavoriteEmoteCatalog.deduplicate(twitch + thirdParty)
@@ -466,17 +467,19 @@ class ChatViewModel(
                 ) { state, _ ->
                     if (!state.hydrated) PickerCatalog(emptyList(), emptyList(), twitchLoading = true)
                     else pickerCatalogFor(state.snapshot).let { catalog ->
-                        if (state.structuralCatalogSettled && !state.twitchRefreshFailed) catalog
+                        if (state.structuralCatalogSettled && !state.twitchRefreshFailed && !state.thirdPartyRefreshFailed) catalog
                         else catalog.copy(
                             twitchLoading = !state.structuralCatalogSettled,
                             twitchFailed = state.twitchRefreshFailed,
+                            thirdPartyFailed = state.thirdPartyRefreshFailed,
                         )
                     }
                 }.distinctUntilChanged { previous, next ->
                     // Emote.equals compares names only. A new catalog may change an
                     // emote's ID, image or group while retaining the same names.
                     previous.twitch === next.twitch && previous.thirdParty === next.thirdParty &&
-                        previous.twitchLoading == next.twitchLoading && previous.twitchFailed == next.twitchFailed
+                        previous.twitchLoading == next.twitchLoading && previous.twitchFailed == next.twitchFailed &&
+                        previous.thirdPartyFailed == next.thirdPartyFailed
                 }
             }
         }
@@ -533,7 +536,11 @@ class ChatViewModel(
                 thirdPartyEmotesUpdated.onStart { emit(Unit) },
             ) { state, _ ->
                 if (!state.hydrated) ThirdPartyPickerState.Loading
-                else thirdPartyPickerStateFor(state.snapshot, state.thirdPartyRefreshFailed) {
+                else thirdPartyPickerStateFor(
+                    snapshot = state.snapshot,
+                    structuralCatalogSettled = state.structuralCatalogSettled,
+                    refreshFailed = state.thirdPartyRefreshFailed,
+                ) {
                     session.catalog.refresh(force = true)
                 }
             }
@@ -542,13 +549,17 @@ class ChatViewModel(
 
     private fun thirdPartyPickerStateFor(
         snapshot: com.github.andreyasadchy.xtra.ui.chat.v2.catalog.ChatCatalogSnapshot,
+        structuralCatalogSettled: Boolean,
         refreshFailed: Boolean,
         retry: () -> Unit,
     ): ThirdPartyPickerState {
         val emotes = pickerCatalogFor(snapshot).thirdParty
-        return if (emotes.isEmpty() && refreshFailed) ThirdPartyPickerState.Error(retry)
-        else if (emotes.isEmpty()) ThirdPartyPickerState.Empty
-        else ThirdPartyPickerState.Ready(emotes)
+        return when {
+            emotes.isNotEmpty() -> ThirdPartyPickerState.Ready(emotes)
+            refreshFailed -> ThirdPartyPickerState.Error(retry)
+            !structuralCatalogSettled -> ThirdPartyPickerState.Loading
+            else -> ThirdPartyPickerState.Empty
+        }
     }
 
     private fun toPickerEmote(emote: com.github.andreyasadchy.xtra.ui.chat.v2.catalog.ChatCatalogEmote): Emote {

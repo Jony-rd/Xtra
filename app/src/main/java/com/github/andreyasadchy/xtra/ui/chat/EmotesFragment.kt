@@ -20,6 +20,8 @@ import com.github.andreyasadchy.xtra.R
 import com.github.andreyasadchy.xtra.XtraApp
 import com.github.andreyasadchy.xtra.databinding.FragmentEmotesBinding
 import com.github.andreyasadchy.xtra.model.chat.Emote
+import com.github.andreyasadchy.xtra.model.chat.EmoteProvider
+import com.github.andreyasadchy.xtra.model.chat.FavoriteEmote
 import com.github.andreyasadchy.xtra.model.chat.RecentEmote
 import com.github.andreyasadchy.xtra.model.chat.key
 import com.github.andreyasadchy.xtra.ui.chat.ChatViewModel.Companion.ChatViewModelFactory
@@ -37,6 +39,42 @@ internal fun <T> pendingFavoriteItemsToApply(
     pendingItems: List<T>?,
     orderChanged: Boolean,
 ): List<T>? = if (orderChanged) null else pendingItems
+
+internal data class FavoritesEmptyStateUi(
+    val textRes: Int,
+    val retryable: Boolean,
+)
+
+internal fun favoritesEmptyStateUi(
+    favoriteEmotes: List<FavoriteEmote>,
+    usesV2: Boolean,
+    pickerCatalog: ChatViewModel.PickerCatalog?,
+): FavoritesEmptyStateUi {
+    if (favoriteEmotes.isEmpty()) {
+        return FavoritesEmptyStateUi(R.string.favorite_emotes_empty, retryable = false)
+    }
+    if (!usesV2) {
+        return FavoritesEmptyStateUi(R.string.favorite_emotes_unavailable, retryable = false)
+    }
+    val hasThirdPartyFavorite = favoriteEmotes.any { favorite ->
+        when (favorite.key()?.provider) {
+            EmoteProvider.SEVENTV, EmoteProvider.BTTV, EmoteProvider.FFZ -> true
+            else -> false
+        }
+    }
+    val hasTwitchFavorite = favoriteEmotes.any { it.key()?.provider == EmoteProvider.TWITCH }
+    if ((hasThirdPartyFavorite || hasTwitchFavorite) && (pickerCatalog == null || pickerCatalog.twitchLoading)) {
+        return FavoritesEmptyStateUi(R.string.loading, retryable = false)
+    }
+    return when {
+        hasThirdPartyFavorite && pickerCatalog.thirdPartyFailed ->
+            FavoritesEmptyStateUi(R.string.third_party_emotes_error, retryable = true)
+        hasTwitchFavorite && pickerCatalog.twitchFailed ->
+            FavoritesEmptyStateUi(R.string.twitch_emotes_error, retryable = true)
+        else ->
+            FavoritesEmptyStateUi(R.string.favorite_emotes_unavailable, retryable = false)
+    }
+}
 
 enum class EmotePickerSection {
     FAVORITES,
@@ -293,7 +331,7 @@ class EmotesFragment : Fragment() {
                     favoriteDragActive = false
                     pendingFavoriteItemsToApply(pendingFavoriteItems, orderChanged)?.let { pendingItems ->
                         adapter.submitList(pendingItems)
-                        updateFavoritesEmptyState(pendingItems)
+                        updateFavoritesEmptyState(pendingItems, favoriteEmotes, usesV2, chatFragment)
                     }
                     pendingFavoriteItems = null
                 }
@@ -338,12 +376,12 @@ class EmotesFragment : Fragment() {
             if (favoriteDragActive) {
                 pendingFavoriteItems = items
                 updateFavoriteEditControls(items.isNotEmpty(), adapter)
-                updateFavoritesEmptyState(items)
+                updateFavoritesEmptyState(items, favoriteEmotes, usesV2, chatFragment)
                 return
             }
             adapter.submitList(items)
             updateFavoriteEditControls(items.isNotEmpty(), adapter)
-            updateFavoritesEmptyState(items)
+            updateFavoritesEmptyState(items, favoriteEmotes, usesV2, chatFragment)
         }
         val preferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
             if (key == C.CHAT_EMOTE_PICKER_TABS) {
@@ -603,16 +641,26 @@ class EmotesFragment : Fragment() {
         }
     }
 
-    private fun updateFavoritesEmptyState(items: List<FavoritePickerItem>) {
+    private fun updateFavoritesEmptyState(
+        items: List<FavoritePickerItem>,
+        favoriteEmotes: List<FavoriteEmote>,
+        usesV2: Boolean,
+        chatFragment: ChatFragment?,
+    ) {
         if (items.isNotEmpty()) {
             binding.emptyState.isVisible = false
+            binding.emptyState.isClickable = false
+            binding.emptyState.setOnClickListener(null)
             return
         }
-        binding.emptyState.setText(
-            if (viewModel.favoriteEmotes.value.isEmpty()) {
-                R.string.favorite_emotes_empty
+        val stateUi = favoritesEmptyStateUi(favoriteEmotes, usesV2, pickerCatalog)
+        binding.emptyState.setText(stateUi.textRes)
+        binding.emptyState.isClickable = stateUi.retryable
+        binding.emptyState.setOnClickListener(
+            if (stateUi.retryable) {
+                View.OnClickListener { chatFragment?.reloadEmotes() }
             } else {
-                R.string.favorite_emotes_unavailable
+                null
             },
         )
         binding.emptyState.isVisible = true

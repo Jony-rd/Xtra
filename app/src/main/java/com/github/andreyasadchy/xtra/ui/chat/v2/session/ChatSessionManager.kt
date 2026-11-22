@@ -156,7 +156,7 @@ class ChatSessionHandle internal constructor(
             if (closed || started) return@withLock
             active.session.start(active.key)
             started = true
-            active.catalog.refresh(force = automaticCatalogRefreshGate.shouldForceRefresh(active.spec.channelId))
+            active.catalog.refreshChannel(force = automaticCatalogRefreshGate.shouldForceRefresh(active.spec.channelId))
             startupWork = scope.launch {
                 // Transport, catalog, history, settings, and reward metadata are independent.
                 launch { reconcileRecent() }
@@ -293,7 +293,7 @@ class ChatSessionManager(
         session.start(key)
         val active = ActiveChatSession(spec, key, session, catalog, rewardCatalogFactory(spec, scope))
         _active.value = active
-        catalog.refresh(force = automaticCatalogRefreshGate.shouldForceRefresh(spec.channelId))
+        catalog.refreshChannel(force = automaticCatalogRefreshGate.shouldForceRefresh(spec.channelId))
         // Reconcile startup/reconstruction history independently of transport startup. Live
         // events can arrive while this request is in flight; ChatEventProcessor serializes the
         // atomic merge with those events and rejects the work if this generation is no longer

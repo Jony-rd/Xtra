@@ -73,6 +73,14 @@ fun interface ChatCatalogSource {
     /** A retry may reuse successful results from this refresh cycle, never a new refresh. */
     suspend fun load(force: Boolean, previousAttempt: ChatCatalogLoadResult?): ChatCatalogLoadResult = load(force)
 
+    /** Allows multi-provider sources to stream partial results while slower providers finish. */
+    suspend fun load(
+        force: Boolean,
+        previousAttempt: ChatCatalogLoadResult?,
+        forceGlobal: Boolean = force,
+        onPartialResult: (ChatCatalogLoadResult) -> Unit = {},
+    ): ChatCatalogLoadResult = load(force, previousAttempt)
+
     /** Changes when provider-related settings or the signed-in emote scope changes. */
     val catalogConfigFingerprint: String
         get() = ""
@@ -479,7 +487,14 @@ class ChatCatalogRepository(
     }
 
     /** Refreshes immediately by default. Pass false for the normal stale-while-revalidate path. */
-    @Synchronized fun refresh(force: Boolean = true) {
+    @Synchronized fun refresh(force: Boolean = true) =
+        refreshInternal(force = force, forceGlobal = force)
+
+    /** Refreshes channel-specific scopes while keeping shared global caches intact when fresh. */
+    @Synchronized fun refreshChannel(force: Boolean = true) =
+        refreshInternal(force = force, forceGlobal = false)
+
+    private fun refreshInternal(force: Boolean, forceGlobal: Boolean) {
         if (closed) return
         val requestGeneration = ++generation
         val currentState = _state.value
@@ -520,6 +535,7 @@ class ChatCatalogRepository(
                     attempt = 1,
                     delayMs = 0L,
                     force = force,
+                    forceGlobal = forceGlobal,
                     forceRefreshRevision = forceRefreshRevision,
                 )
             }
@@ -558,6 +574,7 @@ class ChatCatalogRepository(
         attempt: Int,
         delayMs: Long,
         force: Boolean,
+        forceGlobal: Boolean = force,
         forceRefreshRevision: Long?,
         previousAttempt: ChatCatalogLoadResult? = null,
         previousAttemptConfig: String? = null,
@@ -579,7 +596,12 @@ class ChatCatalogRepository(
         }
         val attemptConfig = source.catalogConfigFingerprint
         val result = try {
-            source.load(force, previousAttempt.takeIf { previousAttemptConfig == attemptConfig })
+            source.load(
+                force = force,
+                previousAttempt = previousAttempt.takeIf { previousAttemptConfig == attemptConfig },
+                forceGlobal = forceGlobal,
+                onPartialResult = { partial -> applyPartialResult(requestGeneration, partial) },
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (_: Throwable) {
@@ -607,39 +629,17 @@ class ChatCatalogRepository(
                     attempt + 1,
                     retryDelay(attempt),
                     force = false,
+                    forceGlobal = false,
                     forceRefreshRevision = forceRefreshRevision,
                     previousAttempt = previousAttempt,
                     previousAttemptConfig = previousAttemptConfig,
                 )
                 return@synchronized
             }
-            networkProvidersObserved = buildSet {
-                addAll(networkProvidersObserved)
-                if (result.twitch != null) add(Provider.TWITCH)
-                if (result.sevenTv?.isScoped != true && result.sevenTv != null) add(Provider.SEVEN_TV)
-                if (result.bttv?.isScoped != true && result.bttv != null) add(Provider.BTTV)
-                if (result.ffz?.isScoped != true && result.ffz != null) add(Provider.FFZ)
-                if (result.badges != null) add(Provider.BADGES)
-                if (result.cheermotes != null) add(Provider.CHEERMOTES)
-            }
-            observeEmoteScopes(Provider.SEVEN_TV, result.sevenTv)
-            observeEmoteScopes(Provider.BTTV, result.bttv)
-            observeEmoteScopes(Provider.FFZ, result.ffz)
+            observeResultProviders(result)
             val currentState = _state.value
             val current = currentState.snapshot
-            val merged = current.copy(
-                twitch = result.twitch?.value ?: current.twitch,
-                sevenTv = result.sevenTv?.let { mergeEmoteScopes(current.sevenTv, it) } ?: current.sevenTv,
-                sevenTvChannelSetId = result.sevenTv?.let { update ->
-                    if (update.channel is ScopeUpdate.Success) update.channelSetId
-                    else current.sevenTvChannelSetId
-                } ?: current.sevenTvChannelSetId,
-                bttv = result.bttv?.let { mergeEmoteScopes(current.bttv, it) } ?: current.bttv,
-                ffz = result.ffz?.let { mergeEmoteScopes(current.ffz, it) } ?: current.ffz,
-                badges = result.badges?.value ?: current.badges,
-                cheermotes = result.cheermotes?.value ?: current.cheermotes,
-            )
-            val resolved = resolveSevenTvPendingChannelSet(merged)
+            val resolved = resolveSevenTvPendingChannelSet(mergeLoadResult(current, result))
             val changed = resolved != current
             val next = if (changed) resolved.copy(revision = current.revision + 1) else current
             val nextState = ChatCatalogState(
@@ -690,6 +690,7 @@ class ChatCatalogRepository(
                     attempt + 1,
                     retryDelay(attempt),
                     force = false,
+                    forceGlobal = false,
                     forceRefreshRevision = forceRefreshRevision,
                     previousAttempt = result,
                     previousAttemptConfig = attemptConfig,
@@ -699,6 +700,75 @@ class ChatCatalogRepository(
             }
         }
     }
+
+    private fun applyPartialResult(requestGeneration: Long, partial: ChatCatalogLoadResult) {
+        synchronized(this) {
+            if (closed || requestGeneration != generation || !partial.hasSuccessfulProvider) return
+            observeResultProviders(partial)
+            val currentState = _state.value
+            val current = currentState.snapshot
+            val resolved = resolveSevenTvPendingChannelSet(mergeLoadResult(current, partial))
+            val changed = resolved != current
+            val next = if (changed) resolved.copy(revision = current.revision + 1) else current
+            // Partial updates publish available emotes early without settling the aggregate
+            // catalog or bumping forceRefreshRevision before the full attempt finishes.
+            val nextTwitchFailed = if (partial.twitch != null) false else currentState.twitchRefreshFailed
+            val nextThirdPartyFailed = if (!partial.hasFailedThirdPartyProvider) {
+                false
+            } else {
+                currentState.thirdPartyRefreshFailed
+            }
+            val nextRefreshFailed = if (source.hasIndependentBadgeProvider) {
+                if (!partial.hasFailedProviderIgnoringBadges()) false else currentState.refreshFailed
+            } else {
+                if (!partial.hasFailedProvider) false else currentState.refreshFailed
+            }
+            if (changed ||
+                currentState.twitchRefreshFailed != nextTwitchFailed ||
+                currentState.thirdPartyRefreshFailed != nextThirdPartyFailed ||
+                currentState.refreshFailed != nextRefreshFailed
+            ) {
+                _state.value = currentState.copy(
+                    snapshot = next,
+                    twitchRefreshFailed = nextTwitchFailed,
+                    thirdPartyRefreshFailed = nextThirdPartyFailed,
+                    refreshFailed = nextRefreshFailed,
+                )
+            }
+            if (changed) enqueuePersistence(next)
+        }
+    }
+
+    private fun observeResultProviders(result: ChatCatalogLoadResult) {
+        networkProvidersObserved = buildSet {
+            addAll(networkProvidersObserved)
+            if (result.twitch != null) add(Provider.TWITCH)
+            if (result.sevenTv?.isScoped != true && result.sevenTv != null) add(Provider.SEVEN_TV)
+            if (result.bttv?.isScoped != true && result.bttv != null) add(Provider.BTTV)
+            if (result.ffz?.isScoped != true && result.ffz != null) add(Provider.FFZ)
+            if (result.badges != null) add(Provider.BADGES)
+            if (result.cheermotes != null) add(Provider.CHEERMOTES)
+        }
+        observeEmoteScopes(Provider.SEVEN_TV, result.sevenTv)
+        observeEmoteScopes(Provider.BTTV, result.bttv)
+        observeEmoteScopes(Provider.FFZ, result.ffz)
+    }
+
+    private fun mergeLoadResult(
+        current: ChatCatalogSnapshot,
+        result: ChatCatalogLoadResult,
+    ): ChatCatalogSnapshot = current.copy(
+        twitch = result.twitch?.value ?: current.twitch,
+        sevenTv = result.sevenTv?.let { mergeEmoteScopes(current.sevenTv, it) } ?: current.sevenTv,
+        sevenTvChannelSetId = result.sevenTv?.let { update ->
+            if (update.channel is ScopeUpdate.Success) update.channelSetId
+            else current.sevenTvChannelSetId
+        } ?: current.sevenTvChannelSetId,
+        bttv = result.bttv?.let { mergeEmoteScopes(current.bttv, it) } ?: current.bttv,
+        ffz = result.ffz?.let { mergeEmoteScopes(current.ffz, it) } ?: current.ffz,
+        badges = result.badges?.value ?: current.badges,
+        cheermotes = result.cheermotes?.value ?: current.cheermotes,
+    )
 
     private fun launchBadgeRefresh(
         requestGeneration: Long,

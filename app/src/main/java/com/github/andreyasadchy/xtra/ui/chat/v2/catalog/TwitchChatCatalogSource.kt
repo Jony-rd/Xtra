@@ -26,7 +26,9 @@ import java.util.IdentityHashMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -93,16 +95,71 @@ class TwitchChatCatalogSource(
 
     override suspend fun load(force: Boolean): ChatCatalogLoadResult = load(force, null)
 
-    override suspend fun load(force: Boolean, previousAttempt: ChatCatalogLoadResult?): ChatCatalogLoadResult = withContext(Dispatchers.IO) {
+    override suspend fun load(force: Boolean, previousAttempt: ChatCatalogLoadResult?): ChatCatalogLoadResult =
+        load(force, previousAttempt, forceGlobal = force, onPartialResult = {})
+
+    override suspend fun load(
+        force: Boolean,
+        previousAttempt: ChatCatalogLoadResult?,
+        forceGlobal: Boolean,
+        onPartialResult: (ChatCatalogLoadResult) -> Unit,
+    ): ChatCatalogLoadResult = withContext(Dispatchers.IO) {
         val previous = previousAttempt.takeUnless { force }
         val network = context.prefs().getString(C.NETWORK_LIBRARY, C.OKHTTP)
         val helix = TwitchApiHelper.getHelixHeaders(context)
         val gql = TwitchApiHelper.getGQLHeaders(context, true)
         val useWebp = true
+        val partialLock = Any()
+        var partialResult = ChatCatalogLoadResult()
+        fun emitPartial(transform: (ChatCatalogLoadResult) -> ChatCatalogLoadResult) {
+            val next = synchronized(partialLock) {
+                partialResult = transform(partialResult)
+                partialResult
+            }
+            onPartialResult(next)
+        }
         supervisorScope {
-            val sevenTv = async { if (context.prefs().getBoolean(C.CHAT_ENABLE_STV, true)) previous?.sevenTv?.takeUnless { it.hasFailedScope } ?: loadSevenTv(network, useWebp, force, previous?.sevenTv) else emptyProviderUpdate() }
-            val bttv = async { if (context.prefs().getBoolean(C.CHAT_ENABLE_BTTV, true)) previous?.bttv?.takeUnless { it.hasFailedScope } ?: loadBttv(network, useWebp, force, previous?.bttv) else emptyProviderUpdate() }
-            val ffz = async { if (context.prefs().getBoolean(C.CHAT_ENABLE_FFZ, true)) previous?.ffz?.takeUnless { it.hasFailedScope } ?: loadFfz(network, force, previous?.ffz) else emptyProviderUpdate() }
+            val sevenTv = async {
+                if (!context.prefs().getBoolean(C.CHAT_ENABLE_STV, true)) {
+                    emptyProviderUpdate()
+                } else {
+                    previous?.sevenTv?.takeUnless { it.hasFailedScope }
+                        ?: loadSevenTv(
+                            network = network,
+                            useWebp = useWebp,
+                            forceGlobal = forceGlobal,
+                            previous = previous?.sevenTv,
+                            onScopeUpdate = { update -> emitPartial { it.copy(sevenTv = update) } },
+                        )
+                }
+            }
+            val bttv = async {
+                if (!context.prefs().getBoolean(C.CHAT_ENABLE_BTTV, true)) {
+                    emptyProviderUpdate()
+                } else {
+                    previous?.bttv?.takeUnless { it.hasFailedScope }
+                        ?: loadBttv(
+                            network = network,
+                            useWebp = useWebp,
+                            forceGlobal = forceGlobal,
+                            previous = previous?.bttv,
+                            onScopeUpdate = { update -> emitPartial { it.copy(bttv = update) } },
+                        )
+                }
+            }
+            val ffz = async {
+                if (!context.prefs().getBoolean(C.CHAT_ENABLE_FFZ, true)) {
+                    emptyProviderUpdate()
+                } else {
+                    previous?.ffz?.takeUnless { it.hasFailedScope }
+                        ?: loadFfz(
+                            network = network,
+                            forceGlobal = forceGlobal,
+                            previous = previous?.ffz,
+                            onScopeUpdate = { update -> emitPartial { it.copy(ffz = update) } },
+                        )
+                }
+            }
             val twitch = async<ChatCatalogProviderUpdate<Map<String, ChatCatalogEmote>>?> {
                 previous?.twitch?.let { return@async it }
                 val viewerId = context.tokenPrefs().getString(C.USER_ID, null)
@@ -120,7 +177,9 @@ class TwitchChatCatalogSource(
                     // Signed-in viewers always have global Twitch emotes. An empty
                     // response must stay retryable and must not erase a good catalog.
                     check(mapped.isNotEmpty()) { "Twitch user emotes are unavailable" }
-                    ChatCatalogProviderUpdate(mapped)
+                    ChatCatalogProviderUpdate(mapped).also { update ->
+                        emitPartial { it.copy(twitch = update) }
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Throwable) {
@@ -136,7 +195,7 @@ class TwitchChatCatalogSource(
                     channelLogin,
                     animateGifs = context.prefs().getBoolean(C.ANIMATED_EMOTES, true),
                 ).mapNotNull { it.toCatalog() }.toMap()
-            } }
+            }?.also { update -> emitPartial { it.copy(cheermotes = update) } } }
             ChatCatalogLoadResult(
                 twitch = twitch.await(),
                 sevenTv = sevenTv.await(),
@@ -165,134 +224,247 @@ class TwitchChatCatalogSource(
     private suspend fun loadSevenTv(
         network: String?,
         useWebp: Boolean,
-        force: Boolean,
+        forceGlobal: Boolean,
         previous: ChatCatalogProviderUpdate<Map<String, ChatCatalogEmote>>? = null,
-    ): ChatCatalogProviderUpdate<Map<String, ChatCatalogEmote>> {
+        onScopeUpdate: (ChatCatalogProviderUpdate<Map<String, ChatCatalogEmote>>) -> Unit = {},
+    ): ChatCatalogProviderUpdate<Map<String, ChatCatalogEmote>> = supervisorScope {
+        val lock = Any()
+        var globalState: ScopeUpdate<Map<String, ChatCatalogEmote>>? =
+            previous?.global?.takeIf { it is ScopeUpdate.Success }
+        var channelState: ScopeUpdate<Map<String, ChatCatalogEmote>>? =
+            previous?.channel?.takeIf { it is ScopeUpdate.Success }
+        var personalState: ScopeUpdate<Map<String, Map<String, ChatCatalogEmote>>>? =
+            previous?.personal?.takeIf { it is ScopeUpdate.Success }
         var channelSetId: String? = previous?.channelSetId
-        val (global, channelResult) = supervisorScope {
-            val global = async {
-                previous?.global?.takeIf { it is ScopeUpdate.Success } ?: scopeUpdate(channel = false) {
-                    val response = globalCatalogCache.get(GlobalCatalogKey.SEVEN_TV, force) {
-                        playerRepository.loadGlobalSTVEmoteSetResponse(network).also {
-                            playerRepository.loadSTVEmoteSet(it, useWebp, true)
-                        }
-                    }
-                    playerRepository.loadSTVEmoteSet(response, useWebp, true).second
-                }.map { emoteMap(it, ChatAssetProvider.SEVEN_TV, ChatEmoteScope.GLOBAL) }
+        var viewerPersonalSetIds: Set<String> = previous?.viewerPersonalSetIds.orEmpty()
+
+        fun currentPartialUpdate(): ChatCatalogProviderUpdate<Map<String, ChatCatalogEmote>>? =
+            synchronized(lock) {
+                if (globalState == null && channelState == null && personalState == null) null
+                else scopedProviderUpdate(
+                    global = globalState,
+                    channel = channelState,
+                    personal = personalState,
+                    channelSetId = channelSetId,
+                    viewerPersonalSetIds = viewerPersonalSetIds,
+                )
             }
-            val channel = async {
-                var loadedSetId = previous?.channelSetId
-                val result = previous?.channel?.takeIf { it is ScopeUpdate.Success } ?: scopeUpdate(
-                    channel = true,
-                    emptyValue = emptyList(),
-                ) {
-                    val user = playerRepository.loadSTVUser(
-                        playerRepository.loadSTVUserResponse(network, channelId, throwOnHttpError = true),
-                        useWebp,
-                    )
-                    loadedSetId = user.first
-                    user.second ?: if (!user.first.isNullOrBlank()) {
-                        playerRepository.loadSTVEmoteSet(
-                            playerRepository.loadSTVEmoteSetResponse(network, user.first!!, throwOnHttpError = true),
-                            useWebp,
-                            false,
-                        ).second
-                    } else emptyList()
-                }.map { emoteMap(it, ChatAssetProvider.SEVEN_TV, ChatEmoteScope.CHANNEL) }
-                result to loadedSetId
-            }
-            global.await() to channel.await()
-        }
-        channelSetId = channelResult.second ?: channelSetId
-        val channel = channelResult.first
-        var viewerPersonalSetIds = previous?.viewerPersonalSetIds.orEmpty()
-        val personal = previous?.personal?.takeIf { it is ScopeUpdate.Success } ?: context.tokenPrefs().getString(C.USER_ID, null)?.let { accountId ->
-            // Personal emotes are optional. A missing entitlement query must not make the
-            // channel catalog retry forever or hide the global/channel scopes.
-            scopeUpdate(channel = true, emptyValue = emptyMap()) {
-                val entitledSetIds = playerRepository.loadSTVEntitledEmoteSetIds(network, accountId)
-                viewerPersonalSetIds = entitledSetIds.toSet()
-                entitledSetIds.associateWith { setId ->
-                    try {
-                        emoteMap(
-                            playerRepository.loadSTVPersonalEmotes(
-                                playerRepository.loadSTVEmoteSetResponse(
-                                    network,
-                                    setId,
-                                    throwOnHttpError = true,
-                                ),
-                                useWebp,
-                            ).second,
-                            ChatAssetProvider.SEVEN_TV,
-                            ChatEmoteScope.PERSONAL,
-                        )
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (_: Throwable) {
-                        emptyMap()
+
+        val globalJob = async {
+            val hadPrevious = globalState != null
+            val result = globalState ?: scopeUpdate(channel = false) {
+                val response = globalCatalogCache.get(GlobalCatalogKey.SEVEN_TV, forceGlobal) {
+                    playerRepository.loadGlobalSTVEmoteSetResponse(network).also {
+                        playerRepository.loadSTVEmoteSet(it, useWebp, true)
                     }
                 }
+                playerRepository.loadSTVEmoteSet(response, useWebp, true).second
+            }.map { emoteMap(it, ChatAssetProvider.SEVEN_TV, ChatEmoteScope.GLOBAL) }
+            synchronized(lock) { globalState = result }
+            if (!hadPrevious && result is ScopeUpdate.Success) {
+                currentPartialUpdate()?.let(onScopeUpdate)
             }
-        } ?: ScopeUpdate.Success(emptyMap())
-        return scopedProviderUpdate(
-            global = global,
-            channel = channel,
-            personal = personal,
-            channelSetId = channelSetId,
-            viewerPersonalSetIds = viewerPersonalSetIds,
+            result
+        }
+        val channelJob = async {
+            val hadPrevious = channelState != null
+            var loadedSetId = channelSetId
+            val result = channelState ?: scopeUpdate(
+                channel = true,
+                emptyValue = emptyList(),
+            ) {
+                val user = playerRepository.loadSTVUser(
+                    playerRepository.loadSTVUserResponse(network, channelId, throwOnHttpError = true),
+                    useWebp,
+                )
+                loadedSetId = user.first
+                user.second ?: if (!user.first.isNullOrBlank()) {
+                    playerRepository.loadSTVEmoteSet(
+                        playerRepository.loadSTVEmoteSetResponse(network, user.first!!, throwOnHttpError = true),
+                        useWebp,
+                        false,
+                    ).second
+                } else emptyList()
+            }.map { emoteMap(it, ChatAssetProvider.SEVEN_TV, ChatEmoteScope.CHANNEL) }
+            synchronized(lock) {
+                channelSetId = loadedSetId ?: channelSetId
+                channelState = result
+            }
+            if (!hadPrevious && result is ScopeUpdate.Success) {
+                currentPartialUpdate()?.let(onScopeUpdate)
+            }
+            result
+        }
+        val personalJob = async {
+            val hadPrevious = personalState != null
+            var loadedPersonalSetIds = viewerPersonalSetIds
+            val result = personalState ?: context.tokenPrefs().getString(C.USER_ID, null)?.let { accountId ->
+                // Personal emotes are optional. A missing or slow entitlement query must not
+                // block or stall global/channel scopes on cold channels.
+                scopeUpdate(channel = true, emptyValue = emptyMap()) {
+                    withTimeoutOrNull(10_000L) {
+                        val entitledSetIds = playerRepository.loadSTVEntitledEmoteSetIds(network, accountId)
+                        loadedPersonalSetIds = entitledSetIds.toSet()
+                        supervisorScope {
+                            entitledSetIds.map { setId ->
+                                async {
+                                    setId to try {
+                                        emoteMap(
+                                            playerRepository.loadSTVPersonalEmotes(
+                                                playerRepository.loadSTVEmoteSetResponse(
+                                                    network,
+                                                    setId,
+                                                    throwOnHttpError = true,
+                                                ),
+                                                useWebp,
+                                            ).second,
+                                            ChatAssetProvider.SEVEN_TV,
+                                            ChatEmoteScope.PERSONAL,
+                                        )
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (_: Throwable) {
+                                        emptyMap()
+                                    }
+                                }
+                            }.awaitAll().toMap()
+                        }
+                    } ?: emptyMap()
+                }
+            } ?: ScopeUpdate.Success(emptyMap())
+            synchronized(lock) {
+                viewerPersonalSetIds = loadedPersonalSetIds
+                personalState = result
+            }
+            if (!hadPrevious && result is ScopeUpdate.Success) {
+                currentPartialUpdate()?.let(onScopeUpdate)
+            }
+            result
+        }
+
+        val finalGlobal = globalJob.await()
+        val finalChannel = channelJob.await()
+        val finalPersonal = personalJob.await()
+        val (finalChannelSetId, finalViewerPersonalSetIds) = synchronized(lock) {
+            channelSetId to viewerPersonalSetIds
+        }
+        scopedProviderUpdate(
+            global = finalGlobal,
+            channel = finalChannel,
+            personal = finalPersonal,
+            channelSetId = finalChannelSetId,
+            viewerPersonalSetIds = finalViewerPersonalSetIds,
         )
     }
 
     private suspend fun loadBttv(
         network: String?,
         useWebp: Boolean,
-        force: Boolean,
+        forceGlobal: Boolean,
         previous: ChatCatalogProviderUpdate<Map<String, ChatCatalogEmote>>? = null,
-    ): ChatCatalogProviderUpdate<Map<String, ChatCatalogEmote>> {
-        val global = previous?.global?.takeIf { it is ScopeUpdate.Success } ?: scopeUpdate(channel = false) {
-            val response = globalCatalogCache.get(GlobalCatalogKey.BTTV, force) {
-                playerRepository.loadGlobalBTTVEmotesResponse(network).also {
-                    playerRepository.loadGlobalBTTVEmotes(it, useWebp)
-                }
+        onScopeUpdate: (ChatCatalogProviderUpdate<Map<String, ChatCatalogEmote>>) -> Unit = {},
+    ): ChatCatalogProviderUpdate<Map<String, ChatCatalogEmote>> = supervisorScope {
+        val lock = Any()
+        var globalState: ScopeUpdate<Map<String, ChatCatalogEmote>>? =
+            previous?.global?.takeIf { it is ScopeUpdate.Success }
+        var channelState: ScopeUpdate<Map<String, ChatCatalogEmote>>? =
+            previous?.channel?.takeIf { it is ScopeUpdate.Success }
+
+        fun currentPartialUpdate(): ChatCatalogProviderUpdate<Map<String, ChatCatalogEmote>>? =
+            synchronized(lock) {
+                if (globalState == null && channelState == null) null
+                else scopedProviderUpdate(global = globalState, channel = channelState)
             }
-            playerRepository.loadGlobalBTTVEmotes(response, useWebp)
-        }.map { emoteMap(it, ChatAssetProvider.BTTV, ChatEmoteScope.GLOBAL) }
-        val channel = previous?.channel?.takeIf { it is ScopeUpdate.Success } ?: scopeUpdate(channel = true, emptyValue = emptyList()) {
-            playerRepository.loadBTTVEmotes(
-                playerRepository.loadBTTVEmotesResponse(
-                    network,
-                    channelId,
-                    throwOnHttpError = true,
-                ),
-                useWebp,
-            )
-        }.map { emoteMap(it, ChatAssetProvider.BTTV, ChatEmoteScope.CHANNEL) }
-        return scopedProviderUpdate(global, channel)
+
+        val globalJob = async {
+            val hadPrevious = globalState != null
+            val result = globalState ?: scopeUpdate(channel = false) {
+                val response = globalCatalogCache.get(GlobalCatalogKey.BTTV, forceGlobal) {
+                    playerRepository.loadGlobalBTTVEmotesResponse(network).also {
+                        playerRepository.loadGlobalBTTVEmotes(it, useWebp)
+                    }
+                }
+                playerRepository.loadGlobalBTTVEmotes(response, useWebp)
+            }.map { emoteMap(it, ChatAssetProvider.BTTV, ChatEmoteScope.GLOBAL) }
+            synchronized(lock) { globalState = result }
+            if (!hadPrevious && result is ScopeUpdate.Success) {
+                currentPartialUpdate()?.let(onScopeUpdate)
+            }
+            result
+        }
+        val channelJob = async {
+            val hadPrevious = channelState != null
+            val result = channelState ?: scopeUpdate(channel = true, emptyValue = emptyList()) {
+                playerRepository.loadBTTVEmotes(
+                    playerRepository.loadBTTVEmotesResponse(
+                        network,
+                        channelId,
+                        throwOnHttpError = true,
+                    ),
+                    useWebp,
+                )
+            }.map { emoteMap(it, ChatAssetProvider.BTTV, ChatEmoteScope.CHANNEL) }
+            synchronized(lock) { channelState = result }
+            if (!hadPrevious && result is ScopeUpdate.Success) {
+                currentPartialUpdate()?.let(onScopeUpdate)
+            }
+            result
+        }
+        scopedProviderUpdate(global = globalJob.await(), channel = channelJob.await())
     }
 
     private suspend fun loadFfz(
         network: String?,
-        force: Boolean,
+        forceGlobal: Boolean,
         previous: ChatCatalogProviderUpdate<Map<String, ChatCatalogEmote>>? = null,
-    ): ChatCatalogProviderUpdate<Map<String, ChatCatalogEmote>> {
-        val global = previous?.global?.takeIf { it is ScopeUpdate.Success } ?: scopeUpdate(channel = false) {
-            val response = globalCatalogCache.get(GlobalCatalogKey.FFZ, force) {
-                playerRepository.loadGlobalFFZEmotesResponse(network).also {
-                    playerRepository.loadGlobalFFZEmotes(it)
-                }
+        onScopeUpdate: (ChatCatalogProviderUpdate<Map<String, ChatCatalogEmote>>) -> Unit = {},
+    ): ChatCatalogProviderUpdate<Map<String, ChatCatalogEmote>> = supervisorScope {
+        val lock = Any()
+        var globalState: ScopeUpdate<Map<String, ChatCatalogEmote>>? =
+            previous?.global?.takeIf { it is ScopeUpdate.Success }
+        var channelState: ScopeUpdate<Map<String, ChatCatalogEmote>>? =
+            previous?.channel?.takeIf { it is ScopeUpdate.Success }
+
+        fun currentPartialUpdate(): ChatCatalogProviderUpdate<Map<String, ChatCatalogEmote>>? =
+            synchronized(lock) {
+                if (globalState == null && channelState == null) null
+                else scopedProviderUpdate(global = globalState, channel = channelState)
             }
-            playerRepository.loadGlobalFFZEmotes(response)
-        }.map { emoteMap(it, ChatAssetProvider.FFZ, ChatEmoteScope.GLOBAL) }
-        val channel = previous?.channel?.takeIf { it is ScopeUpdate.Success } ?: scopeUpdate(channel = true, emptyValue = emptyList()) {
-            playerRepository.loadFFZEmotes(
-                playerRepository.loadFFZEmotesResponse(
-                    network,
-                    channelId,
-                    throwOnHttpError = true,
-                ),
-            )
-        }.map { emoteMap(it, ChatAssetProvider.FFZ, ChatEmoteScope.CHANNEL) }
-        return scopedProviderUpdate(global, channel)
+
+        val globalJob = async {
+            val hadPrevious = globalState != null
+            val result = globalState ?: scopeUpdate(channel = false) {
+                val response = globalCatalogCache.get(GlobalCatalogKey.FFZ, forceGlobal) {
+                    playerRepository.loadGlobalFFZEmotesResponse(network).also {
+                        playerRepository.loadGlobalFFZEmotes(it)
+                    }
+                }
+                playerRepository.loadGlobalFFZEmotes(response)
+            }.map { emoteMap(it, ChatAssetProvider.FFZ, ChatEmoteScope.GLOBAL) }
+            synchronized(lock) { globalState = result }
+            if (!hadPrevious && result is ScopeUpdate.Success) {
+                currentPartialUpdate()?.let(onScopeUpdate)
+            }
+            result
+        }
+        val channelJob = async {
+            val hadPrevious = channelState != null
+            val result = channelState ?: scopeUpdate(channel = true, emptyValue = emptyList()) {
+                playerRepository.loadFFZEmotes(
+                    playerRepository.loadFFZEmotesResponse(
+                        network,
+                        channelId,
+                        throwOnHttpError = true,
+                    ),
+                )
+            }.map { emoteMap(it, ChatAssetProvider.FFZ, ChatEmoteScope.CHANNEL) }
+            synchronized(lock) { channelState = result }
+            if (!hadPrevious && result is ScopeUpdate.Success) {
+                currentPartialUpdate()?.let(onScopeUpdate)
+            }
+            result
+        }
+        scopedProviderUpdate(global = globalJob.await(), channel = channelJob.await())
     }
 
     private fun emoteMap(emotes: List<Emote>, provider: ChatAssetProvider, scope: ChatEmoteScope): Map<String, ChatCatalogEmote> = buildMap {
@@ -395,8 +567,8 @@ class TwitchChatCatalogSource(
     }
 
     private fun scopedProviderUpdate(
-        global: ScopeUpdate<Map<String, ChatCatalogEmote>>,
-        channel: ScopeUpdate<Map<String, ChatCatalogEmote>>,
+        global: ScopeUpdate<Map<String, ChatCatalogEmote>>? = null,
+        channel: ScopeUpdate<Map<String, ChatCatalogEmote>>? = null,
         personal: ScopeUpdate<Map<String, Map<String, ChatCatalogEmote>>>? = null,
         channelSetId: String? = null,
         viewerPersonalSetIds: Set<String> = emptySet(),

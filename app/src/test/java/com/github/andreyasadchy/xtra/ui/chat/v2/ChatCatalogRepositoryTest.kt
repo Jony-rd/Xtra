@@ -1664,6 +1664,99 @@ class ChatCatalogRepositoryTest {
         scope.cancel()
     }
 
+    @Test
+    fun partialResultsPublishEmotesWithoutSettlingStructuralCatalogOrForceRefreshRevision() = runBlocking {
+        val partialPublished = CompletableDeferred<Unit>()
+        val releaseRest = CompletableDeferred<Unit>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val cachedGlobal = emote("GlobalPepe", ChatAssetProvider.SEVEN_TV).copy(scope = ChatEmoteScope.GLOBAL)
+        val channelEmote = emote("ChannelPog", ChatAssetProvider.SEVEN_TV).copy(scope = ChatEmoteScope.CHANNEL)
+        val source = object : ChatCatalogSource {
+            override suspend fun load(): ChatCatalogLoadResult = ChatCatalogLoadResult()
+
+            override suspend fun load(
+                force: Boolean,
+                previousAttempt: ChatCatalogLoadResult?,
+                forceGlobal: Boolean,
+                onPartialResult: (ChatCatalogLoadResult) -> Unit,
+            ): ChatCatalogLoadResult {
+                onPartialResult(
+                    ChatCatalogLoadResult(
+                        sevenTv = ChatCatalogProviderUpdate(
+                            value = mapOf(cachedGlobal.name to cachedGlobal),
+                            global = ScopeUpdate.Success(mapOf(cachedGlobal.name to cachedGlobal)),
+                        ),
+                    ),
+                )
+                partialPublished.complete(Unit)
+                releaseRest.await()
+                return ChatCatalogLoadResult(
+                    twitch = ChatCatalogProviderUpdate(emptyMap()),
+                    sevenTv = ChatCatalogProviderUpdate(
+                        value = mapOf(cachedGlobal.name to cachedGlobal, channelEmote.name to channelEmote),
+                        global = ScopeUpdate.Success(mapOf(cachedGlobal.name to cachedGlobal)),
+                        channel = ScopeUpdate.Success(mapOf(channelEmote.name to channelEmote)),
+                        personal = ScopeUpdate.Success(emptyMap()),
+                    ),
+                    bttv = ChatCatalogProviderUpdate(emptyMap()),
+                    ffz = ChatCatalogProviderUpdate(emptyMap()),
+                    cheermotes = ChatCatalogProviderUpdate(emptyMap()),
+                )
+            }
+        }
+        val repository = ChatCatalogRepository(scope = scope, source = source)
+
+        repository.refresh(force = true)
+        withTimeout(1_000) {
+            partialPublished.await()
+            while (repository.state.value.snapshot.sevenTv["GlobalPepe"] == null) delay(1)
+        }
+
+        assertFalse(repository.state.value.structuralCatalogSettled)
+        assertEquals(0L, repository.state.value.forceRefreshRevision)
+
+        releaseRest.complete(Unit)
+        withTimeout(1_000) {
+            while (!repository.state.value.structuralCatalogSettled) delay(1)
+        }
+        assertEquals(1L, repository.state.value.forceRefreshRevision)
+        assertEquals(channelEmote, repository.state.value.snapshot.sevenTv["ChannelPog"])
+        repository.close()
+        scope.cancel()
+    }
+
+    @Test
+    fun refreshChannelKeepsForceTrueForSourceWhilePassingForceGlobalFalse() = runBlocking {
+        val observedForce = CompletableDeferred<Pair<Boolean, Boolean>>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val source = object : ChatCatalogSource {
+            override suspend fun load(): ChatCatalogLoadResult = ChatCatalogLoadResult()
+
+            override suspend fun load(
+                force: Boolean,
+                previousAttempt: ChatCatalogLoadResult?,
+                forceGlobal: Boolean,
+                onPartialResult: (ChatCatalogLoadResult) -> Unit,
+            ): ChatCatalogLoadResult {
+                observedForce.complete(force to forceGlobal)
+                return ChatCatalogLoadResult(
+                    twitch = ChatCatalogProviderUpdate(emptyMap()),
+                    sevenTv = ChatCatalogProviderUpdate(emptyMap()),
+                    bttv = ChatCatalogProviderUpdate(emptyMap()),
+                    ffz = ChatCatalogProviderUpdate(emptyMap()),
+                    badges = ChatCatalogProviderUpdate(emptyMap()),
+                    cheermotes = ChatCatalogProviderUpdate(emptyMap()),
+                )
+            }
+        }
+        val repository = ChatCatalogRepository(scope = scope, source = source)
+
+        repository.refreshChannel(force = true)
+        assertEquals(true to false, withTimeout(1_000) { observedForce.await() })
+        repository.close()
+        scope.cancel()
+    }
+
     private fun emote(name: String, provider: ChatAssetProvider) = ChatCatalogEmote(
         name = name,
         asset = ChatAssetSpec(ChatAssetKey(name), 28, 28, 28),

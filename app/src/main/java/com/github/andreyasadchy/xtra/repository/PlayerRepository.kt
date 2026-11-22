@@ -1496,6 +1496,7 @@ class PlayerRepository(
     }
 
     suspend fun loadSTVEntitledEmoteSetIds(networkLibrary: String?, userId: String): List<String> = withContext(Dispatchers.IO) {
+        val url = "https://7tv.io/v3/gql"
         val query = """
             query {
               userByConnection(id: ${JSONObject.quote(userId)}, platform: TWITCH) {
@@ -1503,18 +1504,44 @@ class PlayerRepository(
               }
             }
         """.trimIndent()
-        val body = JSONObject()
+        val bodyString = JSONObject()
             .put("query", query)
             .toString()
-            .toRequestBody("application/json".toMediaType())
-        val request = Request.Builder()
-            .url("https://7tv.io/v3/gql")
-            .header("User-Agent", "Xtra/" + BuildConfig.VERSION_NAME)
-            .post(body)
-            .build()
-        okHttpClient.value.newCall(request).executeAsync(throwOnHttpError = true).use { response ->
-            parseSTVEntitledEmoteSetIds(response.body.string())
+        val responseBody = when {
+            networkLibrary == C.HTTP_ENGINE && httpEngine.value != null -> @SuppressLint("NewApi") {
+                val response = suspendCancellableCoroutine<NetworkUtils.HttpEngineResponse> { continuation ->
+                    val timeout = NetworkUtils.HttpEngineTimeout()
+                    val request = httpEngine.value!!.newUrlRequestBuilder(
+                        url,
+                        httpExecutor.value,
+                        NetworkUtils.ByteArrayUrlCallback(continuation, timeout, throwOnHttpError = true)
+                    ).apply {
+                        addHeader("Content-Type", "application/json")
+                        addHeader("User-Agent", "Xtra/" + BuildConfig.VERSION_NAME)
+                        setUploadDataProvider(NetworkUtils.ByteArrayUploadProvider(bodyString.toByteArray()), httpExecutor.value)
+                    }.build()
+                    timeout.start(request, continuation)
+                    request.start()
+                    continuation.invokeOnCancellation {
+                        request.cancel()
+                        timeout.stop()
+                    }
+                }
+                response.body.decodeToString()
+            }
+            else -> {
+                val body = bodyString.toRequestBody("application/json".toMediaType())
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "Xtra/" + BuildConfig.VERSION_NAME)
+                    .post(body)
+                    .build()
+                okHttpClient.value.newCall(request).executeAsync(throwOnHttpError = true).use { response ->
+                    response.body.string()
+                }
+            }
         }
+        parseSTVEntitledEmoteSetIds(responseBody)
     }
 
     suspend fun loadSTVUserResponse(
