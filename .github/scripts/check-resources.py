@@ -45,6 +45,39 @@ ARRAY_REFERENCE = re.compile(r"^@string/([A-Za-z0-9_]+)$")
 # Android falls back to values/ for these keys; keeping the allowlist explicit
 # prevents this policy from hiding missing translations elsewhere in the app.
 INTENTIONAL_FALLBACK_RESOURCES = {
+    # Stream-proxy list labels ship with default English wording until the new
+    # settings flow is reviewed and localized.
+    "settings_stream_proxy_urls_summary",
+    "settings_stream_proxy_urls_count",
+    "settings_stream_proxy_list_help",
+    "settings_stream_proxy_list_empty",
+    "settings_stream_proxy_add_url",
+    "settings_stream_proxy_edit_url",
+    "settings_stream_proxy_tap_to_edit",
+    "settings_stream_proxy_url_hint",
+    "settings_stream_proxy_url_required",
+    "settings_stream_proxy_duplicate_url",
+    "settings_stream_proxy_add",
+    "settings_stream_proxy_save",
+    "settings_stream_proxy_done",
+    "settings_stream_proxy_move_up",
+    "settings_stream_proxy_move_down",
+    "settings_stream_proxy_remove",
+    "settings_stream_proxy_actions",
+    # HTTP proxy backup settings follow the same default-English fallback
+    # policy until their translations are reviewed.
+    "settings_http_proxy_backups",
+    "settings_http_proxy_backups_summary",
+    "settings_http_proxy_backups_count_summary",
+    "settings_http_proxy_backups_help",
+    "settings_http_proxy_backups_empty",
+    "settings_http_proxy_add_backup",
+    "settings_http_proxy_backup_hint",
+    "settings_http_proxy_backup_required",
+    "settings_http_proxy_backup_invalid",
+    "settings_http_proxy_backup_duplicate",
+    "settings_http_proxy_backup_limit",
+    "settings_http_proxy_backup_actions",
     # Anonymous chat mode currently ships with English copy until its new
     # settings and chat labels are reviewed and localized.
     "chat_anonymous_mode_hint",

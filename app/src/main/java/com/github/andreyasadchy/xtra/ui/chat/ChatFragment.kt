@@ -182,8 +182,9 @@ internal fun matchesV2MessageUser(
             !selectedLogin.isNullOrBlank() && login.equals(selectedLogin, ignoreCase = true)
         }
     }
-    return matches(message.user?.id, message.user?.login) ||
-            message.reply?.let { reply -> matches(reply.parentUserId, reply.parentUserLogin) } == true
+    // This dialog shows messages authored by the selected user. A reply to them is still
+    // authored by the replying user and must not be pulled into their history.
+    return matches(message.user?.id, message.user?.login)
 }
 
 class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickListener, ReplyClickedDialog.OnButtonClickListener, ChannelPointsDialog.Listener {
@@ -845,8 +846,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                         animateGifs = chatStyle.animateGifs,
                     )
                     interactionAdapterFactory = ChatInteractionAdapterFactory(
-                        configuration = interactionConfiguration,
-                        onOpenReplyThread = { openReplyInteraction() },
+                        configuration = interactionConfiguration
                     )
                     run {
                         val app = requireContext().applicationContext as XtraApp
@@ -1320,9 +1320,18 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                         updateComposerDensity()
                         val pickerPreferences = requireContext().prefs()
                         val allPickerSectionNames = EmotePickerSection.entries.map { it.name }.toSet()
+                        val configuredPickerSections = pickerPreferences.getStringSet(
+                            C.CHAT_EMOTE_PICKER_TABS,
+                            allPickerSectionNames,
+                        ).orEmpty()
+                        val migratedPickerSections = migrateDefaultEmotePickerSections(configuredPickerSections)
+                        if (migratedPickerSections != configuredPickerSections) {
+                            pickerPreferences.edit()
+                                .putStringSet(C.CHAT_EMOTE_PICKER_TABS, migratedPickerSections)
+                                .apply()
+                        }
                         var pickerSections = EmotePickerSection.entries.filter {
-                            it.name in pickerPreferences.getStringSet(C.CHAT_EMOTE_PICKER_TABS, allPickerSectionNames)
-                                .orEmpty()
+                            it.name in migratedPickerSections
                         }
                         if (pickerSections.isEmpty()) pickerSections = listOf(EmotePickerSection.TWITCH)
                         val pickerAdapter = object : FragmentStateAdapter(this@ChatFragment) {
@@ -1345,6 +1354,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                             EmotePickerSection.EMOJI -> getString(R.string.emoji)
                             EmotePickerSection.TWITCH -> "Twitch"
                             EmotePickerSection.THIRD_PARTY -> "7TV/BTTV/FFZ"
+                            EmotePickerSection.CHANNEL -> getString(R.string.channel_emotes)
                         }
                         fun compactTabIcon(section: EmotePickerSection): Int = when (section) {
                             EmotePickerSection.FAVORITES -> R.drawable.ic_picker_star_24
@@ -1352,6 +1362,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                             EmotePickerSection.EMOJI -> R.drawable.ic_picker_emoji_24
                             EmotePickerSection.TWITCH -> R.drawable.ic_picker_grid_24
                             EmotePickerSection.THIRD_PARTY -> R.drawable.ic_picker_extension_24
+                            EmotePickerSection.CHANNEL -> R.drawable.ic_pref_person
                         }
                         fun configurePickerTab(tab: TabLayout.Tab, position: Int, compact: Boolean) {
                             val section = pickerSections[position]
@@ -2208,6 +2219,14 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
         val args = requireArguments()
         val channelId = args.getString(KEY_CHANNEL_ID)
         val channelLogin = args.getString(KEY_CHANNEL_LOGIN)
+        // A fresh player view waits for validated network before initialize() runs. Start the
+        // process-owned v2 session offline as well so its catalog can hydrate the local cache.
+        if (!isInitialized && requireContext().prefs().isChatEnabled() &&
+            args.getBoolean(KEY_IS_LIVE) && useChatV2 &&
+            !channelId.isNullOrBlank() && !channelLogin.isNullOrBlank()
+        ) {
+            startChatV2Session(channelId, channelLogin)
+        }
         when (val mode = viewModel.activeChatMode) {
             ChatViewModel.ActiveChatMode.Live -> if (args.getBoolean(KEY_IS_LIVE)) {
                 if (!sharedSessionOnly) viewModel.resumeLive(channelId, channelLogin)

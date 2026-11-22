@@ -64,6 +64,7 @@ import com.github.andreyasadchy.xtra.ui.main.WatchStreakReminderNotifier
 import com.github.andreyasadchy.xtra.repository.WatchStreakReminderStateStore
 import com.github.andreyasadchy.xtra.ui.settings.SettingsViewModel.Companion.SettingsViewModelFactory
 import com.github.andreyasadchy.xtra.util.C
+import com.github.andreyasadchy.xtra.util.HttpProxyAddress
 import com.github.andreyasadchy.xtra.util.PocketTouchGuard
 import com.github.andreyasadchy.xtra.util.SettingsMigration
 import com.github.andreyasadchy.xtra.util.TwitchApiHelper
@@ -620,6 +621,9 @@ class SettingsFragment : MaterialPreferenceFragment() {
             },
             rootKey,
         )
+        if (settingsScreen == SCREEN_PROXY) {
+            configureStreamProxyPreference()
+        }
         findPreference<ListPreference>(C.UI_LANGUAGE)?.apply {
             val lang = AppCompatDelegate.getApplicationLocales()
             if (lang.isEmpty) {
@@ -816,7 +820,7 @@ class SettingsFragment : MaterialPreferenceFragment() {
     private fun createProxyPreferenceDataStore(): PreferenceDataStore {
         val normalPreferences = requireContext().rawPrefs()
         val proxyPreferences = requireContext().proxyPrefs()
-        val proxyKeys = setOf(C.PROXY_HOST, C.PROXY_PORT, C.PROXY_USER, C.PROXY_PASSWORD)
+        val proxyKeys = setOf(C.PROXY_HOST, C.PROXY_PORT, C.PROXY_BACKUP_SERVERS, C.PROXY_USER, C.PROXY_PASSWORD)
         fun preferencesFor(key: String) = if (key in proxyKeys) proxyPreferences else normalPreferences
 
         return object : PreferenceDataStore() {
@@ -861,6 +865,61 @@ class SettingsFragment : MaterialPreferenceFragment() {
             override fun putStringSet(key: String, value: Set<String>?) {
                 preferencesFor(key).edit { putStringSet(key, value?.toMutableSet()) }
             }
+        }
+    }
+
+    private fun configureStreamProxyPreference() {
+        childFragmentManager.setFragmentResultListener(
+            StreamProxyListDialogFragment.RESULT_KEY,
+            this,
+        ) { _, _ ->
+            updateStreamProxyPreferenceSummary()
+            updateHttpProxyBackupsSummary()
+        }
+        findPreference<Preference>(C.PLAYER_PROXY_URL)?.apply {
+            updateStreamProxyPreferenceSummary()
+            setOnPreferenceClickListener {
+                if (childFragmentManager.findFragmentByTag(STREAM_PROXY_LIST_DIALOG_TAG) == null) {
+                    StreamProxyListDialogFragment().show(childFragmentManager, STREAM_PROXY_LIST_DIALOG_TAG)
+                }
+                true
+            }
+        }
+        findPreference<Preference>(C.PROXY_BACKUP_SERVERS)?.apply {
+            updateHttpProxyBackupsSummary()
+            setOnPreferenceClickListener {
+                if (childFragmentManager.findFragmentByTag(HTTP_PROXY_BACKUP_LIST_DIALOG_TAG) == null) {
+                    StreamProxyListDialogFragment.newHttpProxyBackups()
+                        .show(childFragmentManager, HTTP_PROXY_BACKUP_LIST_DIALOG_TAG)
+                }
+                true
+            }
+        }
+    }
+
+    private fun updateStreamProxyPreferenceSummary() {
+        val preference = findPreference<Preference>(C.PLAYER_PROXY_URL) ?: return
+        val count = requireContext().rawPrefs()
+            .getString(C.PLAYER_PROXY_URL, null)
+            .orEmpty()
+            .lineSequence()
+            .count { it.isNotBlank() }
+        preference.summary = if (count == 0) {
+            getString(R.string.settings_stream_proxy_urls_summary)
+        } else {
+            resources.getQuantityString(R.plurals.settings_stream_proxy_urls_count, count, count)
+        }
+    }
+
+    private fun updateHttpProxyBackupsSummary() {
+        val preference = findPreference<Preference>(C.PROXY_BACKUP_SERVERS) ?: return
+        val count = HttpProxyAddress.parseList(
+            requireContext().prefs().getString(C.PROXY_BACKUP_SERVERS, null),
+        ).size
+        preference.summary = if (count == 0) {
+            getString(R.string.settings_http_proxy_backups_summary)
+        } else {
+            getString(R.string.settings_http_proxy_backups_count_summary, count)
         }
     }
 
@@ -1525,6 +1584,7 @@ class SettingsFragment : MaterialPreferenceFragment() {
         }
         if (settingsScreen == SCREEN_PROXY) {
             requireActivity().window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            updateStreamProxyPreferenceSummary()
         }
         val preference = findPreference<SwitchPreferenceCompat>("live_notifications_enabled")
         if (preference?.isChecked == true && !LiveNotificationScheduler.canPostNotifications(requireContext())) {
@@ -1580,6 +1640,8 @@ class SettingsFragment : MaterialPreferenceFragment() {
 
     private companion object {
         const val ARG_SETTINGS_SCREEN = "settings_screen"
+        const val STREAM_PROXY_LIST_DIALOG_TAG = "stream_proxy_list"
+        const val HTTP_PROXY_BACKUP_LIST_DIALOG_TAG = "http_proxy_backup_list"
         const val SCREEN_APP = "app"
         const val SCREEN_LIVE_NOTIFICATIONS = "live_notifications"
         const val SCREEN_CACHE = "cache"

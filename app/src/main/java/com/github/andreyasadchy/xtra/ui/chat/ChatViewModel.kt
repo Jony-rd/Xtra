@@ -423,6 +423,7 @@ class ChatViewModel(
     data class PickerCatalog(
         val twitch: List<Emote>,
         val thirdParty: List<Emote>,
+        val channel: List<Emote> = emptyList(),
         val twitchLoading: Boolean = false,
         val twitchFailed: Boolean = false,
         val thirdPartyFailed: Boolean = false,
@@ -478,6 +479,7 @@ class ChatViewModel(
                     // Emote.equals compares names only. A new catalog may change an
                     // emote's ID, image or group while retaining the same names.
                     previous.twitch === next.twitch && previous.thirdParty === next.thirdParty &&
+                        previous.channel === next.channel &&
                         previous.twitchLoading == next.twitchLoading && previous.twitchFailed == next.twitchFailed &&
                         previous.thirdPartyFailed == next.thirdPartyFailed
                 }
@@ -4085,6 +4087,10 @@ class ChatViewModel(
         PickerCatalog(
             twitch = sendable.filter { it.provider == ChatAssetProvider.TWITCH }.map(::toPickerEmote),
             thirdParty = thirdParty,
+            channel = snapshot.twitch.values
+                .filter { it.scope == ChatEmoteScope.CHANNEL }
+                .map(::toPickerEmote)
+                .sortedBy { it.name.orEmpty().lowercase() },
         ).also {
             cachedPickerSnapshot = snapshot
             cachedPickerProviders = providers

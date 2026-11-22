@@ -41,6 +41,10 @@ import com.github.andreyasadchy.xtra.ui.common.logVideoSurfaceBinding
 import com.github.andreyasadchy.xtra.ui.player.LiveBufferHealthTrend
 import com.github.andreyasadchy.xtra.ui.player.TwitchVaftController
 import com.github.andreyasadchy.xtra.util.C
+import com.github.andreyasadchy.xtra.util.HttpProxyAddress
+import com.github.andreyasadchy.xtra.util.httpProxyEnabled
+import com.github.andreyasadchy.xtra.util.httpProxyHost
+import com.github.andreyasadchy.xtra.util.httpProxyPort
 import com.github.andreyasadchy.xtra.util.AdaptiveLiveLoadControl
 import com.github.andreyasadchy.xtra.util.AdaptiveLivePlaybackController
 import com.github.andreyasadchy.xtra.util.AdaptiveLivePlaybackSpeedControl
@@ -72,12 +76,12 @@ import org.json.JSONObject
 import okhttp3.Credentials
 import okhttp3.Call
 import java.io.IOException
-import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.ProxySelector
 import java.net.SocketAddress
 import java.net.URI
 import com.github.andreyasadchy.xtra.repository.PlayerRepository
+import com.github.andreyasadchy.xtra.repository.preload.StreamPreloadPolicy
 
 @OptIn(UnstableApi::class)
 class MultiviewPlaybackCoordinator(
@@ -800,11 +804,12 @@ class MultiviewPlaybackCoordinator(
     private suspend fun loadPlaylistUrl(slot: MultiviewPlayerSlot, login: String): PlaylistSelection {
         val preferences = applicationContext.prefs()
         val proxyUrl = preferences.getString(C.PLAYER_PROXY_URL, null)
+        val proxyUrls = StreamPreloadPolicy.customStreamProxyUrls(proxyUrl, login)
         val useCustomProxy = !slot.customProxyDisabled &&
-            preferences.getBoolean(C.PLAYER_STREAM_PROXY, false) && !proxyUrl.isNullOrBlank()
+            preferences.getBoolean(C.PLAYER_STREAM_PROXY, false) && proxyUrls.isNotEmpty()
         if (useCustomProxy) {
             return PlaylistSelection(
-                url = proxyUrl.replace("\$channel", login),
+                url = proxyUrls.first(),
                 playerType = null,
                 customProxy = true,
             )
@@ -1435,16 +1440,21 @@ class MultiviewPlaybackCoordinator(
         val module = application.xtraModule
         val preferences = applicationContext.prefs()
         val networkLibrary = preferences.getString(C.NETWORK_LIBRARY, C.OKHTTP)
-        val proxyHost = preferences.getString(C.PROXY_HOST, null)
-        val proxyPort = preferences.getString(C.PROXY_PORT, null)?.toIntOrNull()
+        val httpProxyEnabled = !slot.httpProxyDisabled && preferences.httpProxyEnabled()
         val proxyUser = preferences.getString(C.PROXY_USER, null)
         val proxyPassword = preferences.getString(C.PROXY_PASSWORD, null)
-        val proxyMultivariant = !slot.httpProxyDisabled &&
+        val proxyServers = if (!httpProxyEnabled) {
+            emptyList()
+        } else {
+            listOfNotNull(HttpProxyAddress.fromHostAndPort(preferences.httpProxyHost(), preferences.httpProxyPort())) +
+                HttpProxyAddress.parseList(preferences.getString(C.PROXY_BACKUP_SERVERS, null))
+        }.distinct()
+        val proxyMultivariant = httpProxyEnabled &&
             preferences.getBoolean(C.PROXY_MULTIVARIANT_PLAYLIST, false) &&
-            !proxyHost.isNullOrBlank() && proxyPort != null
-        val proxyMedia = !slot.httpProxyDisabled &&
+            proxyServers.isNotEmpty()
+        val proxyMedia = httpProxyEnabled &&
             preferences.getBoolean(C.PROXY_MEDIA_PLAYLIST, true) &&
-            !proxyHost.isNullOrBlank() && proxyPort != null
+            proxyServers.isNotEmpty()
         slot.httpProxyActive = proxyMultivariant || proxyMedia
         val headers = preferences.getString(C.PLAYER_STREAM_HEADERS, null)?.let { raw ->
             runCatching {
@@ -1456,16 +1466,14 @@ class MultiviewPlaybackCoordinator(
         }
         val multivariantProxy = selectiveProxyClient(
             enabled = proxyMultivariant,
-            host = proxyHost,
-            port = proxyPort,
+            proxies = proxyServers,
             user = proxyUser,
             password = proxyPassword,
             regex = MULTIVARIANT_PLAYLIST_REGEX,
         )
         val mediaProxy = selectiveProxyClient(
             enabled = proxyMedia,
-            host = proxyHost,
-            port = proxyPort,
+            proxies = proxyServers,
             user = proxyUser,
             password = proxyPassword,
             regex = MEDIA_PLAYLIST_REGEX,
@@ -1494,19 +1502,18 @@ class MultiviewPlaybackCoordinator(
 
     private fun selectiveProxyClient(
         enabled: Boolean,
-        host: String?,
-        port: Int?,
+        proxies: List<HttpProxyAddress>,
         user: String?,
         password: String?,
         regex: String,
     ): Call.Factory? {
-        if (!enabled || host.isNullOrBlank() || port == null) return null
+        if (!enabled || proxies.isEmpty()) return null
         val allowDirectFallback = applicationContext.prefs().getBoolean(C.PROXY_ALLOW_DIRECT_FALLBACK, true)
         return (applicationContext as XtraApp).xtraModule.okHttpClient.value.newBuilder().apply {
             proxySelector(object : ProxySelector() {
                 override fun select(uri: URI): List<Proxy> {
                     return if (Regex(regex).matches(uri.host.orEmpty())) {
-                        proxyCandidates(Proxy(Proxy.Type.HTTP, InetSocketAddress(host, port)), allowDirectFallback)
+                        proxyCandidates(proxies.map(HttpProxyAddress::toProxy), allowDirectFallback)
                     } else {
                         listOf(Proxy.NO_PROXY)
                     }

@@ -610,6 +610,7 @@ private class CombinedChatAdapter(
                     background = surface,
             ),
             emoteHeightPx = style.emoteHeightPx,
+            twitchSmilieHeightPx = style.twitchSmilieHeightPx,
             badgeHeightPx = style.badgeHeightPx,
             showBadges = style.showBadges,
             enableOverlayEmotes = style.enableOverlayEmotes,
@@ -774,16 +775,13 @@ private class CombinedChatAdapter(
         }
 
         fun createInteractionAdapter(initialMessages: List<LegacyChatMessage>): ChatInteractionAdapterFactory {
-            lateinit var factory: ChatInteractionAdapterFactory
-            factory = ChatInteractionAdapterFactory(
+            return ChatInteractionAdapterFactory(
                 ChatInteractionAdapterConfiguration(
                     messageTextSize = style.textSizeSp,
                     animateGifs = preferences.getBoolean(C.ANIMATED_EMOTES, true),
                 ),
                 initialMessages,
-                onOpenReplyThread = { fragment.openReplyInteraction(factory) },
             )
-            return factory
         }
     }
 

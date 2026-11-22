@@ -623,6 +623,8 @@ internal fun CheerEmote.toCatalog(): Pair<String, ChatCatalogCheermote>? {
         ),
         color = color,
         animated = isAnimated,
+        prefix = name,
+        minBits = minBits,
     )
 }
 

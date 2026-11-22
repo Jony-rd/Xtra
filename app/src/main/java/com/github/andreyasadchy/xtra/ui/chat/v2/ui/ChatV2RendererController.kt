@@ -32,6 +32,7 @@ import com.github.andreyasadchy.xtra.ui.chat.v2.session.ActiveChatSession
 import com.github.andreyasadchy.xtra.ui.chat.v2.session.ChatTimelineDelta
 import com.github.andreyasadchy.xtra.ui.chat.v2.session.VersionedTimelineSnapshot
 import com.github.andreyasadchy.xtra.ui.chat.ChatRenderStyle
+import com.github.andreyasadchy.xtra.ui.chat.chatTextRelativeTwitchSmilieHeightPx
 import com.github.andreyasadchy.xtra.ui.chat.resolveChatTranslationAppearance
 import com.github.andreyasadchy.xtra.ui.chat.resolveChatHighlightSettings
 import com.github.andreyasadchy.xtra.util.ChatBatchingPreferences
@@ -121,6 +122,7 @@ class ChatV2RendererController(
     private var renderStyle = ChatRenderStyle(
         textSizeSp = messageTextSizeSp,
         emoteHeightPx = emoteHeightPx,
+        twitchSmilieHeightPx = chatTextRelativeTwitchSmilieHeightPx(recyclerView.context, messageTextSizeSp),
         badgeHeightPx = badgeHeightPx,
         animateGifs = animateGifs,
         showBadges = showBadges,
@@ -784,6 +786,7 @@ class ChatV2RendererController(
                 customSecondaryTextColor = secondaryTextColor,
             ),
             emoteHeightPx = style.emoteHeightPx,
+            twitchSmilieHeightPx = style.twitchSmilieHeightPx,
             badgeHeightPx = style.badgeHeightPx,
             showBadges = style.showBadges,
             enableOverlayEmotes = style.enableOverlayEmotes,
