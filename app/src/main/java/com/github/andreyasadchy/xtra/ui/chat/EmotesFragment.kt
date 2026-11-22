@@ -67,9 +67,9 @@ internal fun favoritesEmptyStateUi(
         return FavoritesEmptyStateUi(R.string.loading, retryable = false)
     }
     return when {
-        hasThirdPartyFavorite && pickerCatalog.thirdPartyFailed ->
+        hasThirdPartyFavorite && pickerCatalog?.thirdPartyFailed == true ->
             FavoritesEmptyStateUi(R.string.third_party_emotes_error, retryable = true)
-        hasTwitchFavorite && pickerCatalog.twitchFailed ->
+        hasTwitchFavorite && pickerCatalog?.twitchFailed == true ->
             FavoritesEmptyStateUi(R.string.twitch_emotes_error, retryable = true)
         else ->
             FavoritesEmptyStateUi(R.string.favorite_emotes_unavailable, retryable = false)
