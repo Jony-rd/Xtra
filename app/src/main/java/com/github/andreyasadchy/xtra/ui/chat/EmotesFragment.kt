@@ -382,7 +382,12 @@ class EmotesFragment : Fragment() {
             } else {
                 emptyList()
             }
-            val items = favoritePickerItems(favoriteEmotes, emotes, emojis)
+            val items = favoritePickerItems(
+                favoriteEmotes,
+                emotes,
+                emojis,
+                pickerCatalog?.emoteNamesById.orEmpty(),
+            )
             if (favoriteDragActive) {
                 pendingFavoriteItems = items
                 updateFavoriteEditControls(items.isNotEmpty(), adapter)

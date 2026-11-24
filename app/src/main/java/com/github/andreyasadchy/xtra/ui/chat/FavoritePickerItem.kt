@@ -2,6 +2,7 @@ package com.github.andreyasadchy.xtra.ui.chat
 
 import com.github.andreyasadchy.xtra.model.chat.Emote
 import com.github.andreyasadchy.xtra.model.chat.FavoriteEmote
+import com.github.andreyasadchy.xtra.model.chat.FavoriteEmoteCatalog
 import com.github.andreyasadchy.xtra.model.chat.FavoriteEmoteKey
 import com.github.andreyasadchy.xtra.model.chat.favoriteKey
 import com.github.andreyasadchy.xtra.model.chat.key
@@ -38,10 +39,11 @@ internal fun favoritePickerItems(
     favorites: List<FavoriteEmote>,
     emotes: List<Emote>,
     emojis: List<EmojiPickerItem>,
+    namesById: Map<String, String> = emptyMap(),
 ): List<FavoritePickerItem> {
-    val emotesByKey = emotes.mapNotNull { emote ->
-        emote.favoriteKey()?.let { key -> key to emote }
-    }.toMap()
+    val emotesByKey = FavoriteEmoteCatalog.resolveFavorites(favorites, emotes, namesById)
+        .mapNotNull { (favorite, emote) -> favorite.key()?.let { key -> key to emote } }
+        .toMap()
     val emojisByKey = emojis.associateBy(EmojiFavoritesCatalog::key)
     return favorites.mapNotNull { favorite ->
         val key = favorite.key() ?: return@mapNotNull null

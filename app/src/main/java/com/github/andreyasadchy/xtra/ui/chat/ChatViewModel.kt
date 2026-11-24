@@ -469,6 +469,12 @@ class ChatViewModel(
         val twitchLoading: Boolean = false,
         val twitchFailed: Boolean = false,
         val thirdPartyFailed: Boolean = false,
+        /**
+         * Every id the current catalog knows, mapped to its emote name. Includes the scopes
+         * the picker hides for duplicate names, so a favorite saved from one of them can be
+         * resolved by name instead of vanishing.
+         */
+        val emoteNamesById: Map<String, String> = emptyMap(),
     ) {
         val all: List<Emote> by lazy {
             FavoriteEmoteCatalog.deduplicate(twitch + thirdParty)
@@ -933,7 +939,7 @@ class ChatViewModel(
         emptySet(),
     )
     val availableFavoriteEmotes: StateFlow<List<Emote>> = combine(favoriteEmotes, pickerCatalogUpdates.onStart { emit(Unit) }) { favorites, _ ->
-        FavoriteEmoteCatalog.availableFavorites(favorites, currentPickerEmotes())
+        resolveAvailableFavorites(favorites, currentV2PickerCatalog())
     }.stateIn(
         viewModelScope,
         SharingStarted.Eagerly,
@@ -4048,10 +4054,16 @@ class ChatViewModel(
     }.filter { !it.name.isNullOrBlank() }
 
     fun availableFavoriteEmotesFor(catalog: PickerCatalog?): List<Emote> =
-        FavoriteEmoteCatalog.availableFavorites(
-            favoriteEmotes.value,
-            catalog?.all ?: currentPickerEmotes(),
-        )
+        resolveAvailableFavorites(favoriteEmotes.value, catalog)
+
+    private fun resolveAvailableFavorites(
+        favorites: List<FavoriteEmote>,
+        catalog: PickerCatalog?,
+    ): List<Emote> = FavoriteEmoteCatalog.availableFavorites(
+        favorites,
+        catalog?.all ?: currentPickerEmotes(),
+        catalog?.emoteNamesById.orEmpty(),
+    )
 
     fun refreshV2AutoCompleteList(catalog: PickerCatalog, includeEmojis: Boolean = true) {
         synchronized(autoCompleteList) {
@@ -4129,11 +4141,47 @@ class ChatViewModel(
                 .filter { it.scope == ChatEmoteScope.CHANNEL }
                 .map(::toPickerEmote)
                 .sortedBy { it.name.orEmpty().lowercase() },
+            emoteNamesById = emoteNamesById(snapshot),
         ).also {
             cachedPickerSnapshot = snapshot
             cachedPickerProviders = providers
             cachedPickerCatalog = it
         }
+    }
+
+    /**
+     * Maps every known emote id of the current catalog to its name, across all provider
+     * scopes. Favorites are stored by id, but the picker keeps only one instance per name,
+     * so the id a favorite was saved from can be missing from the picker projection even
+     * though the emote is still sendable under the same name.
+     */
+    private fun emoteNamesById(
+        snapshot: com.github.andreyasadchy.xtra.ui.chat.v2.catalog.ChatCatalogSnapshot,
+    ): Map<String, String> {
+        val names = HashMap<String, String>()
+        fun remember(
+            emotes: Collection<com.github.andreyasadchy.xtra.ui.chat.v2.catalog.ChatCatalogEmote>,
+        ) {
+            emotes.forEach { emote ->
+                val id = emote.id.takeIf { it.isNotBlank() } ?: return@forEach
+                val name = emote.name.takeIf { it.isNotBlank() } ?: return@forEach
+                // An id that is already the name needs no alias.
+                if (id != name && !names.containsKey(id)) names[id] = name
+            }
+        }
+        remember(snapshot.sevenTv.global.values)
+        remember(snapshot.sevenTv.channel.values)
+        remember(snapshot.sevenTv.legacyCombined.values)
+        snapshot.sevenTv.personal.values.forEach { personal -> remember(personal.values) }
+        remember(snapshot.bttv.global.values)
+        remember(snapshot.bttv.channel.values)
+        remember(snapshot.bttv.legacyCombined.values)
+        snapshot.bttv.personal.values.forEach { personal -> remember(personal.values) }
+        remember(snapshot.ffz.global.values)
+        remember(snapshot.ffz.channel.values)
+        remember(snapshot.ffz.legacyCombined.values)
+        snapshot.ffz.personal.values.forEach { personal -> remember(personal.values) }
+        return names
     }
 
     private fun personalPickerEmotes(): List<Emote> {
@@ -4201,29 +4249,46 @@ class ChatViewModel(
     }
 
     fun isFavorite(emote: Emote): Boolean {
-        return emote.favoriteKey()?.let { it in favoriteKeys.value } == true
+        val key = emote.favoriteKey() ?: return false
+        if (key in favoriteKeys.value) return true
+        return matchingFavorites(emote).isNotEmpty()
     }
 
     fun removeFavorite(emote: Emote): Boolean? {
         val key = emote.favoriteKey() ?: return null
+        val keys = matchingFavorites(emote).mapNotNull { it.key() }.ifEmpty { listOf(key) }
         viewModelScope.launch {
-            playerRepository.removeFavoriteEmote(key)
+            keys.forEach { playerRepository.removeFavoriteEmote(it) }
         }
         return true
     }
 
     fun toggleFavorite(emote: Emote): Boolean? {
         val key = emote.favoriteKey() ?: return null
-        val adding = key !in favoriteKeys.value
+        val existing = matchingFavorites(emote)
+        val adding = existing.isEmpty()
+        val keys = if (adding) listOf(key) else existing.mapNotNull { it.key() }
         viewModelScope.launch {
             if (adding) {
-                playerRepository.addFavoriteEmote(key)
+                keys.forEach { playerRepository.addFavoriteEmote(it) }
             } else {
-                playerRepository.removeFavoriteEmote(key)
+                keys.forEach { playerRepository.removeFavoriteEmote(it) }
             }
         }
         return adding
     }
+
+    /**
+     * Stored favorites for [emote], including the rows whose saved id no longer matches the
+     * instance the picker shows for the same name. Without this, long-pressing the emote
+     * would store a second copy of a favorite that is already there.
+     */
+    private fun matchingFavorites(emote: Emote): List<FavoriteEmote> =
+        FavoriteEmoteCatalog.favoritesForEmote(
+            favoriteEmotes.value,
+            emote,
+            currentV2PickerCatalog()?.emoteNamesById.orEmpty(),
+        )
 
     fun isFavorite(emoji: EmojiPickerItem): Boolean =
         EmojiFavoritesCatalog.key(emoji) in favoriteKeys.value
@@ -4246,8 +4311,22 @@ class ChatViewModel(
     }
 
     fun reorderFavoriteKeys(availableOrder: List<FavoriteEmoteKey>): Boolean {
-        val currentOrder = favoriteEmotes.value.mapNotNull { it.key() }
-        val reordered = FavoriteEmoteCatalog.reorderAvailableFavorites(currentOrder, availableOrder)
+        val favorites = favoriteEmotes.value
+        val currentOrder = favorites.mapNotNull { it.key() }
+        // A favorite resolved by name is shown with the picker's instance, so translate the
+        // instance id back to the id that is actually stored before reordering.
+        val storedKeysByEmoteKey = HashMap<FavoriteEmoteKey, FavoriteEmoteKey>()
+        currentV2PickerCatalog()?.let { catalog ->
+            FavoriteEmoteCatalog
+                .resolveFavorites(favorites, catalog.all, catalog.emoteNamesById)
+                .forEach { (favorite, emote) ->
+                    val emoteKey = emote.favoriteKey() ?: return@forEach
+                    val storedKey = favorite.key() ?: return@forEach
+                    if (emoteKey != storedKey) storedKeysByEmoteKey[emoteKey] = storedKey
+                }
+        }
+        val requestedOrder = availableOrder.map { key -> storedKeysByEmoteKey[key] ?: key }
+        val reordered = FavoriteEmoteCatalog.reorderAvailableFavorites(currentOrder, requestedOrder)
         if (reordered == currentOrder) return false
         viewModelScope.launch {
             playerRepository.reorderFavoriteEmotes(reordered)

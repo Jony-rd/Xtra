@@ -3,6 +3,7 @@ package com.github.andreyasadchy.xtra.model.chat
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class FavoriteEmoteKeyTest {
@@ -121,6 +122,57 @@ class FavoriteEmoteKeyTest {
         )
 
         assertEquals(listOf(second, first), result)
+    }
+
+    @Test
+    fun favoriteSavedFromAHiddenScopeStillResolvesByItsName() {
+        val personal = emote(Emote.PERSONAL_STV, "personal-ez", "EZ")
+
+        val result = FavoriteEmoteCatalog.availableFavorites(
+            favorites = listOf(FavoriteEmote("SEVENTV", "global-ez", 1L)),
+            emotes = listOf(personal),
+            namesById = mapOf("global-ez" to "EZ"),
+        )
+
+        assertEquals(listOf("personal-ez"), result.map { it.id })
+    }
+
+    @Test
+    fun nameMatchingDoesNotInventUnavailableFavorites() {
+        assertTrue(
+            FavoriteEmoteCatalog.availableFavorites(
+                favorites = listOf(FavoriteEmote("SEVENTV", "global-ez", 1L)),
+                emotes = listOf(emote(Emote.PERSONAL_STV, "personal-ez", "EZ")),
+            ).isEmpty(),
+        )
+    }
+
+    @Test
+    fun nameMatchingKeepsProvidersApart() {
+        val twitch = Emote(name = "LUL", id = "twitch-lul")
+
+        assertTrue(
+            FavoriteEmoteCatalog.availableFavorites(
+                favorites = listOf(FavoriteEmote("SEVENTV", "7tv-lul", 1L)),
+                emotes = listOf(twitch),
+                namesById = mapOf("7tv-lul" to "LUL"),
+            ).isEmpty(),
+        )
+    }
+
+    @Test
+    fun favoriteTogglesFromTheInstanceThePickerShows() {
+        val personal = emote(Emote.PERSONAL_STV, "personal-ez", "EZ")
+        val favorite = FavoriteEmote("SEVENTV", "global-ez", 1L)
+
+        assertEquals(
+            listOf(favorite),
+            FavoriteEmoteCatalog.favoritesForEmote(
+                favorites = listOf(favorite),
+                emote = personal,
+                namesById = mapOf("global-ez" to "EZ"),
+            ),
+        )
     }
 
     private fun emote(source: Int, id: String, name: String = "emote") = Emote(
