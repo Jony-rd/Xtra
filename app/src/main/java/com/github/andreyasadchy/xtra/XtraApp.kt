@@ -139,7 +139,10 @@ class XtraApp : Application(), SingletonImageLoader.Factory {
         restoreMigrationPending = SettingsRestoreCoordinator.hasPendingSettingsMigration(this)
         registerActivityLifecycleCallbacks(createActivityLifecycleCallbacks())
         PocketTouchGuard.install(this)
-        if (processName == packageName) registerChatAssetNetworkRecovery()
+        if (processName == packageName) {
+            registerChatAssetNetworkRecovery()
+            xtraModule.watchCreditTracker.start()
+        }
         if (!restoreMigrationPending) startDeferredStartupTasks()
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             val conscrypt = Conscrypt.newProvider()

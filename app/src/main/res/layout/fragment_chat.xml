@@ -76,6 +76,8 @@
                     android:gravity="end"
                     android:orientation="vertical">
 
+                <include layout="@layout/view_drop_callout" />
+
                 <include layout="@layout/view_pinned_chat_message" />
 
                 <com.github.andreyasadchy.xtra.ui.chat.HappeningNowView
@@ -444,8 +446,6 @@
         </LinearLayout>
 
     </com.github.andreyasadchy.xtra.ui.view.FirstChildOnlyLinearLayout>
-
-    <include layout="@layout/view_drop_callout" />
 
     <TextView
         android:id="@+id/chatReplayUnavailable"

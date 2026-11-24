@@ -43,6 +43,17 @@ data class DropsInventoryState(
     val authenticated: Boolean = false,
 )
 
+data class ChannelDropsSummary(
+    val drops: List<TwitchDrop> = emptyList(),
+    val totalWatchDrops: Int = 0,
+    val claimedWatchDrops: Int = 0,
+    val allChannelDropsClaimed: Boolean = false,
+    val categoryMismatchGameName: String? = null,
+    val activeCampaignEndTime: String? = null,
+    val tierIndex: Int = 0,
+    val tierTotal: Int = 0,
+)
+
 class DropsRepository(
     private val context: Context,
     private val graphQLRepository: GraphQLRepository,
@@ -57,6 +68,9 @@ class DropsRepository(
     private val cacheMutex = Mutex()
     private val cacheWriteMutex = Mutex()
     private val completedClaims = mutableSetOf<String>()
+    private val claimedDropIds = ConcurrentHashMap.newKeySet<String>()
+    private val channelLastGameId = ConcurrentHashMap<String, String>()
+    private val channelEmptyCatalogAt = ConcurrentHashMap<String, Long>()
     private val channelDropScope = CoroutineScope(
         SupervisorJob() + Dispatchers.IO,
     )
@@ -121,6 +135,7 @@ class DropsRepository(
                 )
                 val drops = GqlDropsParser.parseInventory(body)
                     ?: error("Twitch Drops inventory response changed or failed")
+                drops.filter { it.isClaimed }.forEach { claimedDropIds += it.id }
                 lastInventoryRefreshElapsed = SystemClock.elapsedRealtime()
                 _inventory.value = DropsInventoryState(
                     drops = drops,
@@ -302,6 +317,163 @@ class DropsRepository(
             }
             result
         }
+    }
+
+    suspend fun refreshChannelDropsSummary(
+        channelId: String?,
+        currentSession: CurrentDropSessionResult? = null,
+        currentSessionKey: String? = null,
+        isSessionCurrent: () -> Boolean = { true },
+        channelGameId: String? = null,
+    ): ChannelDropsSummary {
+        val id = channelId?.takeIf { it.isNotBlank() } ?: return ChannelDropsSummary()
+        val headers = TwitchApiHelper.getGQLHeaders(context, true)
+        if (headers[C.HEADER_TOKEN].isNullOrBlank()) return ChannelDropsSummary()
+
+        val cacheKey = channelCacheKey(id)
+        val normalizedGameId = channelGameId?.takeIf { it.isNotBlank() }
+        val previousGameId = if (normalizedGameId != null) channelLastGameId.put(cacheKey, normalizedGameId) else null
+        val gameSwitched = previousGameId != null && normalizedGameId != null && previousGameId != normalizedGameId
+        val emptyFetchedAt = channelEmptyCatalogAt[cacheKey]
+        val emptyCatalogStale = emptyFetchedAt != null &&
+            (SystemClock.elapsedRealtime() - emptyFetchedAt) >= CHANNEL_EMPTY_CATALOG_RETRY_MILLIS
+
+        var available = refreshChannelDropCatalog(id, force = gameSwitched || emptyCatalogStale)
+            ?: throw IOException("Channel Drops are temporarily unavailable")
+        if (available.isEmpty()) {
+            channelEmptyCatalogAt[cacheKey] = SystemClock.elapsedRealtime()
+        } else {
+            channelEmptyCatalogAt.remove(cacheKey)
+        }
+
+        val matchingGameCampaigns = if (normalizedGameId != null) {
+            available.filter { campaign -> campaign.gameId == normalizedGameId }
+        } else {
+            available
+        }
+        val catalogWatchEntries = matchingGameCampaigns.flatMap { campaign ->
+            campaign.drops.filter(TwitchChannelDrop::isWatchTimeDrop).map { campaign to it }
+        }
+
+        if (catalogWatchEntries.isEmpty()) {
+            val mismatchGame = if (normalizedGameId != null) {
+                available.firstOrNull { campaign ->
+                    !campaign.gameName.isNullOrBlank() &&
+                        campaign.drops.any(TwitchChannelDrop::isWatchTimeDrop)
+                }?.gameName
+            } else {
+                null
+            }
+            return ChannelDropsSummary(categoryMismatchGameName = mismatchGame)
+        }
+
+        val effectiveSession = currentSession.takeIf { currentSession == null || isSessionCurrent() }
+        val sessionProgress = (effectiveSession as? CurrentDropSessionResult.Present)?.progress
+
+        val inventoryById = inventory.value.drops.associateBy { it.id }
+        val dashboardByDropId = _dashboard.value.flatMap { camp ->
+            camp.drops.map { it.id to (camp to it) }
+        }.toMap()
+
+        var builtDrops = catalogWatchEntries
+            .distinctBy { (_, drop) -> drop.id }
+            .map { (campaign, catalogDrop) ->
+                val inv = inventoryById[catalogDrop.id]
+                val dashPair = dashboardByDropId[catalogDrop.id]
+                val benefit = catalogDrop.benefits.firstOrNull() ?: dashPair?.second?.benefits?.firstOrNull()
+                val sessionMinutes = if (sessionProgress?.dropId == catalogDrop.id) {
+                    sessionProgress.currentMinutesWatched
+                } else {
+                    0
+                }
+                val isClaimed = (inv?.isClaimed == true) || (catalogDrop.id in claimedDropIds)
+                val baseMinutes = maxOf(inv?.currentMinutesWatched ?: 0, sessionMinutes)
+                val requiredMinutes = catalogDrop.requiredMinutesWatched.takeIf { it > 0 }
+                    ?: inv?.requiredMinutesWatched
+                    ?: 0
+                val finalMinutes = if (isClaimed && requiredMinutes > 0) maxOf(baseMinutes, requiredMinutes) else baseMinutes
+                TwitchDrop(
+                    id = catalogDrop.id,
+                    campaignId = campaign.id,
+                    campaignName = campaign.name ?: campaign.localizedTitle ?: inv?.campaignName ?: dashPair?.first?.name,
+                    gameName = campaign.gameName ?: inv?.gameName ?: dashPair?.first?.gameName,
+                    name = catalogDrop.name ?: inv?.name,
+                    rewardName = benefit?.name ?: inv?.rewardName,
+                    imageUrl = benefit?.imageUrl ?: inv?.imageUrl ?: campaign.imageUrl ?: dashPair?.first?.imageUrl,
+                    dropInstanceId = if (isClaimed) null else inv?.dropInstanceId,
+                    sessionOnly = inv == null,
+                    currentMinutesWatched = finalMinutes,
+                    requiredMinutesWatched = requiredMinutes,
+                    isClaimed = isClaimed,
+                    benefits = catalogDrop.benefits.ifEmpty { inv?.benefits.orEmpty() },
+                    campaignStartTime = catalogDrop.startTime ?: campaign.startTime ?: inv?.campaignStartTime,
+                    campaignEndTime = catalogDrop.endTime ?: campaign.endTime ?: inv?.campaignEndTime,
+                    imageSource = inv?.imageSource ?: TwitchDropImageSource.ORIGINAL,
+                )
+            }
+            .sortedWith(compareBy<TwitchDrop> { it.requiredMinutesWatched }.thenBy { it.name.orEmpty() })
+
+        // Reconcile once if CurrentDropSessionContext reports a drop missing from matching catalog.
+        if (sessionProgress != null && builtDrops.none { it.id == sessionProgress.dropId }) {
+            val reconciliationKey = "${channelCacheKey(id)}:${sessionProgress.dropId}"
+            val sessionKey = currentSessionKey.orEmpty()
+            var shouldReconcile = false
+            channelCatalogReconcileAttempts.compute(reconciliationKey) { _, prev ->
+                if (prev == sessionKey) prev else {
+                    shouldReconcile = true
+                    sessionKey
+                }
+            }
+            if (shouldReconcile) {
+                refreshChannelDropCatalog(id, force = true)?.let { refreshed ->
+                    val refreshedCampaigns = if (normalizedGameId != null) {
+                        refreshed.filter { it.gameId == normalizedGameId }
+                    } else refreshed
+                    val extra = refreshedCampaigns.flatMap { c ->
+                        c.drops.filter { it.id == sessionProgress.dropId && it.isWatchTimeDrop }.map { c to it }
+                    }.firstOrNull()
+                    if (extra != null) {
+                        val (campaign, catalogDrop) = extra
+                        val benefit = catalogDrop.benefits.firstOrNull()
+                        builtDrops = (builtDrops + TwitchDrop(
+                            id = catalogDrop.id,
+                            campaignId = campaign.id,
+                            campaignName = campaign.name ?: campaign.localizedTitle,
+                            gameName = campaign.gameName,
+                            name = catalogDrop.name,
+                            rewardName = benefit?.name,
+                            imageUrl = benefit?.imageUrl ?: campaign.imageUrl,
+                            dropInstanceId = null,
+                            sessionOnly = true,
+                            currentMinutesWatched = sessionProgress.currentMinutesWatched,
+                            requiredMinutesWatched = catalogDrop.requiredMinutesWatched,
+                            isClaimed = false,
+                            benefits = catalogDrop.benefits,
+                            campaignStartTime = catalogDrop.startTime ?: campaign.startTime,
+                            campaignEndTime = catalogDrop.endTime ?: campaign.endTime,
+                            imageSource = TwitchDropImageSource.ORIGINAL,
+                        )).sortedWith(compareBy<TwitchDrop> { it.requiredMinutesWatched }.thenBy { it.name.orEmpty() })
+                    }
+                }
+            }
+        }
+
+        val totalWatch = builtDrops.size
+        val claimedCount = builtDrops.count { it.isClaimed }
+        val allClaimed = totalWatch > 0 && claimedCount >= totalWatch
+        val activeDrop = builtDrops.firstOrNull { it.isClaimable }
+            ?: builtDrops.filter { !it.isClaimed }.maxByOrNull { it.currentMinutesWatched }
+        val tierIdx = if (activeDrop != null) (builtDrops.indexOfFirst { it.id == activeDrop.id } + 1).coerceAtLeast(1) else totalWatch
+        return ChannelDropsSummary(
+            drops = builtDrops,
+            totalWatchDrops = totalWatch,
+            claimedWatchDrops = claimedCount,
+            allChannelDropsClaimed = allClaimed,
+            categoryMismatchGameName = null,
+            activeCampaignEndTime = activeDrop?.campaignEndTime ?: matchingGameCampaigns.firstOrNull()?.endTime,
+            tierIndex = tierIdx,
+            tierTotal = totalWatch,
+        )
     }
 
     suspend fun refreshChannelDrops(
@@ -640,6 +812,7 @@ class DropsRepository(
         val success = GqlDropsParser.claimSucceeded(body)
         if (success) {
             completedClaims += claimId
+            claimedDropIds += drop.id
             removeClaimedDrop(claimId)
         }
         logDiagnostics {
@@ -695,6 +868,9 @@ class DropsRepository(
         cacheMutex.withLock {
             if (!dropsCacheMustReload(cacheAccountId, userId)) return@withLock
             cacheAccountId = userId
+            claimedDropIds.clear()
+            channelLastGameId.clear()
+            channelEmptyCatalogAt.clear()
             channelCatalogReconcileAttempts.clear()
             val cached = runCatching { metadataCache.readDrops(userId) }.getOrNull()
             _inventory.value = if (cached == null) {
@@ -721,6 +897,9 @@ class DropsRepository(
             _dashboardError.value = null
             dashboardLoaded = false
             channelDropCatalog.clear()
+            claimedDropIds.clear()
+            channelLastGameId.clear()
+            channelEmptyCatalogAt.clear()
             channelCatalogReconcileAttempts.clear()
             campaignDetails.clear()
             lastInventoryRefreshElapsed = 0L
@@ -760,6 +939,7 @@ class DropsRepository(
     companion object {
         private const val INVENTORY_CACHE_MILLIS = 45_000L
         private const val CHANNEL_CATALOG_CACHE_MILLIS = 5 * 60_000L
+        private const val CHANNEL_EMPTY_CATALOG_RETRY_MILLIS = 15_000L
         private const val MAX_CHANNEL_DROP_REQUESTS = 3
         private const val MAX_AUTO_CLAIMS = 10
         private const val TAG = "DropsRepository"

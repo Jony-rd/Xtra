@@ -36,7 +36,6 @@ class MultiviewSessionStoreTest {
             layoutBeforeFocus = MultiviewLayoutMode.GRID,
             fillVideo = true,
             chatVisible = true,
-            combinedChat = true,
             chatIdentity = "id:200",
             qualityMode = MultiviewQualityMode.QUALITY_720P,
             qualityOverrides = mapOf("id:100" to "720p60"),
@@ -52,7 +51,6 @@ class MultiviewSessionStoreTest {
         assertEquals(state.layoutBeforeFocus, decoded?.layoutBeforeFocus)
         assertEquals(state.fillVideo, decoded?.fillVideo)
         assertEquals(state.chatVisible, decoded?.chatVisible)
-        assertEquals(state.combinedChat, decoded?.combinedChat)
         assertEquals(state.chatIdentity, decoded?.chatIdentity)
         assertEquals(state.qualityMode, decoded?.qualityMode)
         assertEquals(state.qualityOverrides, decoded?.qualityOverrides)

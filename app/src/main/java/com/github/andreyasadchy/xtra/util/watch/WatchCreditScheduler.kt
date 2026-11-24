@@ -34,6 +34,7 @@ internal class WatchCreditClock(
     private val nextSecondsOffset: () -> Int = { Random.nextInt(60) },
     private val repeatIntervalMillis: Long = WATCH_CREDIT_MINUTE_INTERVAL_MILLIS,
     private val initialDelayMillisOverride: Long? = null,
+    private val countBuffering: Boolean = false,
 ) {
     var session: WatchCreditSession? = null
         private set
@@ -61,7 +62,8 @@ internal class WatchCreditClock(
             }
         }
 
-        val shouldRun = session != null && input.isPlaying && !input.isBuffering &&
+        val shouldRun = session != null &&
+                (input.isPlaying || (countBuffering && input.isBuffering)) &&
                 input.liveEligible && input.dropsStreamLive == true
         val activeSince = activeSinceElapsedMillis
         if (activeSince != null && !shouldRun) {
@@ -111,11 +113,14 @@ internal class WatchCreditScheduler(
     private val elapsedRealtime: () -> Long = SystemClock::elapsedRealtime,
     repeatIntervalMillis: Long = WATCH_CREDIT_MINUTE_INTERVAL_MILLIS,
     initialDelayMillisOverride: Long? = null,
+    countBuffering: Boolean = false,
+    private val onNextBeatScheduled: ((Long?) -> Unit)? = null,
 ) {
     private val clock = WatchCreditClock(
         nextSecondsOffset = nextSecondsOffset,
         repeatIntervalMillis = repeatIntervalMillis,
         initialDelayMillisOverride = initialDelayMillisOverride,
+        countBuffering = countBuffering,
     )
 
     fun start(): Job = scope.launch(Dispatchers.IO) {
@@ -147,9 +152,11 @@ internal class WatchCreditScheduler(
                 clock.update(current, now)
                 val remaining = clock.remainingActiveMillis(now)
                 if (remaining == null) {
+                    onNextBeatScheduled?.invoke(null)
                     input.first { it != current }
                     continue
                 }
+                onNextBeatScheduled?.invoke(now + remaining)
 
                 val inputChange = async { input.first { it != current } }
                 val deadlineReached = select {

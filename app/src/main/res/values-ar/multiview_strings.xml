@@ -22,10 +22,6 @@
     <string name="multiview_use_channel">استخدام القناة</string>
     <string name="multiview_duplicate_stream">هذه القناة موجودة بالفعل في العرض المتعدد.</string>
     <string name="multiview_max_streams">يمكنك مشاهدة 4 بثوث كحد أقصى.</string>
-    <string name="multiview_all_chats">كل الدردشات</string>
-    <string name="multiview_channel_chat">دردشة القناة</string>
-    <string name="multiview_combined_chat_description">الدردشة المجمعة للقراءة فقط. اختر قناة لإرسال الرسائل.</string>
-    <string name="multiview_combined_chat_empty">لا توجد رسائل دردشة بعد.</string>
     <string name="multiview_audio_multiple">الصوت: تدفقات%d</string>
     <string name="multiview_layout">التخطيط</string>
     <string name="multiview_layout_auto">تلقائي</string>
@@ -85,7 +81,6 @@
     <string name="multiview_add_streams">إضافة تدفقات</string>
     <string name="multiview_viewers">مشاهدي%d</string>
     <string name="multiview_already_added">تمت إضافتها بالفعل</string>
-    <string name="multiview_combined_message_description">رسالة دردشة%1$s:%2$s</string>
     <string name="multiview_background_playback">تشغيل طرق عرض متعددة</string>
     <string name="multiview_background_playback_description">يتم تشغيل الصوت أثناء إخفاء الفيديو.</string>
 </resources>

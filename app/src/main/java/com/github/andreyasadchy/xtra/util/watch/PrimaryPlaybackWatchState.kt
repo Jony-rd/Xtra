@@ -13,6 +13,10 @@ data class PrimaryPlaybackWatchState(
     val isPlaying: Boolean,
     val isBuffering: Boolean,
     val liveEligible: Boolean,
+    val playWhenReady: Boolean = false,
+    val isAudioOnly: Boolean = false,
+    val isBackground: Boolean = false,
+    val isMuted: Boolean = false,
 )
 
 /** Process-wide snapshot published beside the primary player's viewing-stat callbacks. */
@@ -31,6 +35,10 @@ class PrimaryPlaybackWatchStateStore {
         liveEligible: Boolean,
         isPlaying: Boolean = false,
         isBuffering: Boolean = true,
+        playWhenReady: Boolean = false,
+        isAudioOnly: Boolean = false,
+        isBackground: Boolean = false,
+        isMuted: Boolean = false,
     ): Long = synchronized(lock) {
         val generation = ++nextGeneration
         _state.value = PrimaryPlaybackWatchState(
@@ -40,6 +48,10 @@ class PrimaryPlaybackWatchStateStore {
             isPlaying = isPlaying,
             isBuffering = isBuffering,
             liveEligible = liveEligible,
+            playWhenReady = playWhenReady,
+            isAudioOnly = isAudioOnly,
+            isBackground = isBackground,
+            isMuted = isMuted,
         )
         generation
     }
@@ -51,28 +63,40 @@ class PrimaryPlaybackWatchStateStore {
         isPlaying: Boolean,
         isBuffering: Boolean,
         liveEligible: Boolean,
+        playWhenReady: Boolean = false,
+        isAudioOnly: Boolean = false,
+        isBackground: Boolean = false,
+        isMuted: Boolean = false,
     ): Long? = synchronized(lock) {
         val current = _state.value
         if (current == null || current.ownerId != ownerId || current.generation != generation) {
             return@synchronized null
         }
         if (!current.metadata.hasSamePlaybackAs(metadata)) {
-            val generation = ++nextGeneration
+            val nextGen = ++nextGeneration
             _state.value = PrimaryPlaybackWatchState(
                 ownerId = ownerId,
-                generation = generation,
+                generation = nextGen,
                 metadata = metadata,
                 isPlaying = isPlaying,
                 isBuffering = isBuffering,
                 liveEligible = liveEligible,
+                playWhenReady = playWhenReady,
+                isAudioOnly = isAudioOnly,
+                isBackground = isBackground,
+                isMuted = isMuted,
             )
-            generation
+            nextGen
         } else {
             _state.value = current.copy(
                 metadata = metadata,
                 isPlaying = isPlaying,
                 isBuffering = isBuffering,
                 liveEligible = liveEligible,
+                playWhenReady = playWhenReady,
+                isAudioOnly = isAudioOnly,
+                isBackground = isBackground,
+                isMuted = isMuted,
             )
             generation
         }

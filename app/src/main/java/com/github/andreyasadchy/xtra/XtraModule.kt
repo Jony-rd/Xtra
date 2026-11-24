@@ -98,6 +98,7 @@ import com.github.andreyasadchy.xtra.util.prefs
 import com.github.andreyasadchy.xtra.util.tokenPrefs
 import com.github.andreyasadchy.xtra.util.viewingstats.ViewingStatsRecorder
 import com.github.andreyasadchy.xtra.util.watch.PrimaryPlaybackWatchStateStore
+import com.github.andreyasadchy.xtra.util.watch.WatchCreditTracker
 import com.github.andreyasadchy.xtra.util.updater.ReleaseClient
 import com.github.andreyasadchy.xtra.util.updater.UpdateRepository
 import com.github.andreyasadchy.xtra.util.DatabaseRestoreRecovery
@@ -860,6 +861,17 @@ class XtraModule(private val application: Application) {
 
     val primaryPlaybackWatchState by lazy {
         PrimaryPlaybackWatchStateStore()
+    }
+
+    val watchCreditTracker by lazy {
+        WatchCreditTracker(
+            applicationContext = application.applicationContext,
+            appScope = (application as XtraApp).applicationScope,
+            primaryPlaybackWatchState = primaryPlaybackWatchState,
+            graphQLRepository = graphQLRepository,
+            playerRepository = playerRepository,
+            diagnosticsLogger = diagnosticsLogger,
+        )
     }
 
     val chatAssetLoader: ChatAssetLoader by lazy {

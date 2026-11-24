@@ -8,6 +8,7 @@ import android.graphics.Rect
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.text.SpannableStringBuilder
 import android.text.style.StyleSpan
 import android.text.format.DateUtils
@@ -19,10 +20,10 @@ import android.view.KeyEvent
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
-import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.widget.ImageButton
 import android.widget.ImageView
+import android.widget.ProgressBar
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.LinearLayout
@@ -45,7 +46,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.fragment.findNavController
-import androidx.navigation.NavOptions
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.adapter.FragmentStateAdapter
@@ -85,6 +85,7 @@ import com.github.andreyasadchy.xtra.ui.channel.ChannelPagerFragmentDirections
 import com.github.andreyasadchy.xtra.ui.channel.ChannelPagerFragment
 import com.github.andreyasadchy.xtra.ui.chat.ChatViewModel.Companion.ChatViewModelFactory
 import com.github.andreyasadchy.xtra.ui.drops.DropImageDialog
+import com.github.andreyasadchy.xtra.ui.drops.StreamDropsBottomSheet
 import com.github.andreyasadchy.xtra.ui.drops.dropsImageUrl
 import com.github.andreyasadchy.xtra.ui.common.BaseNetworkFragment
 import com.github.andreyasadchy.xtra.ui.common.restoreDecodedMemoryImage
@@ -126,6 +127,8 @@ import com.github.andreyasadchy.xtra.util.chat.legacyThreadParentId
 import com.github.andreyasadchy.xtra.util.getAlertDialogBuilder
 import com.github.andreyasadchy.xtra.util.isChatEnabled
 import com.github.andreyasadchy.xtra.util.prefs
+import com.github.andreyasadchy.xtra.util.watch.WatchCreditStatusMode
+import com.github.andreyasadchy.xtra.util.watch.WatchCreditTracker
 import com.github.andreyasadchy.xtra.util.isTelevision
 import com.github.andreyasadchy.xtra.util.reduceDragSensitivity
 import com.github.andreyasadchy.xtra.util.tokenPrefs
@@ -158,6 +161,7 @@ import kotlinx.coroutines.withContext
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.time.Instant
 
 private const val TWITCH_LISTENING_ONLY_BADGE_URL =
     "https://static-cdn.jtvnw.net/badges/v1/199a0dba-58f3-494e-a7fc-1fa0a1001fb8/3"
@@ -294,25 +298,24 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
     private var lastSlowModeUiState = SlowModeState()
     private var dismissedDropPresentationKey: String? = null
     private var dropCalloutView: View? = null
+    private var dropCollapsedPillView: View? = null
+    private var dropPillDotView: View? = null
+    private var dropPillLabelView: TextView? = null
+    private var dropExpandedCardView: View? = null
     private var dropImageView: ImageView? = null
     private var dropTitleView: TextView? = null
     private var dropSubtitleView: TextView? = null
-    private var dropProgressView: com.google.android.material.progressindicator.LinearProgressIndicator? = null
+    private var dropProgressView: ProgressBar? = null
+    private var dropCreditTargetView: TextView? = null
+    private var dropActionChipView: TextView? = null
+    private var dropProofDotView: View? = null
+    private var dropProofTextView: TextView? = null
+    private var dropMetaTextView: TextView? = null
+    private var dropMultiviewPeersTextView: TextView? = null
     private var dropMinimizeView: ImageButton? = null
     private var dropCalloutMinimized = false
-    private var expandedDropCalloutPosition: DropCalloutPosition? = null
-    private var minimizedDropCalloutPosition: DropCalloutPosition? = null
-    private var dropCalloutDragStartX = 0f
-    private var dropCalloutDragStartY = 0f
-    private var dropCalloutDragDownX = 0f
-    private var dropCalloutDragDownY = 0f
-    private var dropCalloutDragMoved = false
+    private var dropTickerJob: Job? = null
     private var userGestureActive = false
-
-    private data class DropCalloutPosition(
-        val xFraction: Float,
-        val yFraction: Float,
-    )
 
     private var autoCompleteAdapter: AutoCompleteAdapter<Any>? = null
     private var recommendationAdapter: EmoteRecommendationAdapter? = null
@@ -539,16 +542,6 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
         dropCalloutMinimized = dropCalloutPreferences.getBoolean(
             PREF_DROP_CALLOUT_MINIMIZED,
             savedInstanceState?.getBoolean(KEY_DROP_CALLOUT_MINIMIZED) ?: false,
-        )
-        expandedDropCalloutPosition = readDropCalloutPosition(
-            dropCalloutPreferences,
-            PREF_DROP_CALLOUT_EXPANDED_X,
-            PREF_DROP_CALLOUT_EXPANDED_Y,
-        )
-        minimizedDropCalloutPosition = readDropCalloutPosition(
-            dropCalloutPreferences,
-            PREF_DROP_CALLOUT_MINIMIZED_X,
-            PREF_DROP_CALLOUT_MINIMIZED_Y,
         )
         setupEmotePickerSizing()
         setupDropCallout()
@@ -3307,13 +3300,32 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
     private fun setupDropCallout() {
         val root = binding.root
         dropCalloutView = root.findViewById(R.id.dropCallout)
+        dropCollapsedPillView = root.findViewById(R.id.dropCollapsedPill)
+        dropPillDotView = root.findViewById(R.id.dropPillDot)
+        dropPillLabelView = root.findViewById(R.id.dropPillLabel)
+        dropExpandedCardView = root.findViewById(R.id.dropExpandedCard)
         dropImageView = root.findViewById(R.id.dropImage)
         dropTitleView = root.findViewById(R.id.dropTitle)
         dropSubtitleView = root.findViewById(R.id.dropSubtitle)
         dropProgressView = root.findViewById(R.id.dropProgress)
+        dropCreditTargetView = root.findViewById(R.id.dropCreditTarget)
+        dropActionChipView = root.findViewById(R.id.dropActionChip)
+        dropProofDotView = root.findViewById(R.id.dropProofDot)
+        dropProofTextView = root.findViewById(R.id.dropProofText)
+        dropMetaTextView = root.findViewById(R.id.dropMetaText)
+        dropMultiviewPeersTextView = root.findViewById(R.id.dropMultiviewPeersText)
         dropMinimizeView = root.findViewById(R.id.dropMinimize)
+
+        dropCollapsedPillView?.setOnClickListener {
+            setDropCalloutMinimized(false, animate = true)
+        }
         dropMinimizeView?.setOnClickListener {
-            setDropCalloutMinimized(!dropCalloutMinimized, animate = true)
+            setDropCalloutMinimized(true, animate = true)
+        }
+        root.findViewById<View>(R.id.dropClose)?.setOnClickListener {
+            dismissedDropPresentationKey = dropPresentationKey(viewModel.dropsUiState.value)
+            stopDropTicker()
+            dropCalloutView?.isGone = true
         }
         dropImageView?.setOnClickListener {
             val drop = viewModel.dropsUiState.value.mostRelevantDrop ?: return@setOnClickListener
@@ -3326,316 +3338,445 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                     .show(childFragmentManager, DropImageDialog.TAG)
             }
         }
-
-        dropCalloutView?.setOnClickListener {
-            if (dropCalloutMinimized) {
-                setDropCalloutMinimized(false, animate = true)
-                return@setOnClickListener
-            }
+        dropActionChipView?.setOnClickListener {
+            handleDropActionChipClick()
+        }
+        dropExpandedCardView?.setOnClickListener {
             val state = viewModel.dropsUiState.value
             val drop = state.mostRelevantDrop
-            if (state.claimingDropId != null || drop == null) return@setOnClickListener
-            if (drop.isClaimable) {
+            if (state.claimingDropId == null && drop != null && drop.isClaimable) {
                 viewModel.claimDrop(drop)
-            } else if (!drop.sessionOnly) {
-                findNavController().navigate(
-                    R.id.action_global_dropsDetailFragment,
-                    null,
-                    NavOptions.Builder().setLaunchSingleTop(true).build(),
-                )
-            }
-        }
-
-        dropTitleView?.apply {
-            setOnClickListener { dropCalloutView?.performClick() }
-            setOnTouchListener { _, event -> handleDropCalloutDrag(event, this) }
-        }
-        dropMinimizeView?.setOnTouchListener { _, event ->
-            handleDropCalloutDrag(event, dropMinimizeView)
-        }
-
-        root.findViewById<View>(R.id.dropClose)?.setOnClickListener {
-            viewModel.dropsUiState.value.mostRelevantDrop?.let { drop ->
-                dismissedDropPresentationKey = dropPresentationKey(drop)
-            }
-            dropCalloutView?.isGone = true
-        }
-
-        dropCalloutView?.addOnLayoutChangeListener { callout, _, _, _, _, _, _, _, _ ->
-            if (callout.width > 0 && callout.height > 0) {
-                callout.post { applyDropCalloutPosition() }
+            } else {
+                openCurrentChannelDropsSheet()
             }
         }
         root.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
             if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
                 dropCalloutView?.post {
                     updateDropCallout(viewModel.dropsUiState.value)
-                    applyDropCalloutPosition()
                 }
             }
         }
     }
 
+    private fun handleDropActionChipClick() {
+        val state = viewModel.dropsUiState.value
+        val drop = state.mostRelevantDrop
+        val mvSummary = state.multiviewSummary
+        when {
+            state.claimingDropId != null -> return
+            drop != null && drop.isClaimable -> viewModel.claimDrop(drop)
+            mvSummary != null && !mvSummary.isCurrentChannelFocus -> {
+                viewModel.focusDropsOnCurrentChannel()
+                val login = state.channelLogin ?: arguments?.getString(KEY_CHANNEL_LOGIN).orEmpty()
+                if (login.isNotBlank()) {
+                    Snackbar.make(
+                        binding.root,
+                        getString(R.string.drops_focus_switched, login),
+                        Snackbar.LENGTH_SHORT,
+                    ).show()
+                }
+            }
+            else -> openCurrentChannelDropsSheet()
+        }
+    }
+
+    private fun openCurrentChannelDropsSheet() {
+        val args = arguments ?: return
+        val channelId = args.getString(KEY_CHANNEL_ID) ?: viewModel.dropsUiState.value.channelId
+        val channelLogin = args.getString(KEY_CHANNEL_LOGIN) ?: viewModel.dropsUiState.value.channelLogin
+        if (channelId.isNullOrBlank() && channelLogin.isNullOrBlank()) return
+        val stream = Stream(
+            id = viewModel.streamId ?: args.getString(KEY_STREAM_ID),
+            channelId = channelId,
+            channelLogin = channelLogin,
+            channelName = args.getString(KEY_CHANNEL_NAME) ?: channelLogin,
+            dropsAvailable = true,
+        )
+        StreamDropsBottomSheet.show(this, stream)
+    }
+
+    private fun startDropTicker() {
+        if (dropTickerJob?.isActive == true) return
+        dropTickerJob = viewLifecycleOwner.lifecycleScope.launch {
+            while (isActive) {
+                delay(1_000L)
+                if (!isAdded || _binding == null) break
+                val state = viewModel.dropsUiState.value
+                if (dropCalloutView?.isVisible == true && state.isVisibleInChat) {
+                    updateDropLiveProof(state)
+                }
+            }
+        }
+    }
+
+    private fun stopDropTicker() {
+        dropTickerJob?.cancel()
+        dropTickerJob = null
+    }
+
     private fun updateDropCallout(state: DropsUiState, animateLayoutChange: Boolean = false) {
         val callout = dropCalloutView ?: return
         if (!requireContext().prefs().getBoolean(C.CHAT_DROPS_SHOW, true)) {
+            stopDropTicker()
             callout.isGone = true
             return
         }
 
-        val drop = state.mostRelevantDrop
-        if (drop == null || dismissedDropPresentationKey == dropPresentationKey(drop)) {
+        val presentationKey = dropPresentationKey(state)
+        if (!state.isVisibleInChat || presentationKey == null || dismissedDropPresentationKey == presentationKey) {
+            stopDropTicker()
             callout.isGone = true
             return
         }
 
         val density = resources.displayMetrics.density
-        val compactSize = (48f * density).toInt()
-        val maxExpandedWidth = (300f * density).toInt()
-        val minimumMargin = (16f * density).toInt()
+        val maxExpandedWidth = (340f * density).toInt()
         val parentWidth = (callout.parent as? View)?.width ?: 0
-        val expandedWidth = if (parentWidth > 0) {
-            min(maxExpandedWidth, (parentWidth - minimumMargin).coerceAtLeast(compactSize))
-        } else {
-            maxExpandedWidth
+        dropExpandedCardView?.updateLayoutParams<ViewGroup.LayoutParams> {
+            width = if (parentWidth > maxExpandedWidth) maxExpandedWidth else ViewGroup.LayoutParams.MATCH_PARENT
         }
+
         if (animateLayoutChange) {
             callout.animate().cancel()
             callout.alpha = 0f
         }
-        callout.updateLayoutParams<ViewGroup.LayoutParams> {
-            width = if (dropCalloutMinimized) compactSize else expandedWidth
-            height = if (dropCalloutMinimized) compactSize else ViewGroup.LayoutParams.WRAP_CONTENT
-        }
-        callout.findViewById<ViewGroup>(R.id.dropCalloutContent)?.apply {
-            val padding = if (dropCalloutMinimized) 0 else (10f * density).toInt()
-            setPadding(padding, padding, padding, padding)
-            minimumHeight = if (dropCalloutMinimized) compactSize else 0
-        }
-        (callout as? com.google.android.material.card.MaterialCardView)?.radius =
-            (if (dropCalloutMinimized) 24f else 16f) * density
 
-        val isClaiming = state.claimingDropId == drop.id
-        val rewardName = drop.rewardName ?: drop.name
-        dropTitleView?.text = getString(
-            if (drop.isClaimable) R.string.drops_ready_title else R.string.drops_progress_title,
-        )
+        val drop = state.mostRelevantDrop
+        val isClaiming = drop != null && state.claimingDropId == drop.id
+        val isClaimable = drop?.isClaimable == true
+        val allClaimed = drop == null && state.allChannelDropsClaimed
+        val wrongGame = drop == null && !allClaimed && !state.categoryMismatchGameName.isNullOrBlank()
+        val rewardName = drop?.rewardName ?: drop?.name
+
+        dropCollapsedPillView?.isGone = !dropCalloutMinimized
+        dropExpandedCardView?.isGone = dropCalloutMinimized
+
+        dropTitleView?.text = when {
+            isClaimable -> "${getString(R.string.drops_action_claim)} · ${rewardName ?: getString(R.string.drops)}"
+            drop != null -> rewardName ?: getString(R.string.drops_progress_title)
+            allClaimed -> getString(R.string.drops_all_claimed_title)
+            wrongGame -> getString(R.string.drops_wrong_game_title, state.categoryMismatchGameName.orEmpty())
+            else -> getString(R.string.drops_progress_title)
+        }
+
         dropSubtitleView?.text = when {
             isClaiming -> getString(R.string.drops_claiming)
-            drop.isClaimable -> listOfNotNull(
+            isClaimable -> listOfNotNull(
                 rewardName,
                 getString(R.string.drops_tap_to_claim),
             ).joinToString(" · ")
-            dropCalloutMinimized -> listOfNotNull(
-                rewardName,
-                "${drop.progressPercent}%",
-            ).joinToString(" · ")
-            else -> listOfNotNull(
-                rewardName,
-                "${drop.progressPercent}%",
-                "${drop.currentMinutesWatched}/${drop.requiredMinutesWatched}\u00A0min",
-            ).joinToString(" · ")
+            drop != null -> {
+                val base = "${drop.currentMinutesWatched}/${drop.requiredMinutesWatched}m (${drop.progressPercent}%)"
+                if (state.tierTotal > 1) {
+                    "$base · ${getString(R.string.drops_meta_tier, state.tierIndex, state.tierTotal)}"
+                } else {
+                    base
+                }
+            }
+            allClaimed -> getString(R.string.drops_all_claimed_subtitle, state.claimedWatchDrops, state.totalWatchDrops)
+            wrongGame -> getString(R.string.drops_wrong_game_subtitle, state.categoryMismatchGameName.orEmpty())
+            else -> ""
         }
-        dropSubtitleView?.maxLines = if (dropCalloutMinimized) 1 else 2
-        dropImageView?.isGone = dropCalloutMinimized
-        dropTitleView?.isGone = dropCalloutMinimized
-        dropSubtitleView?.isGone = dropCalloutMinimized
-        dropCloseView()?.isGone = dropCalloutMinimized
-        dropProgressView?.progress = drop.progressPercent
-        dropProgressView?.isGone = dropCalloutMinimized
-        dropMinimizeView?.setImageResource(
-            if (dropCalloutMinimized) {
-                R.drawable.baseline_expand_more_black_24
-            } else {
-                R.drawable.ic_expand_less
-            },
+
+        dropProgressView?.apply {
+            isGone = wrongGame
+            progress = when {
+                allClaimed -> 1000
+                drop != null -> (drop.progressPercent * 10).coerceIn(0, 1000)
+                else -> 0
+            }
+        }
+
+        val currentLogin = state.channelLogin
+            ?: arguments?.getString(KEY_CHANNEL_LOGIN)
+            ?: getString(R.string.live)
+        val mvSummary = state.multiviewSummary
+        val twitchSession = state.twitchSession
+        val sessionOnThisChannel = twitchSession != null && WatchCreditTracker.matchesChannel(
+            twitchSession.channelId,
+            twitchSession.channelLogin,
+            state.channelId ?: arguments?.getString(KEY_CHANNEL_ID),
+            currentLogin,
         )
-        dropMinimizeView?.contentDescription = getString(
-            if (dropCalloutMinimized) {
-                R.string.drops_expand_progress
-            } else {
-                R.string.drops_minimize_progress
-            },
-        )
-        dropProgressView?.contentDescription = getString(
-            R.string.drops_progress_accessibility,
-            drop.currentMinutesWatched,
-            drop.requiredMinutesWatched,
-            drop.progressPercent,
-        )
-        dropImageView?.contentDescription = getString(
-            R.string.drops_view_image,
-            rewardName ?: getString(R.string.drops),
-        )
-        dropTitleView?.contentDescription = listOfNotNull(
-            rewardName?.takeIf { it.isNotBlank() },
-            getString(R.string.drops_move_progress),
-        ).joinToString(". ")
-        callout.isClickable = dropCalloutMinimized || (!isClaiming && !drop.sessionOnly)
+
+        val targetLogin = when {
+            mvSummary != null && !mvSummary.isCurrentChannelFocus ->
+                mvSummary.dropsFocusChannelLogin ?: currentLogin
+            twitchSession != null && !sessionOnThisChannel && !twitchSession.channelLogin.isNullOrBlank() ->
+                twitchSession.channelLogin
+            else -> currentLogin
+        }
+        val showTargetAsOther = (mvSummary != null && !mvSummary.isCurrentChannelFocus) ||
+            (twitchSession != null && !sessionOnThisChannel && !twitchSession.channelLogin.isNullOrBlank())
+
+        dropCreditTargetView?.apply {
+            text = when {
+                showTargetAsOther -> getString(R.string.drops_credit_target_other, targetLogin)
+                sessionOnThisChannel || state.watchStatus?.mode == WatchCreditStatusMode.COUNTING ->
+                    getString(R.string.drops_credit_target_you, currentLogin)
+                else -> getString(R.string.drops_credit_target_checking, currentLogin)
+            }
+            setTextColor(
+                when {
+                    showTargetAsOther -> 0xFFFBBF24.toInt()
+                    sessionOnThisChannel -> 0xFF86EFAC.toInt()
+                    else -> 0xFFCBD5E1.toInt()
+                },
+            )
+        }
+
+        dropActionChipView?.apply {
+            isGone = isClaiming
+            text = when {
+                isClaimable -> getString(R.string.drops_action_claim)
+                mvSummary != null && !mvSummary.isCurrentChannelFocus -> getString(R.string.drops_action_focus)
+                else -> getString(R.string.drops_action_details)
+            }
+        }
+
+        updateDropLiveProof(state)
+
+        if (!dropCalloutMinimized && drop != null && !drop.imageUrl.isNullOrBlank()) {
+            dropImageView?.imageTintList = null
+            dropImageView?.contentDescription = getString(
+                R.string.drops_view_image,
+                rewardName ?: getString(R.string.drops),
+            )
+            updateDropImage(drop.imageUrl, drop.imageSource)
+        } else {
+            disposeDropImageRequest()
+            dropImageUrl = null
+            dropImageTarget = null
+            dropImageView?.apply {
+                isVisible = !dropCalloutMinimized
+                if (!dropCalloutMinimized) {
+                    setImageResource(R.drawable.ic_drops)
+                    imageTintList = ColorStateList.valueOf(0xFFC4B5FD.toInt())
+                }
+            }
+        }
+
         val targetAlpha = if (isClaiming) 0.65f else 1f
-        updateDropImage(drop.imageUrl, drop.imageSource)
         callout.isVisible = true
         if (animateLayoutChange) {
             callout.animate().alpha(targetAlpha).setDuration(150L).start()
         } else {
             callout.alpha = targetAlpha
         }
-        if (callout.isLaidOut) applyDropCalloutPosition()
+        startDropTicker()
     }
 
-    private fun dropCloseView(): View? = dropCalloutView?.findViewById(R.id.dropClose)
+    private fun updateDropLiveProof(state: DropsUiState) {
+        val now = SystemClock.elapsedRealtime()
+        val drop = state.mostRelevantDrop
+        val status = state.watchStatus
+        val mvSummary = state.multiviewSummary
+        val twitchSession = state.twitchSession
+        val currentLogin = state.channelLogin
+            ?: arguments?.getString(KEY_CHANNEL_LOGIN)
+            ?: getString(R.string.live)
+        val currentId = state.channelId ?: arguments?.getString(KEY_CHANNEL_ID)
+        val sessionOnThisChannel = twitchSession != null && WatchCreditTracker.matchesChannel(
+            twitchSession.channelId,
+            twitchSession.channelLogin,
+            currentId,
+            currentLogin,
+        )
 
-    private fun handleDropCalloutDrag(event: MotionEvent, clickTarget: View?): Boolean {
-        val callout = dropCalloutView ?: return false
-        val parent = callout.parent as? View ?: return false
-        val touchSlop = ViewConfiguration.get(requireContext()).scaledTouchSlop
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                dropCalloutDragDownX = event.rawX
-                dropCalloutDragDownY = event.rawY
-                dropCalloutDragStartX = callout.x
-                dropCalloutDragStartY = callout.y
-                dropCalloutDragMoved = false
-                return true
-            }
-            MotionEvent.ACTION_MOVE -> {
-                val deltaX = event.rawX - dropCalloutDragDownX
-                val deltaY = event.rawY - dropCalloutDragDownY
-                if (!dropCalloutDragMoved &&
-                    (kotlin.math.abs(deltaX) > touchSlop || kotlin.math.abs(deltaY) > touchSlop)
-                ) {
-                    dropCalloutDragMoved = true
-                }
-                if (dropCalloutDragMoved) {
-                    val edgeMargin = (8f * resources.displayMetrics.density).toInt()
-                    val minX = edgeMargin.toFloat()
-                    val minY = edgeMargin.toFloat()
-                    val maxX = (parent.width - callout.width - edgeMargin).coerceAtLeast(edgeMargin).toFloat()
-                    val maxY = (parent.height - callout.height - edgeMargin).coerceAtLeast(edgeMargin).toFloat()
-                    callout.x = (dropCalloutDragStartX + deltaX).coerceIn(minX, maxX)
-                    callout.y = (dropCalloutDragStartY + deltaY).coerceIn(minY, maxY)
-                }
-                return true
-            }
-            MotionEvent.ACTION_UP -> {
-                if (dropCalloutDragMoved) {
-                    rememberDropCalloutPosition()
-                    persistDropCalloutState()
-                } else {
-                    clickTarget?.performClick()
-                }
-                dropCalloutDragMoved = false
-                return true
-            }
-            MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN -> {
-                if (dropCalloutDragMoved) {
-                    rememberDropCalloutPosition()
-                    persistDropCalloutState()
-                }
-                dropCalloutDragMoved = false
-                return true
+        val nextSec = status?.nextPingAtElapsedMs?.let { nextAt ->
+            ((nextAt - now + 999L) / 1000L).coerceAtLeast(0L).toInt()
+        }
+        val nextText = if (nextSec != null) {
+            getString(R.string.drops_countdown_seconds, nextSec)
+        } else {
+            "…"
+        }
+        val agoText = status?.lastSuccessAtElapsedMs?.let { lastAt ->
+            val secs = ((now - lastAt) / 1000L).coerceAtLeast(0L).toInt()
+            if (secs <= 2) {
+                getString(R.string.drops_ago_now)
+            } else {
+                getString(R.string.drops_ago_seconds, secs)
             }
         }
-        return true
+
+        val syncDelayed = status != null &&
+            status.mode == WatchCreditStatusMode.COUNTING &&
+            status.consecutiveOkPings >= 2 &&
+            state.lastHermesProgressAtElapsedMs == null &&
+            !sessionOnThisChannel &&
+            drop != null &&
+            !drop.isClaimable &&
+            drop.currentMinutesWatched == 0
+
+        val dotColor: Int
+        val pillRateSymbol: String
+        val proofMessage: String
+        when {
+            drop?.isClaimable == true -> {
+                dotColor = 0xFFC084FC.toInt()
+                pillRateSymbol = "!"
+                proofMessage = getString(R.string.drops_tap_to_claim)
+            }
+            drop == null && state.allChannelDropsClaimed -> {
+                dotColor = 0xFF4ADE80.toInt()
+                pillRateSymbol = "✓"
+                proofMessage = getString(R.string.drops_all_claimed_subtitle, state.claimedWatchDrops, state.totalWatchDrops)
+            }
+            drop == null && !state.categoryMismatchGameName.isNullOrBlank() -> {
+                dotColor = 0xFFFBBF24.toInt()
+                pillRateSymbol = "!"
+                proofMessage = getString(R.string.drops_wrong_game_subtitle, state.categoryMismatchGameName.orEmpty())
+            }
+            status == null || status.mode == WatchCreditStatusMode.STARTING -> {
+                dotColor = 0xFFFBBF24.toInt()
+                pillRateSymbol = "~"
+                proofMessage = getString(R.string.drops_status_starting, nextText)
+            }
+            status.mode == WatchCreditStatusMode.PING_FAILED -> {
+                dotColor = 0xFFF87171.toInt()
+                pillRateSymbol = "!"
+                proofMessage = getString(R.string.drops_status_ping_failed, nextText)
+            }
+            status.mode == WatchCreditStatusMode.OFFLINE -> {
+                dotColor = 0xFFF87171.toInt()
+                pillRateSymbol = "OFF"
+                proofMessage = getString(R.string.drops_status_offline)
+            }
+            status.mode == WatchCreditStatusMode.NO_AUTH -> {
+                dotColor = 0xFFF87171.toInt()
+                pillRateSymbol = "!"
+                proofMessage = getString(R.string.drops_status_no_auth)
+            }
+            status.mode == WatchCreditStatusMode.PAUSED_REWIND -> {
+                dotColor = 0xFF94A3B8.toInt()
+                pillRateSymbol = "⏸"
+                proofMessage = getString(R.string.drops_status_paused_rewind)
+            }
+            status.mode == WatchCreditStatusMode.PAUSED_USER -> {
+                dotColor = 0xFF94A3B8.toInt()
+                pillRateSymbol = "⏸"
+                proofMessage = getString(R.string.drops_status_paused_user)
+            }
+            status.mode == WatchCreditStatusMode.MISSING_STREAM_ID -> {
+                dotColor = 0xFFFBBF24.toInt()
+                pillRateSymbol = "~"
+                proofMessage = getString(R.string.drops_status_missing_stream)
+            }
+            status.isBuffering -> {
+                dotColor = 0xFFFBBF24.toInt()
+                pillRateSymbol = "1x"
+                proofMessage = getString(R.string.drops_status_buffering, nextText)
+            }
+            syncDelayed -> {
+                dotColor = 0xFFFBBF24.toInt()
+                pillRateSymbol = "1x!"
+                proofMessage = getString(R.string.drops_status_sync_delayed, status.consecutiveOkPings)
+            }
+            else -> {
+                dotColor = 0xFF4ADE80.toInt()
+                pillRateSymbol = "1x"
+                proofMessage = getString(
+                    R.string.drops_status_counting,
+                    status.consecutiveOkPings.coerceAtLeast(1),
+                    agoText ?: getString(R.string.drops_ago_now),
+                    nextText,
+                )
+            }
+        }
+
+        val pillText = when {
+            drop?.isClaimable == true -> getString(R.string.drops_pill_claim)
+            drop != null -> getString(
+                R.string.drops_pill_progress,
+                drop.currentMinutesWatched,
+                drop.requiredMinutesWatched,
+                pillRateSymbol,
+            )
+            state.allChannelDropsClaimed -> getString(
+                R.string.drops_pill_all_claimed,
+                state.claimedWatchDrops,
+                state.totalWatchDrops,
+            )
+            !state.categoryMismatchGameName.isNullOrBlank() -> getString(R.string.drops_pill_wrong_game)
+            else -> ""
+        }
+
+        dropPillLabelView?.text = pillText
+        dropPillDotView?.backgroundTintList = ColorStateList.valueOf(dotColor)
+        dropProofDotView?.backgroundTintList = ColorStateList.valueOf(dotColor)
+        dropProofTextView?.text = proofMessage
+
+        val progressBarTint = when {
+            drop?.isClaimable == true || state.allChannelDropsClaimed -> 0xFF4ADE80.toInt()
+            dotColor == 0xFFF87171.toInt() || dotColor == 0xFFFBBF24.toInt() -> 0xFFFBBF24.toInt()
+            else -> 0xFF9146FF.toInt()
+        }
+        dropProgressView?.progressTintList = ColorStateList.valueOf(progressBarTint)
+
+        val wsConnected = viewModel.connectionState.value == ChatViewModel.ConnectionState.CONNECTED
+        val metaParts = buildList {
+            add(getString(if (wsConnected) R.string.drops_meta_ws_ok else R.string.drops_meta_ws_wait))
+            if (drop != null && !drop.isClaimable && !drop.isClaimed &&
+                drop.requiredMinutesWatched > drop.currentMinutesWatched
+            ) {
+                add(getString(R.string.drops_meta_eta_mins, drop.requiredMinutesWatched - drop.currentMinutesWatched))
+            }
+            formatDropCampaignEndShort(state.activeCampaignEndTime)?.let { endText ->
+                add(getString(R.string.drops_meta_ends, endText))
+            }
+            if (status?.isAudioOnly == true) add(getString(R.string.drops_flag_audio))
+            if (status?.isBackground == true) add(getString(R.string.drops_flag_bg))
+            if (status?.isMuted == true) add(getString(R.string.drops_flag_muted))
+        }
+        dropMetaTextView?.apply {
+            text = metaParts.joinToString(" · ")
+            isGone = metaParts.isEmpty()
+        }
+
+        dropMultiviewPeersTextView?.apply {
+            if (mvSummary == null) {
+                isGone = true
+            } else {
+                isVisible = true
+                val focusName = mvSummary.dropsFocusChannelLogin ?: currentLogin
+                text = if (mvSummary.allCounting) {
+                    getString(R.string.drops_multiview_peers_all, mvSummary.totalStreams, focusName)
+                } else {
+                    getString(
+                        R.string.drops_multiview_peers_partial,
+                        mvSummary.countingStreams,
+                        mvSummary.totalStreams,
+                        focusName,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun formatDropCampaignEndShort(isoTimestamp: String?): String? {
+        val raw = isoTimestamp?.takeIf(String::isNotBlank) ?: return null
+        val epochMs = runCatching { Instant.parseOrNull(raw)?.toEpochMilliseconds() }.getOrNull()
+            ?: return null
+        val diffMs = epochMs - System.currentTimeMillis()
+        if (diffMs <= 0L) return null
+        val totalHours = diffMs / 3_600_000L
+        return when {
+            totalHours >= 48L -> "${totalHours / 24L}d"
+            totalHours >= 1L -> "${totalHours}h"
+            else -> "${((diffMs / 60_000L).coerceAtLeast(1L))}m"
+        }
     }
 
     private fun setDropCalloutMinimized(minimized: Boolean, animate: Boolean) {
         if (dropCalloutMinimized == minimized) return
-        val currentPosition = rememberDropCalloutPosition()
-        if (currentPosition != null && dropCalloutPositionFor(minimized) == null) {
-            setDropCalloutPosition(currentPosition, minimized)
-        }
         dropCalloutMinimized = minimized
-        persistDropCalloutState()
+        requireContext().prefs().edit()
+            .putBoolean(PREF_DROP_CALLOUT_MINIMIZED, dropCalloutMinimized)
+            .apply()
         updateDropCallout(viewModel.dropsUiState.value, animateLayoutChange = animate)
     }
-
-    private fun rememberDropCalloutPosition(): DropCalloutPosition? {
-        val callout = dropCalloutView ?: return null
-        val parent = callout.parent as? View ?: return null
-        if (callout.width == 0 || callout.height == 0 || parent.width == 0 || parent.height == 0) return null
-
-        val edgeMargin = (8f * resources.displayMetrics.density).toInt().toFloat()
-        val maxX = (parent.width - callout.width - edgeMargin).coerceAtLeast(edgeMargin)
-        val maxY = (parent.height - callout.height - edgeMargin).coerceAtLeast(edgeMargin)
-        val position = DropCalloutPosition(
-            xFraction = normalizedDropCalloutPosition(callout.x, edgeMargin, maxX),
-            yFraction = normalizedDropCalloutPosition(callout.y, edgeMargin, maxY),
-        )
-        setDropCalloutPosition(position, dropCalloutMinimized)
-        return position
-    }
-
-    private fun normalizedDropCalloutPosition(value: Float, minimum: Float, maximum: Float): Float =
-        if (maximum <= minimum) 0f else ((value - minimum) / (maximum - minimum)).coerceIn(0f, 1f)
-
-    private fun dropCalloutPositionFor(minimized: Boolean): DropCalloutPosition? =
-        if (minimized) minimizedDropCalloutPosition else expandedDropCalloutPosition
-
-    private fun setDropCalloutPosition(position: DropCalloutPosition, minimized: Boolean) {
-        if (minimized) {
-            minimizedDropCalloutPosition = position
-        } else {
-            expandedDropCalloutPosition = position
-        }
-    }
-
-    private fun persistDropCalloutState() {
-        val preferences = requireContext().prefs()
-        val editor = preferences.edit()
-            .putBoolean(PREF_DROP_CALLOUT_MINIMIZED, dropCalloutMinimized)
-        expandedDropCalloutPosition?.let { position ->
-            editor.putFloat(PREF_DROP_CALLOUT_EXPANDED_X, position.xFraction)
-                .putFloat(PREF_DROP_CALLOUT_EXPANDED_Y, position.yFraction)
-        }
-        minimizedDropCalloutPosition?.let { position ->
-            editor.putFloat(PREF_DROP_CALLOUT_MINIMIZED_X, position.xFraction)
-                .putFloat(PREF_DROP_CALLOUT_MINIMIZED_Y, position.yFraction)
-        }
-        editor.apply()
-    }
-
-    private fun readDropCalloutPosition(
-        preferences: SharedPreferences,
-        xKey: String,
-        yKey: String,
-    ): DropCalloutPosition? {
-        if (!preferences.contains(xKey) || !preferences.contains(yKey)) return null
-        val xFraction = preferences.getFloat(xKey, 0f)
-        val yFraction = preferences.getFloat(yKey, 0f)
-        if (!xFraction.isFinite() || !yFraction.isFinite()) return null
-        return DropCalloutPosition(
-            xFraction = xFraction.coerceIn(0f, 1f),
-            yFraction = yFraction.coerceIn(0f, 1f),
-        )
-    }
-
-    private fun applyDropCalloutPosition() {
-        val callout = dropCalloutView ?: return
-        val parent = callout.parent as? View ?: return
-        if (callout.width == 0 || callout.height == 0 || parent.width == 0 || parent.height == 0) return
-
-        val edgeMargin = (8f * resources.displayMetrics.density).toInt().toFloat()
-        val maxX = (parent.width - callout.width - edgeMargin).coerceAtLeast(edgeMargin)
-        val maxY = (parent.height - callout.height - edgeMargin).coerceAtLeast(edgeMargin)
-        val position = dropCalloutPositionFor(dropCalloutMinimized)
-        val x = position?.let { edgeMargin + (maxX - edgeMargin) * it.xFraction }
-            ?: callout.x.coerceIn(edgeMargin, maxX)
-        val y = position?.let { edgeMargin + (maxY - edgeMargin) * it.yFraction }
-            ?: callout.y.coerceIn(edgeMargin, maxY)
-        callout.x = x
-        callout.y = y
-        if (position == null) {
-            setDropCalloutPosition(
-                DropCalloutPosition(
-                    xFraction = normalizedDropCalloutPosition(x, edgeMargin, maxX),
-                    yFraction = normalizedDropCalloutPosition(y, edgeMargin, maxY),
-                ),
-                dropCalloutMinimized,
-            )
-        }
-    }
-
     private fun updateDropImage(
         url: String?,
         source: TwitchDropImageSource,
@@ -3648,7 +3789,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
         dropImageTarget = image
         val requestGeneration = ++dropImageRequestGeneration
         image.setImageDrawable(null)
-        image.isVisible = !dropCalloutMinimized && !url.isNullOrBlank()
+        image.isVisible = !dropCalloutMinimized
         image.isClickable = !url.isNullOrBlank()
         image.isFocusable = image.isClickable
         if (url.isNullOrBlank()) return
@@ -3706,8 +3847,15 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
         Snackbar.make(binding.root, message, Snackbar.LENGTH_LONG).show()
     }
 
-    private fun dropPresentationKey(drop: TwitchDrop): String =
-        "${drop.id}:${drop.isClaimable}"
+    private fun dropPresentationKey(state: DropsUiState): String? {
+        val drop = state.mostRelevantDrop
+        return when {
+            drop != null -> "${drop.id}:${drop.isClaimable}"
+            state.allChannelDropsClaimed -> "${state.channelId.orEmpty()}:all_claimed:${state.claimedWatchDrops}:${state.totalWatchDrops}"
+            !state.categoryMismatchGameName.isNullOrBlank() -> "${state.channelId.orEmpty()}:wrong_game:${state.categoryMismatchGameName}"
+            else -> null
+        }
+    }
 
     private fun sendMessage(replyId: String? = null): Boolean {
         if (!messagingEnabled || anonymousModeActive || composerSubmissionInProgress || moderatorActionInFlight) return false
@@ -4468,11 +4616,22 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
         composerOverlayState = null
         pendingComposerText = null
         lastSlowModeUiState = SlowModeState()
+        stopDropTicker()
         dropCalloutView = null
+        dropCollapsedPillView = null
+        dropPillDotView = null
+        dropPillLabelView = null
+        dropExpandedCardView = null
         dropImageView = null
         dropTitleView = null
         dropSubtitleView = null
         dropProgressView = null
+        dropCreditTargetView = null
+        dropActionChipView = null
+        dropProofDotView = null
+        dropProofTextView = null
+        dropMetaTextView = null
+        dropMultiviewPeersTextView = null
         dropMinimizeView = null
         super.onDestroyView()
         _binding = null
@@ -4613,10 +4772,6 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
         private const val KEY_PINNED_EXPANSION_CHANGED_BY_USER = "pinnedExpansionChangedByUser"
         private const val KEY_DROP_CALLOUT_MINIMIZED = "dropCalloutMinimized"
         private const val PREF_DROP_CALLOUT_MINIMIZED = "chat_drop_callout_minimized"
-        private const val PREF_DROP_CALLOUT_EXPANDED_X = "chat_drop_callout_expanded_x"
-        private const val PREF_DROP_CALLOUT_EXPANDED_Y = "chat_drop_callout_expanded_y"
-        private const val PREF_DROP_CALLOUT_MINIMIZED_X = "chat_drop_callout_minimized_x"
-        private const val PREF_DROP_CALLOUT_MINIMIZED_Y = "chat_drop_callout_minimized_y"
         private const val COMPACT_OVERLAY_VIEWPORT_HEIGHT_DP = 640f
         private const val KEY_V2_FOLLOW_MODE = "chatV2FollowMode"
         private const val KEY_V2_NEW_MESSAGE_COUNT = "chatV2NewMessageCount"

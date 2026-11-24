@@ -1847,6 +1847,7 @@ class PlaybackService : MediaSessionService() {
                             }
                             SET_BACKGROUND_PLAYBACK -> {
                                 backgroundPlayback = customCommand.customExtras.getBoolean(BACKGROUND_PLAYBACK)
+                                updatePrimaryPlaybackWatchState(session.player)
                                 updateHiddenStreamAudio()
                                 if (!backgroundPlayback) {
                                     restoreBackgroundVideoSuppression(session.player)
@@ -7127,10 +7128,15 @@ class PlaybackService : MediaSessionService() {
         val ownerId = primaryPlaybackWatchOwnerId ?: store.newOwnerId().also {
             primaryPlaybackWatchOwnerId = it
         }
+        val player = castPlayer ?: playbackPlayer
         primaryPlaybackWatchGeneration = store.begin(
             ownerId = ownerId,
             metadata = metadata,
             liveEligible = isLivePlaybackEligible(metadata),
+            playWhenReady = player?.playWhenReady == true,
+            isAudioOnly = isLogicalAudioOnly(),
+            isBackground = backgroundPlayback,
+            isMuted = player != null && player.volume <= 0.01f,
         )
     }
 
@@ -7144,6 +7150,8 @@ class PlaybackService : MediaSessionService() {
         }
         val liveEligible = isLivePlaybackEligible(metadata)
         val generation = primaryPlaybackWatchGeneration
+        val isAudioOnly = isLogicalAudioOnly()
+        val isMuted = player.volume <= 0.01f
         if (generation != null) {
             primaryPlaybackWatchGeneration = store.update(
                 ownerId = ownerId,
@@ -7152,6 +7160,10 @@ class PlaybackService : MediaSessionService() {
                 isPlaying = player.isPlaying,
                 isBuffering = player.playbackState == Player.STATE_BUFFERING,
                 liveEligible = liveEligible,
+                playWhenReady = player.playWhenReady,
+                isAudioOnly = isAudioOnly,
+                isBackground = backgroundPlayback,
+                isMuted = isMuted,
             )
         } else if (store.state.value == null) {
             primaryPlaybackWatchGeneration = store.begin(
@@ -7160,6 +7172,10 @@ class PlaybackService : MediaSessionService() {
                 liveEligible = liveEligible,
                 isPlaying = player.isPlaying,
                 isBuffering = player.playbackState == Player.STATE_BUFFERING,
+                playWhenReady = player.playWhenReady,
+                isAudioOnly = isAudioOnly,
+                isBackground = backgroundPlayback,
+                isMuted = isMuted,
             )
         }
     }

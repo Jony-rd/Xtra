@@ -22,10 +22,6 @@
     <string name="multiview_use_channel">Kanalı kullan</string>
     <string name="multiview_duplicate_stream">Bu kanal zaten çoklu görünümde.</string>
     <string name="multiview_max_streams">En fazla 4 yayın izleyebilirsiniz.</string>
-    <string name="multiview_all_chats">Tüm sohbetler</string>
-    <string name="multiview_channel_chat">Kanal sohbeti</string>
-    <string name="multiview_combined_chat_description">Birleşik sohbet salt okunurdur. Mesaj göndermek için kanal seçin.</string>
-    <string name="multiview_combined_chat_empty">Henüz sohbet mesajı yok.</string>
     <string name="multiview_audio_multiple">Ses: %d akışları</string>
     <string name="multiview_layout">Düzen</string>
     <string name="multiview_layout_auto">Otomatik</string>
@@ -85,7 +81,6 @@
     <string name="multiview_add_streams">Akış ekleyin</string>
     <string name="multiview_viewers">%d görüntüleyenler</string>
     <string name="multiview_already_added">Zaten eklendi</string>
-    <string name="multiview_combined_message_description">%1$s sohbet mesajı: %2$s</string>
     <string name="multiview_background_playback">Çoklu görünüm oynatma</string>
     <string name="multiview_background_playback_description">Video gizlenirken ses oynatılıyor.</string>
 </resources>

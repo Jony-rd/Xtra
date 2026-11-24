@@ -1012,6 +1012,12 @@ class PlayerRepository(
         }
     }
 
+    data class WatchCreditSendResult(
+        val success: Boolean,
+        val httpStatus: Int? = null,
+        val errorReason: String? = null,
+    )
+
     suspend fun sendMinuteWatched(
         networkLibrary: String?,
         userId: String?,
@@ -1024,7 +1030,39 @@ class PlayerRepository(
         secondsOffset: Int,
         game: String? = null,
         gameId: String? = null,
-    ): Boolean = withContext(Dispatchers.IO) {
+        hidden: Boolean = false,
+        muted: Boolean = false,
+    ): Boolean = sendMinuteWatchedDetailed(
+        networkLibrary = networkLibrary,
+        userId = userId,
+        streamId = streamId,
+        channelId = channelId,
+        channelLogin = channelLogin,
+        playbackSessionId = playbackSessionId,
+        isSessionCurrent = isSessionCurrent,
+        minutesLogged = minutesLogged,
+        secondsOffset = secondsOffset,
+        game = game,
+        gameId = gameId,
+        hidden = hidden,
+        muted = muted,
+    ).success
+
+    suspend fun sendMinuteWatchedDetailed(
+        networkLibrary: String?,
+        userId: String?,
+        streamId: String?,
+        channelId: String?,
+        channelLogin: String?,
+        playbackSessionId: Long,
+        isSessionCurrent: () -> Boolean,
+        minutesLogged: Int,
+        secondsOffset: Int,
+        game: String? = null,
+        gameId: String? = null,
+        hidden: Boolean = false,
+        muted: Boolean = false,
+    ): WatchCreditSendResult = withContext(Dispatchers.IO) {
         val logger = diagnosticsLogger
         val token = if (logger?.isEnabled == true) {
             logger.beginRequest(
@@ -1055,7 +1093,7 @@ class PlayerRepository(
                         WatchCreditTelemetry.LOG_TAG,
                         "watch heartbeat skipped: missing userId=${!userId.isNullOrBlank()} broadcastId=${!streamId.isNullOrBlank()} channelId=${!channelId.isNullOrBlank()} channelLogin=${!channelLogin.isNullOrBlank()}",
                     )
-                    return@run false
+                    return@run WatchCreditSendResult(success = false, errorReason = "missing_id")
                 }
 
                 val session = WatchCreditSession(
@@ -1118,13 +1156,14 @@ class PlayerRepository(
 
                 if (!isSessionCurrent()) {
                     Log.d(WatchCreditTelemetry.LOG_TAG, "watch heartbeat skipped: session ended before discovery")
-                    return@run false
+                    return@run WatchCreditSendResult(success = false, errorReason = "cancelled")
                 }
 
-                val (spadeUrl, fromCache) = resolveSpadeUrl(forceRefresh = false) ?: return@run false
+                val (spadeUrl, fromCache) = resolveSpadeUrl(forceRefresh = false)
+                    ?: return@run WatchCreditSendResult(success = false, errorReason = "spade_discovery")
                 if (!isSessionCurrent()) {
                     Log.d(WatchCreditTelemetry.LOG_TAG, "watch heartbeat skipped: session ended before post")
-                    return@run false
+                    return@run WatchCreditSendResult(success = false, errorReason = "cancelled")
                 }
 
                 val body = WatchCreditTelemetry.buildMinuteWatchedPayload(
@@ -1133,15 +1172,18 @@ class PlayerRepository(
                     secondsOffset = secondsOffset,
                     game = game,
                     gameId = gameId,
+                    hidden = hidden,
+                    muted = muted,
                 )
                 val spadeRequest = "data=" + Base64.encodeToString(body.toByteArray(), Base64.NO_WRAP)
 
-                if (postMinuteWatched(networkLibrary, spadeUrl, spadeRequest, minutesLogged, secondsOffset)) {
-                    return@run true
+                val firstAttempt = postMinuteWatched(networkLibrary, spadeUrl, spadeRequest, minutesLogged, secondsOffset)
+                if (firstAttempt.success) {
+                    return@run firstAttempt
                 }
                 if (!isSessionCurrent()) {
                     Log.d(WatchCreditTelemetry.LOG_TAG, "watch heartbeat retry skipped: session ended after post")
-                    return@run false
+                    return@run WatchCreditSendResult(success = false, errorReason = "cancelled")
                 }
                 if (!fromCache) {
                     watchCreditMutex.withLock {
@@ -1150,7 +1192,7 @@ class PlayerRepository(
                             cachedSpadeUrlElapsedMs = 0L
                         }
                     }
-                    return@run false
+                    return@run firstAttempt
                 }
 
                 Log.w(WatchCreditTelemetry.LOG_TAG, "cached Spade URL failed; rediscovering and retrying once")
@@ -1159,14 +1201,15 @@ class PlayerRepository(
                     fields = listOf(DiagnosticsField(DiagnosticsFieldKey.STATE, "cached_endpoint_failed")),
                 )
 
-                val (retryUrl, _) = resolveSpadeUrl(forceRefresh = true, failedUrl = spadeUrl) ?: return@run false
+                val (retryUrl, _) = resolveSpadeUrl(forceRefresh = true, failedUrl = spadeUrl)
+                    ?: return@run WatchCreditSendResult(success = false, errorReason = "spade_discovery")
                 if (!isSessionCurrent()) {
                     Log.d(WatchCreditTelemetry.LOG_TAG, "watch heartbeat retry skipped: session ended before retry post")
-                    return@run false
+                    return@run WatchCreditSendResult(success = false, errorReason = "cancelled")
                 }
 
-                val retrySucceeded = postMinuteWatched(networkLibrary, retryUrl, spadeRequest, minutesLogged, secondsOffset)
-                if (!retrySucceeded) {
+                val retryResult = postMinuteWatched(networkLibrary, retryUrl, spadeRequest, minutesLogged, secondsOffset)
+                if (!retryResult.success) {
                     watchCreditMutex.withLock {
                         if (cachedSpadeUrl == retryUrl) {
                             cachedSpadeUrl = null
@@ -1174,12 +1217,13 @@ class PlayerRepository(
                         }
                     }
                 }
-                retrySucceeded
+                retryResult
             }
             logger?.finishRequest(
                 token,
-                successful = result,
-                code = if (result) "success" else "credit_failed",
+                successful = result.success,
+                httpStatus = result.httpStatus,
+                code = if (result.success) "success" else (result.errorReason ?: "credit_failed"),
             )
             result
         } catch (e: CancellationException) {
@@ -1295,7 +1339,7 @@ class PlayerRepository(
         spadeRequest: String,
         minutesLogged: Int,
         secondsOffset: Int,
-    ): Boolean {
+    ): WatchCreditSendResult {
         val logger = diagnosticsLogger
         val token = if (logger?.isEnabled == true) {
             logger.beginRequest(
@@ -1357,19 +1401,24 @@ class PlayerRepository(
             } else {
                 Log.w(WatchCreditTelemetry.LOG_TAG, "Spade POST rejected status=$statusCode host=${urlHost(spadeUrl)}")
             }
-            success
+            WatchCreditSendResult(
+                success = success,
+                httpStatus = statusCode,
+                errorReason = if (success) null else "HTTP $statusCode",
+            )
         } catch (e: CancellationException) {
             logger?.finishRequest(token, successful = false, code = "cancelled")
             throw e
         } catch (e: Exception) {
             NetworkInterferenceReporter.report(urlHost(spadeUrl), e)
+            val errCode = if (NetworkInterferenceReporter.isDnsResolutionFailure(e)) "dns" else "network"
             logger?.finishRequest(
                 token,
                 successful = false,
-                code = if (NetworkInterferenceReporter.isDnsResolutionFailure(e)) "dns_resolution_failed" else "request_failed",
+                code = if (errCode == "dns") "dns_resolution_failed" else "request_failed",
             )
             Log.e(WatchCreditTelemetry.LOG_TAG, "Spade POST failed host=${urlHost(spadeUrl)}", e)
-            false
+            WatchCreditSendResult(success = false, errorReason = errCode)
         }
     }
 

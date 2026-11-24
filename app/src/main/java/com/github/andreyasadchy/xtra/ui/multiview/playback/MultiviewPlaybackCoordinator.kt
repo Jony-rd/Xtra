@@ -57,6 +57,7 @@ import com.github.andreyasadchy.xtra.util.tokenPrefs
 import com.github.andreyasadchy.xtra.util.watch.WatchCreditScheduleInput
 import com.github.andreyasadchy.xtra.util.watch.WatchCreditScheduler
 import com.github.andreyasadchy.xtra.util.watch.WatchCreditSession
+import com.github.andreyasadchy.xtra.util.watch.WatchCreditStatusMode
 import com.github.andreyasadchy.xtra.util.watch.WatchCreditTelemetry
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.util.concurrent.ConcurrentHashMap
@@ -108,6 +109,9 @@ class MultiviewPlaybackCoordinator(
     }
     private val viewingStatsRecorder by lazy {
         (applicationContext as? XtraApp)?.xtraModule?.viewingStatsRecorder
+    }
+    private val watchCreditTracker by lazy {
+        (applicationContext as? XtraApp)?.xtraModule?.watchCreditTracker
     }
     private val slots = linkedMapOf<String, MultiviewPlayerSlot>()
     private val watchCreditSnapshots = ConcurrentHashMap<Long, WatchCreditScheduleInput>()
@@ -378,6 +382,7 @@ class MultiviewPlaybackCoordinator(
         }
         slots.clear()
         watchCreditSnapshots.clear()
+        watchCreditTracker?.clearMultiviewState()
         tileBounds.clear()
         lifecycleStarted = false
         backgroundPlayback = false
@@ -1559,6 +1564,25 @@ class MultiviewPlaybackCoordinator(
         slot.watchCreditJob = WatchCreditScheduler(
             scope = ensureScope(),
             input = slot.watchCreditInput,
+            onNextBeatScheduled = { nextBeatMs ->
+                slot.nextWatchCreditAtElapsedMs = nextBeatMs
+                val tracker = watchCreditTracker ?: return@WatchCreditScheduler
+                val isAudioOnly = slot.target?.isAudioOnly == true || slot.videoDisabledForBackground
+                val isMuted = (audioVolumes[slot.identity] ?: 0f) <= 0.01f
+                tracker.updateMultiviewTileStatus(
+                    channelId = slot.stream.channelId,
+                    channelLogin = slot.stream.channelLogin,
+                    mode = if (nextBeatMs != null) WatchCreditStatusMode.COUNTING else WatchCreditStatusMode.PAUSED_USER,
+                    isBuffering = slot.player.playbackState == Player.STATE_BUFFERING,
+                    isAudioOnly = isAudioOnly,
+                    isBackground = backgroundPlayback,
+                    isMuted = isMuted,
+                    nextPingAtElapsedMs = nextBeatMs,
+                    streamId = slot.stream.id,
+                    gameId = slot.stream.gameId,
+                    gameName = slot.stream.gameName,
+                )
+            },
             onMinuteWatched = { session, minute, game, gameId ->
                 val success = sender(
                     session,
@@ -1666,6 +1690,29 @@ class MultiviewPlaybackCoordinator(
         } else {
             watchCreditSnapshots.remove(slot.watchGeneration)
         }
+        val mode = when {
+            userId == null -> WatchCreditStatusMode.NO_AUTH
+            slot.status == MultiviewSlotStatus.OFFLINE || slot.status == MultiviewSlotStatus.PLAYBACK_UNAVAILABLE ->
+                WatchCreditStatusMode.OFFLINE
+            !beingWatched -> WatchCreditStatusMode.PAUSED_USER
+            streamId == null -> WatchCreditStatusMode.MISSING_STREAM_ID
+            else -> WatchCreditStatusMode.COUNTING
+        }
+        val isAudioOnly = slot.target?.isAudioOnly == true || slot.videoDisabledForBackground
+        val isMuted = (audioVolumes[slot.identity] ?: 0f) <= 0.01f
+        watchCreditTracker?.updateMultiviewTileStatus(
+            channelId = slot.stream.channelId,
+            channelLogin = slot.stream.channelLogin,
+            mode = mode,
+            isBuffering = slot.player.playbackState == Player.STATE_BUFFERING,
+            isAudioOnly = isAudioOnly,
+            isBackground = backgroundPlayback,
+            isMuted = isMuted,
+            nextPingAtElapsedMs = slot.nextWatchCreditAtElapsedMs,
+            streamId = streamId,
+            gameId = slot.stream.gameId,
+            gameName = slot.stream.gameName,
+        )
     }
 
     private fun updateViewingStats(slot: MultiviewPlayerSlot, forceNotPlaying: Boolean = false) {
@@ -1723,6 +1770,7 @@ class MultiviewPlaybackCoordinator(
         var liveCheckJob: Job? = null
         internal var watchCreditJob: Job? = null
         internal var metadataResolveJob: Job? = null
+        @Volatile internal var nextWatchCreditAtElapsedMs: Long? = null
         internal val watchCreditInput = MutableStateFlow(
             WatchCreditScheduleInput(
                 session = null,
@@ -1833,7 +1881,7 @@ class MultiviewPlaybackCoordinator(
         private const val LIVE_STATUS_CHECK_TIMEOUT_MS = 4_000L
         // The first beacon must represent a full minute of watching, like the
         // official player; the stagger only spreads tiles a few seconds apart.
-        private const val WATCH_CREDIT_FIRST_BEAT_BASE_MS = 60_000L
+        private const val WATCH_CREDIT_FIRST_BEAT_BASE_MS = 6_000L
         private const val WATCH_CREDIT_FIRST_BEAT_STEP_MS = 1_000L
         private const val WATCH_CREDIT_STAGGER_SLOTS = 4
         private const val NETWORK_RETRY_DELAY_MS = 15_000L

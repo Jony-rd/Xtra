@@ -22,10 +22,6 @@
     <string name="multiview_use_channel">Usar canle</string>
     <string name="multiview_duplicate_stream">Esta canle xa está na multivista.</string>
     <string name="multiview_max_streams">Podes ver ata 4 emisións.</string>
-    <string name="multiview_all_chats">Todas as conversas</string>
-    <string name="multiview_channel_chat">Chat da canle</string>
-    <string name="multiview_combined_chat_description">O chat combinado é só de lectura. Escolle unha canle para enviar mensaxes.</string>
-    <string name="multiview_combined_chat_empty">Aínda non hai mensaxes.</string>
     <string name="multiview_audio_multiple">Audio: transmisións %d</string>
     <string name="multiview_layout">Maquetación</string>
     <string name="multiview_layout_auto">Automático</string>
@@ -85,7 +81,6 @@
     <string name="multiview_add_streams">Engadir emisións</string>
     <string name="multiview_viewers">Visores %d</string>
     <string name="multiview_already_added">Xa engadido</string>
-    <string name="multiview_combined_message_description">Mensaxe de chat %1$s : %2$s</string>
     <string name="multiview_background_playback">Reprodución multivista</string>
     <string name="multiview_background_playback_description">O audio está a reproducirse mentres o vídeo está oculto.</string>
 </resources>

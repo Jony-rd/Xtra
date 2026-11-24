@@ -30,6 +30,7 @@ import com.github.andreyasadchy.xtra.util.TwitchApiHelper
 import com.github.andreyasadchy.xtra.util.httpProxyHost
 import com.github.andreyasadchy.xtra.util.httpProxyPort
 import com.github.andreyasadchy.xtra.util.prefs
+import com.github.andreyasadchy.xtra.util.watch.WatchCreditTracker
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -48,6 +49,7 @@ class MultiviewViewModel(
     private val playerRepository: PlayerRepository,
     private val trustManager: Lazy<X509TrustManager>,
     private val diagnosticsLogger: DiagnosticsLogger? = null,
+    private val watchCreditTracker: WatchCreditTracker? = null,
 ) : ViewModel() {
     private val _state = MutableStateFlow(loadState())
     val state: StateFlow<MultiviewSessionState> = _state.asStateFlow()
@@ -77,7 +79,11 @@ class MultiviewViewModel(
             val playbackSessionId = session.playbackSessionId
                 ?: return@MultiviewPlaybackCoordinator false
             val networkLibrary = applicationContext.prefs().getString(C.NETWORK_LIBRARY, C.OKHTTP)
-            val success = playerRepository.sendMinuteWatched(
+            val isDropsPriority = watchCreditTracker?.isDropsPriorityChannel(
+                session.channelId,
+                session.channelLogin,
+            ) ?: true
+            val sendResult = playerRepository.sendMinuteWatchedDetailed(
                 networkLibrary = networkLibrary,
                 userId = session.userId,
                 streamId = session.broadcastId,
@@ -89,7 +95,16 @@ class MultiviewViewModel(
                 secondsOffset = secondsOffset,
                 game = game,
                 gameId = gameId,
+                hidden = !isDropsPriority,
+                muted = !isDropsPriority,
             )
+            watchCreditTracker?.recordMultiviewHeartbeat(
+                channelId = session.channelId,
+                channelLogin = session.channelLogin,
+                minutesLogged = minutesLogged,
+                result = sendResult,
+            )
+            val success = sendResult.success
             if (diagnosticsLogger?.isEnabled == true) {
                 diagnosticsLogger.event(
                     category = DiagnosticsCategory.PROGRESSION,
@@ -277,8 +292,8 @@ class MultiviewViewModel(
         update(_state.value.copy(fillVideo = fill))
     }
 
-    fun setChat(visible: Boolean, combined: Boolean = _state.value.combinedChat, identity: String? = _state.value.chatIdentity) {
-        update(_state.value.copy(chatVisible = visible, combinedChat = combined, chatIdentity = identity))
+    fun setChat(visible: Boolean, identity: String? = _state.value.chatIdentity) {
+        update(_state.value.copy(chatVisible = visible, chatIdentity = identity))
     }
 
     fun setQualityMode(mode: MultiviewQualityMode) {
@@ -323,9 +338,21 @@ class MultiviewViewModel(
         persistSession(_state.value)
     }
 
-    fun onStart() = playbackCoordinator.onStart()
+    fun onStart() {
+        val current = _state.value
+        watchCreditTracker?.syncMultiviewSession(
+            streams = current.streams,
+            activeIdentity = current.activeIdentity,
+            focusedIdentity = current.focusedIdentity,
+            audioVolumes = current.audioVolumes,
+        )
+        playbackCoordinator.onStart()
+    }
 
-    fun releaseAll() = playbackCoordinator.releaseAll()
+    fun releaseAll() {
+        playbackCoordinator.releaseAll()
+        watchCreditTracker?.clearMultiviewState()
+    }
     fun onStop(allowBackground: Boolean = true, inPictureInPicture: Boolean = false) =
         playbackCoordinator.onStop(allowBackground, inPictureInPicture)
 
@@ -544,6 +571,12 @@ class MultiviewViewModel(
 
     private fun update(next: MultiviewSessionState, persist: Boolean = true) {
         _state.value = next
+        watchCreditTracker?.syncMultiviewSession(
+            streams = next.streams,
+            activeIdentity = next.activeIdentity,
+            focusedIdentity = next.focusedIdentity,
+            audioVolumes = next.audioVolumes,
+        )
         savedStateHandle[KEY_STREAMS] = ArrayList(next.streams)
         savedStateHandle[KEY_ACTIVE] = next.activeIdentity
         savedStateHandle[KEY_FOCUSED] = next.focusedIdentity
@@ -551,7 +584,6 @@ class MultiviewViewModel(
         savedStateHandle[KEY_LAYOUT_BEFORE_FOCUS] = next.layoutBeforeFocus?.name
         savedStateHandle[KEY_FILL] = next.fillVideo
         savedStateHandle[KEY_CHAT_VISIBLE] = next.chatVisible
-        savedStateHandle[KEY_COMBINED_CHAT] = next.combinedChat
         savedStateHandle[KEY_CHAT_IDENTITY] = next.chatIdentity
         savedStateHandle[KEY_QUALITY_MODE] = next.qualityMode.name
         savedStateHandle[KEY_OVERRIDES] = HashMap(next.qualityOverrides)
@@ -593,7 +625,6 @@ class MultiviewViewModel(
                 ?.let { runCatching { MultiviewLayoutMode.valueOf(it) }.getOrNull() },
             fillVideo = fillVideo,
             chatVisible = savedStateHandle[KEY_CHAT_VISIBLE] ?: false,
-            combinedChat = savedStateHandle[KEY_COMBINED_CHAT] ?: false,
             chatIdentity = savedStateHandle[KEY_CHAT_IDENTITY],
             qualityMode = qualityMode,
             qualityOverrides = (savedStateHandle.get<HashMap<String, String>>(KEY_OVERRIDES) ?: hashMapOf()).toMap(),
@@ -627,7 +658,6 @@ class MultiviewViewModel(
         private const val KEY_LAYOUT_BEFORE_FOCUS = "multiview_state_layout_before_focus"
         private const val KEY_FILL = "multiview_state_fill"
         private const val KEY_CHAT_VISIBLE = "multiview_state_chat_visible"
-        private const val KEY_COMBINED_CHAT = "multiview_state_combined_chat"
         private const val KEY_CHAT_IDENTITY = "multiview_state_chat_identity"
         private const val KEY_QUALITY_MODE = "multiview_state_quality_mode"
         private const val KEY_OVERRIDES = "multiview_state_quality_overrides"
@@ -673,6 +703,7 @@ class MultiviewViewModel(
                     playerRepository = xtraModule.playerRepository,
                     trustManager = xtraModule.trustManager,
                     diagnosticsLogger = xtraModule.diagnosticsLogger,
+                    watchCreditTracker = xtraModule.watchCreditTracker,
                 )
             }
         }

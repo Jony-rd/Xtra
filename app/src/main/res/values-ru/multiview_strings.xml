@@ -22,10 +22,6 @@
     <string name="multiview_use_channel">Использовать канал</string>
     <string name="multiview_duplicate_stream">Этот канал уже добавлен в мультипросмотр.</string>
     <string name="multiview_max_streams">Можно смотреть до 4 трансляций.</string>
-    <string name="multiview_all_chats">Все чаты</string>
-    <string name="multiview_channel_chat">Чат канала</string>
-    <string name="multiview_combined_chat_description">Объединённый чат доступен только для чтения. Выберите канал, чтобы отправить сообщение.</string>
-    <string name="multiview_combined_chat_empty">Сообщений пока нет.</string>
     <string name="multiview_audio_multiple">Аудио: потоки %d</string>
     <string name="multiview_layout">Макет</string>
     <string name="multiview_layout_auto">Авто</string>
@@ -85,7 +81,6 @@
     <string name="multiview_add_streams">Добавить потоки</string>
     <string name="multiview_viewers">Зрители %d</string>
     <string name="multiview_already_added">Уже добавлено</string>
-    <string name="multiview_combined_message_description">Сообщение чата %1$s : %2$s</string>
     <string name="multiview_background_playback">Многопросмотровое воспроизведение</string>
     <string name="multiview_background_playback_description">Звук воспроизводится, а видео скрыто.</string>
 </resources>

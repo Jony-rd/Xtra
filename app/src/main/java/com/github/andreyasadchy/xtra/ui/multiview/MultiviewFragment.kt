@@ -436,9 +436,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         return MultiviewSlotView(requireContext()).apply {
             onTap = {
                 viewModel.setActive(identity)
-                if (!latestState.combinedChat && (latestState.chatVisible || isTwoStreamLandscapeChatOff())) {
+                if (latestState.chatVisible || isTwoStreamLandscapeChatOff()) {
                     // keep the toggle as it is (on or off), only switch whose chat is shown
-                    viewModel.setChat(latestState.chatVisible, combined = false, identity = identity)
+                    viewModel.setChat(latestState.chatVisible, identity = identity)
                 }
                 revealControls(this)
             }
@@ -652,8 +652,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
     /** 2 streams, landscape, chat toggle off: chat still shows, so keep it on the stream the user picked. */
     private fun followChatInTwoStreamLandscape(identity: String) {
-        if (isTwoStreamLandscapeChatOff() && !latestState.combinedChat) {
-            viewModel.setChat(false, combined = false, identity = identity)
+        if (isTwoStreamLandscapeChatOff()) {
+            viewModel.setChat(false, identity = identity)
         }
     }
 
@@ -754,8 +754,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     private fun releaseChatFragment(fragment: Fragment) {
         if (fragment is ChatFragment) {
             // Hiding a Fragment does not call onStop. Explicitly disconnect
-            // before removing it so switching A -> B -> combined cannot leave
-            // hidden IRC sessions running beside the combined sessions.
+            // before removing it so switching channels cannot leave hidden IRC sessions running.
             fragment.disconnect()
         }
     }
@@ -765,7 +764,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             viewModel.setChat(false)
         } else {
             val identity = latestState.activeIdentity ?: latestState.identities.firstOrNull() ?: return
-            viewModel.setChat(true, combined = false, identity = identity)
+            viewModel.setChat(true, identity = identity)
         }
         revealControls()
     }

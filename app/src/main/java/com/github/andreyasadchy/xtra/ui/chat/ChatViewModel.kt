@@ -60,7 +60,9 @@ import com.github.andreyasadchy.xtra.model.ui.ChannelPointRewardInput
 import com.github.andreyasadchy.xtra.model.ui.ChannelPointRewardRedemption
 import com.github.andreyasadchy.xtra.model.ui.ChannelPointRedemptionResult
 import com.github.andreyasadchy.xtra.model.ui.TranslatedChannel
+import com.github.andreyasadchy.xtra.model.ui.Stream
 import com.github.andreyasadchy.xtra.model.ui.TwitchDrop
+import com.github.andreyasadchy.xtra.repository.ChannelDropsSummary
 import com.github.andreyasadchy.xtra.repository.DropsRepository
 import com.github.andreyasadchy.xtra.repository.EmoteUsageRepository
 import com.github.andreyasadchy.xtra.model.ui.WatchStreak
@@ -111,11 +113,11 @@ import com.github.andreyasadchy.xtra.util.chat.STVEventApiUtils
 import com.github.andreyasadchy.xtra.util.chat.STVEventApiWebSocket
 import com.github.andreyasadchy.xtra.util.chat.ViewerParticipationCache
 import com.github.andreyasadchy.xtra.util.prefs
+import com.github.andreyasadchy.xtra.util.watch.ChannelWatchCreditStatus
+import com.github.andreyasadchy.xtra.util.watch.TwitchDropSessionSnapshot
+import com.github.andreyasadchy.xtra.util.watch.WatchCreditStatusMode
 import com.github.andreyasadchy.xtra.util.watch.WatchCreditTelemetry
-import com.github.andreyasadchy.xtra.util.watch.WatchCreditMinute
-import com.github.andreyasadchy.xtra.util.watch.WatchCreditScheduleInput
-import com.github.andreyasadchy.xtra.util.watch.WatchCreditScheduler
-import com.github.andreyasadchy.xtra.util.watch.WatchCreditSession
+import com.github.andreyasadchy.xtra.util.watch.WatchCreditTracker
 import kotlinx.coroutines.cancel
 import com.github.andreyasadchy.xtra.util.tokenPrefs
 import com.github.andreyasadchy.xtra.ui.chat.v2.catalog.ChatEmoteScope
@@ -135,7 +137,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.selects.onTimeout
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -256,10 +263,33 @@ internal fun personalSevenTvEmotesForPicker(
     )
 }
 
+data class MultiviewDropPeerSummary(
+    val totalStreams: Int = 0,
+    val countingStreams: Int = 0,
+    val allCounting: Boolean = false,
+    val dropsFocusChannelLogin: String? = null,
+    val isCurrentChannelFocus: Boolean = true,
+)
+
 data class DropsUiState(
     val drops: List<TwitchDrop> = emptyList(),
     val claimingDropId: String? = null,
     val lastError: String? = null,
+    val watchStatus: ChannelWatchCreditStatus? = null,
+    val twitchSession: TwitchDropSessionSnapshot? = null,
+    val lastHermesProgressAtElapsedMs: Long? = null,
+    val lastWatchCreditSentAtElapsedMs: Long? = null,
+    val totalWatchDrops: Int = 0,
+    val claimedWatchDrops: Int = 0,
+    val allChannelDropsClaimed: Boolean = false,
+    val categoryMismatchGameName: String? = null,
+    val activeCampaignEndTime: String? = null,
+    val tierIndex: Int = 0,
+    val tierTotal: Int = 0,
+    val multiviewSummary: MultiviewDropPeerSummary? = null,
+    val channelId: String? = null,
+    val channelLogin: String? = null,
+    val catalogSettled: Boolean = false,
 ) {
     val claimableDrops: List<TwitchDrop>
         get() = drops.filter { it.isClaimable }
@@ -274,6 +304,10 @@ data class DropsUiState(
                 }
                 .maxByOrNull { it.progressPercent }
 
+    val isVisibleInChat: Boolean
+        get() = mostRelevantDrop != null ||
+            allChannelDropsClaimed ||
+            !categoryMismatchGameName.isNullOrBlank()
 }
 
 private fun useInventoryDropState(
@@ -281,15 +315,23 @@ private fun useInventoryDropState(
     inventory: List<TwitchDrop>,
     allowClaimIds: Boolean = true,
 ): List<TwitchDrop> = drops.asSequence()
-    .filterNot(TwitchDrop::sessionOnly)
     .map { drop ->
-        val inventoryDrop = inventory.firstOrNull { it.id == drop.id } ?: return@map drop
-        drop.copy(
-            currentMinutesWatched = inventoryDrop.currentMinutesWatched,
-            requiredMinutesWatched = inventoryDrop.requiredMinutesWatched,
-            dropInstanceId = inventoryDrop.dropInstanceId.takeIf { allowClaimIds },
-            isClaimed = inventoryDrop.isClaimed,
-        )
+        val inventoryDrop = inventory.firstOrNull { it.id == drop.id }
+        if (inventoryDrop == null) {
+            drop.copy(
+                dropInstanceId = null,
+                sessionOnly = true,
+                currentMinutesWatched = 0,
+            )
+        } else {
+            drop.copy(
+                dropInstanceId = inventoryDrop.dropInstanceId.takeIf { allowClaimIds },
+                sessionOnly = false,
+                currentMinutesWatched = inventoryDrop.currentMinutesWatched,
+                requiredMinutesWatched = inventoryDrop.requiredMinutesWatched,
+                isClaimed = inventoryDrop.isClaimed,
+            )
+        }
     }
     .toList()
 
@@ -682,9 +724,8 @@ class ChatViewModel(
     private var chatReadJob: Job? = null
     private var chatWriteJob: Job? = null
     private var dropsJob: Job? = null
-    private var watchCreditSchedulerJob: Job? = null
-    private val watchCreditStreamLive = MutableStateFlow<Boolean?>(null)
-    private val watchCreditChatSessionGeneration = AtomicLong(0L)
+    private var dropsWatchObserverJob: Job? = null
+    private val dropsWakeEvents = Channel<Unit>(Channel.CONFLATED)
     private var eventSub: EventSubWebSocket? = null
     private var hermesWebSocket: HermesWebSocket? = null
     private var pubSubJob: Job? = null
@@ -1360,9 +1401,6 @@ class ChatViewModel(
     /** Releases a session owned by a non-Fragment chat surface such as multiview. */
     fun releaseForMultiview() {
         releaseSession()
-        // These sessions are created directly by CombinedChatViewModel, so
-        // Android will not call ViewModel.clear() for them. Cancel the scope
-        // explicitly to stop pending emote/network work as well.
         viewModelScope.cancel()
     }
 
@@ -4260,7 +4298,7 @@ class ChatViewModel(
         }
         activeChannelId = channelId
         activeChannelLogin = channelLogin
-        watchCreditStreamLive.value = true
+        dropsStreamLive = true
         startChatUserPresenceRefresh()
         if (!predictionPreferenceListenerRegistered) {
             applicationContext.prefs().registerOnSharedPreferenceChangeListener(predictionPreferenceListener)
@@ -4279,14 +4317,6 @@ class ChatViewModel(
         val accountLogin = applicationContext.tokenPrefs().getString(C.USERNAME, null)
         val gqlWebToken = applicationContext.tokenPrefs().getString(C.GQL_TOKEN_WEB, null)?.takeIf { it.isNotBlank() }
         val hasHermesUserAuth = !accountId.isNullOrBlank() && !gqlWebToken.isNullOrBlank()
-        val watchCreditSessionGeneration = watchCreditChatSessionGeneration.get()
-        startWatchCreditScheduler(
-            expectedChannelId = channelId,
-            expectedChannelLogin = channelLogin,
-            userId = accountId,
-            networkLibrary = networkLibrary,
-            chatSessionGeneration = watchCreditSessionGeneration,
-        )
         loggedInUserId = accountId
         loggedInUserLogin = accountLogin
         val isLoggedIn = !accountLogin.isNullOrBlank() && (!gqlHeaders[C.HEADER_TOKEN].isNullOrBlank() || !helixHeaders[C.HEADER_TOKEN].isNullOrBlank())
@@ -4464,182 +4494,159 @@ class ChatViewModel(
         }
     }
 
-    private fun startWatchCreditScheduler(
-        expectedChannelId: String?,
-        expectedChannelLogin: String,
-        userId: String?,
-        networkLibrary: String?,
-        chatSessionGeneration: Long,
-    ) {
-        if (watchCreditSchedulerJob?.isActive == true || userId.isNullOrBlank()) return
-        val app = applicationContext.applicationContext as? XtraApp ?: return
-        val playbackState = app.xtraModule.primaryPlaybackWatchState.state
-        val scheduleInput = combine(playbackState, watchCreditStreamLive) { playback, dropsLive ->
-            val metadata = playback?.metadata
-            val channelMatches = metadata != null &&
-                    if (!expectedChannelId.isNullOrBlank()) {
-                        metadata.normalizedChannelId.equals(expectedChannelId, ignoreCase = true)
-                    } else {
-                        metadata.channelLogin.equals(expectedChannelLogin, ignoreCase = true)
-                    }
-            val broadcastId = metadata?.contentId?.trim()?.takeIf(String::isNotEmpty)
-            val playbackChannelId = metadata?.normalizedChannelId?.takeIf(String::isNotEmpty)
-            val playbackChannelLogin = metadata?.channelLogin?.trim()?.takeIf(String::isNotEmpty)
-                ?: expectedChannelLogin
-            val isLiveContent = metadata?.contentType == ViewingPlaybackMetadata.CONTENT_TYPE_LIVE
-            val session = if (
-                channelMatches && isLiveContent &&
-                !broadcastId.isNullOrBlank() && !playbackChannelId.isNullOrBlank() &&
-                !playbackChannelLogin.isNullOrBlank()
-            ) {
-                WatchCreditSession(
-                    broadcastId = broadcastId,
-                    channelId = playbackChannelId,
-                    channelLogin = playbackChannelLogin,
-                    userId = userId,
-                    playbackSessionId = playback.generation,
-                )
-            } else {
-                null
-            }
-            WatchCreditScheduleInput(
-                session = session,
-                liveEligible = playback?.liveEligible == true && channelMatches && isLiveContent,
-                dropsStreamLive = dropsLive,
-                isPlaying = playback?.isPlaying == true,
-                isBuffering = playback?.isBuffering == true,
-                game = metadata?.categoryName,
-                gameId = metadata?.categoryId,
-            )
-        }.stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(),
-            initialValue = WatchCreditScheduleInput(
-                session = null,
-                liveEligible = false,
-                dropsStreamLive = null,
-                isPlaying = false,
-                isBuffering = true,
-            ),
-        )
-        watchCreditSchedulerJob = WatchCreditScheduler(
-            scope = viewModelScope,
-            input = scheduleInput,
-            onMinuteWatched = { session, minute, game, gameId ->
-                sendScheduledWatchCredit(
-                    session = session,
-                    minute = minute,
-                    game = game,
-                    gameId = gameId,
-                    networkLibrary = networkLibrary,
-                    chatSessionGeneration = chatSessionGeneration,
-                )
-            },
-        ).start()
-    }
+    private fun watchCreditTracker(): WatchCreditTracker? =
+        (applicationContext.applicationContext as? XtraApp)?.xtraModule?.watchCreditTracker
 
-    private suspend fun sendScheduledWatchCredit(
-        session: WatchCreditSession,
-        minute: WatchCreditMinute,
-        game: String?,
-        gameId: String?,
-        networkLibrary: String?,
-        chatSessionGeneration: Long,
-    ) {
-        val app = applicationContext.applicationContext as? XtraApp ?: return
-        val playback = app.xtraModule.primaryPlaybackWatchState.state.value
-        val playbackSessionId = session.playbackSessionId ?: return
-        if (playback == null) return
-        if (!isScheduledWatchCreditSessionCurrent(session, chatSessionGeneration) ||
-            playback.metadata.contentType != ViewingPlaybackMetadata.CONTENT_TYPE_LIVE ||
-            !playback.liveEligible || !playback.isPlaying || playback.isBuffering
-        ) {
-            Log.d(WatchCreditTelemetry.LOG_TAG, "watch heartbeat skipped: playback session changed before send")
-            return
-        }
-
-        try {
-            val success = playerRepository.sendMinuteWatched(
-                networkLibrary = networkLibrary,
-                userId = session.userId,
-                streamId = session.broadcastId,
-                channelId = session.channelId,
-                channelLogin = session.channelLogin,
-                playbackSessionId = playbackSessionId,
-                isSessionCurrent = {
-                    isScheduledWatchCreditSessionCurrent(session, chatSessionGeneration)
-                },
-                minutesLogged = minute.minutesLogged,
-                secondsOffset = minute.secondsOffset,
-                game = game,
-                gameId = gameId,
-            )
-            Log.d(
-                WatchCreditTelemetry.LOG_TAG,
-                "watch heartbeat completed success=$success minutes=${minute.minutesLogged}",
-            )
-            if (diagnosticsLogger?.isEnabled == true) {
-                diagnosticsLogger.event(
-                    category = DiagnosticsCategory.PROGRESSION,
-                    transport = DiagnosticsTransport.WATCH_CREDIT,
-                    operation = "WatchProgress",
-                    event = "heartbeat_result",
-                    severity = if (success) DiagnosticsSeverity.INFO else DiagnosticsSeverity.WARN,
-                    code = if (success) "success" else "heartbeat_failed",
-                    fields = listOf(
-                        DiagnosticsField(DiagnosticsFieldKey.LIVE, "true"),
-                        DiagnosticsField(DiagnosticsFieldKey.COUNT, minute.minutesLogged.toString()),
-                        DiagnosticsField(DiagnosticsFieldKey.TARGET, minute.secondsOffset.toString()),
-                    ),
-                )
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.e(WatchCreditTelemetry.LOG_TAG, "watch heartbeat failed", e)
-        }
-    }
-
-    private fun isScheduledWatchCreditSessionCurrent(
-        session: WatchCreditSession,
-        chatSessionGeneration: Long,
-    ): Boolean {
-        if (watchCreditChatSessionGeneration.get() != chatSessionGeneration ||
-            watchCreditStreamLive.value != true ||
-            applicationContext.tokenPrefs().getString(C.USER_ID, null) != session.userId
-        ) return false
-
-        val playback = (applicationContext.applicationContext as? XtraApp)
-            ?.xtraModule
-            ?.primaryPlaybackWatchState
-            ?.state
-            ?.value ?: return false
-        return playback.generation == session.playbackSessionId &&
-                playback.liveEligible &&
-                playback.metadata.contentType == ViewingPlaybackMetadata.CONTENT_TYPE_LIVE &&
-                playback.metadata.normalizedChannelId.equals(session.channelId, ignoreCase = true) &&
-                playback.metadata.channelLogin.equals(session.channelLogin, ignoreCase = true) &&
-                playback.metadata.contentId == session.broadcastId
-    }
-
-    private fun currentLivePlaybackGameId(channelId: String?): String? {
-        val expectedChannelId = channelId?.takeIf(String::isNotBlank) ?: return null
+    private fun currentLivePlaybackGameId(
+        channelId: String?,
+        channelLogin: String? = null,
+    ): String? {
+        val expectedChannelId = channelId?.takeIf(String::isNotBlank)
+        val expectedLogin = channelLogin?.takeIf(String::isNotBlank) ?: activeChannelLogin
+        val tracker = watchCreditTracker()
+        tracker?.multiviewStreamForChannel(expectedChannelId, expectedLogin)
+            ?.gameId
+            ?.takeIf(String::isNotBlank)
+            ?.let { return it }
         val metadata = (applicationContext.applicationContext as? XtraApp)
             ?.xtraModule
             ?.primaryPlaybackWatchState
             ?.state
             ?.value
-            ?.metadata ?: return null
-        if (metadata.contentType != ViewingPlaybackMetadata.CONTENT_TYPE_LIVE ||
-            !metadata.normalizedChannelId.equals(expectedChannelId, ignoreCase = true)
-        ) return null
-        return metadata.categoryId?.takeIf(String::isNotBlank)
+            ?.metadata
+        if (metadata != null &&
+            metadata.contentType == ViewingPlaybackMetadata.CONTENT_TYPE_LIVE &&
+            WatchCreditTracker.matchesChannel(
+                metadata.normalizedChannelId,
+                metadata.channelLogin,
+                expectedChannelId,
+                expectedLogin,
+            )
+        ) {
+            metadata.categoryId?.takeIf(String::isNotBlank)?.let { return it }
+        }
+        tracker?.statusForChannel(expectedChannelId, expectedLogin)
+            ?.gameId
+            ?.takeIf(String::isNotBlank)
+            ?.let { return it }
+        return _streamInfo.value?.gameId?.takeIf(String::isNotBlank)
     }
 
     private fun clearSessionOnlyDrops() {
         dropsSessionGeneration.incrementAndGet()
         _dropsUiState.update { state ->
-            state.copy(drops = state.drops.filterNot(TwitchDrop::sessionOnly))
+            state.copy(
+                drops = state.drops.map { drop ->
+                    if (drop.sessionOnly) {
+                        drop.copy(currentMinutesWatched = 0, dropInstanceId = null)
+                    } else {
+                        drop
+                    }
+                },
+            )
+        }
+    }
+
+    fun focusDropsOnCurrentChannel() {
+        val id = activeChannelId
+        val login = activeChannelLogin
+        if (id.isNullOrBlank() && login.isNullOrBlank()) return
+        watchCreditTracker()?.setDropsFocusChannel(id, login)
+        dropsWakeEvents.trySend(Unit)
+    }
+
+    private fun buildMultiviewSummary(
+        tracker: WatchCreditTracker,
+        mvStreams: List<Stream>,
+        statuses: Map<String, ChannelWatchCreditStatus>,
+        focusedKey: String?,
+        expectedChannelId: String?,
+        expectedChannelLogin: String,
+    ): MultiviewDropPeerSummary? {
+        if (mvStreams.isEmpty()) return null
+        val mvStatuses = statuses.filterKeys { it.startsWith("mv:") }.values
+        val countingCount = mvStatuses.count {
+            it.mode == WatchCreditStatusMode.COUNTING || it.mode == WatchCreditStatusMode.STARTING
+        }
+        val priorityStream = mvStreams.firstOrNull {
+            tracker.isDropsPriorityChannel(it.channelId, it.channelLogin)
+        } ?: mvStreams.firstOrNull()
+        val isCurrentFocus = tracker.isDropsPriorityChannel(expectedChannelId, expectedChannelLogin)
+        return MultiviewDropPeerSummary(
+            totalStreams = mvStreams.size,
+            countingStreams = countingCount,
+            allCounting = mvStreams.isNotEmpty() && countingCount >= mvStreams.size,
+            dropsFocusChannelLogin = priorityStream?.channelLogin ?: priorityStream?.channelName ?: focusedKey,
+            isCurrentChannelFocus = isCurrentFocus,
+        )
+    }
+
+    private fun startDropsWatchObserver(
+        expectedChannelId: String?,
+        expectedChannelLogin: String,
+        expectedSessionToken: Long,
+    ) {
+        dropsWatchObserverJob?.cancel()
+        val tracker = watchCreditTracker() ?: return
+        dropsWatchObserverJob = viewModelScope.launch {
+            var lastObservedGameId: String? = currentLivePlaybackGameId(expectedChannelId, expectedChannelLogin)
+            var lastObservedOkPings = 0
+            combine(
+                tracker.channelStatuses,
+                tracker.activeMultiviewStreams,
+                tracker.focusedDropsChannelKey,
+                tracker.twitchDropSession,
+                tracker.lastHermesDropEventAtElapsedMs,
+            ) { statuses, mvStreams, focusedKey, session, hermesAt ->
+                if (activeChannelId != expectedChannelId ||
+                    activeChannelLogin != expectedChannelLogin ||
+                    predictionSessionToken != expectedSessionToken
+                ) {
+                    return@combine
+                }
+                val channelStatus = tracker.statusForChannel(expectedChannelId, expectedChannelLogin)
+                val mvSummary = buildMultiviewSummary(
+                    tracker = tracker,
+                    mvStreams = mvStreams,
+                    statuses = statuses,
+                    focusedKey = focusedKey,
+                    expectedChannelId = expectedChannelId,
+                    expectedChannelLogin = expectedChannelLogin,
+                )
+                val currentGameId = currentLivePlaybackGameId(expectedChannelId, expectedChannelLogin)
+                if (currentGameId != null && currentGameId != lastObservedGameId) {
+                    lastObservedGameId = currentGameId
+                    dropsWakeEvents.trySend(Unit)
+                }
+                val okPings = channelStatus?.consecutiveOkPings ?: 0
+                if (okPings > lastObservedOkPings) {
+                    lastObservedOkPings = okPings
+                    val currentState = _dropsUiState.value
+                    val hasUnstarted = currentState.drops.any { !it.isClaimed && it.currentMinutesWatched == 0 }
+                    val sessionNotAttributed = session == null ||
+                        !WatchCreditTracker.matchesChannel(
+                            session.channelId,
+                            session.channelLogin,
+                            expectedChannelId,
+                            expectedChannelLogin,
+                        )
+                    if (hasUnstarted || sessionNotAttributed) {
+                        dropsWakeEvents.trySend(Unit)
+                    }
+                }
+                _dropsUiState.update { state ->
+                    state.copy(
+                        watchStatus = channelStatus,
+                        twitchSession = session,
+                        lastHermesProgressAtElapsedMs = hermesAt,
+                        lastWatchCreditSentAtElapsedMs = channelStatus?.lastSuccessAtElapsedMs
+                            ?: state.lastWatchCreditSentAtElapsedMs,
+                        multiviewSummary = mvSummary,
+                        channelId = expectedChannelId,
+                        channelLogin = expectedChannelLogin,
+                    )
+                }
+            }.collect()
         }
     }
 
@@ -4651,10 +4658,12 @@ class ChatViewModel(
     ) {
         dropsJob?.cancel()
         dropsJob = null
+        dropsWatchObserverJob?.cancel()
+        dropsWatchObserverJob = null
         clearSessionOnlyDrops()
 
         if (gqlHeaders[C.HEADER_TOKEN].isNullOrBlank()) {
-            _dropsUiState.value = DropsUiState()
+            _dropsUiState.value = DropsUiState(channelId = expectedChannelId, channelLogin = expectedChannelLogin)
             return
         }
 
@@ -4664,12 +4673,21 @@ class ChatViewModel(
 
         // Autoclaim must work even if the visual banner is disabled.
         if (!showDrops && !autoClaim) {
-            _dropsUiState.value = DropsUiState()
+            _dropsUiState.value = DropsUiState(channelId = expectedChannelId, channelLogin = expectedChannelLogin)
             return
         }
 
         val expectedSessionToken = predictionSessionToken
         val expectedAccountId = applicationContext.tokenPrefs().getString(C.USER_ID, null)
+        _dropsUiState.value = DropsUiState(
+            channelId = expectedChannelId,
+            channelLogin = expectedChannelLogin,
+            watchStatus = watchCreditTracker()?.statusForChannel(expectedChannelId, expectedChannelLogin),
+            twitchSession = watchCreditTracker()?.twitchDropSession?.value,
+            lastHermesProgressAtElapsedMs = watchCreditTracker()?.lastHermesDropEventAtElapsedMs?.value,
+        )
+        startDropsWatchObserver(expectedChannelId, expectedChannelLogin, expectedSessionToken)
+
         dropsJob = viewModelScope.launch {
             var nextDelayMillis = 0L
             var retainedSessionProgress: DropProgressUpdate? = null
@@ -4679,6 +4697,10 @@ class ChatViewModel(
             var inventoryFailureCount = 0
             var observedSessionGeneration = dropsSessionGeneration.get()
 
+            while (dropsWakeEvents.tryReceive().isSuccess) {
+                // Drain stale wakeups before starting loop.
+            }
+
             while (
                 isActive &&
                 activeChannelId == expectedChannelId &&
@@ -4686,7 +4708,16 @@ class ChatViewModel(
                 predictionSessionToken == expectedSessionToken
             ) {
                 if (nextDelayMillis > 0L) {
-                    delay(nextDelayMillis)
+                    withTimeoutOrNull(nextDelayMillis) {
+                        dropsWakeEvents.receive()
+                    }
+                    if (!isActive ||
+                        activeChannelId != expectedChannelId ||
+                        activeChannelLogin != expectedChannelLogin ||
+                        predictionSessionToken != expectedSessionToken
+                    ) {
+                        return@launch
+                    }
                 }
 
                 try {
@@ -4703,8 +4734,51 @@ class ChatViewModel(
                     }
                     val showDropsNow = applicationContext.prefs().getBoolean(C.CHAT_DROPS_SHOW, true)
                     val now = SystemClock.elapsedRealtime()
+                    val shouldRefreshInventory = now >= nextInventoryRefreshAt
+
+                    // Parallel fetch: channel catalog, active drop session, and inventory simultaneously.
+                    var polledSessionResult: CurrentDropSessionResult? = null
+                    var polledInventoryError = dropsRepository.inventory.value.error
+                    coroutineScope {
+                        val catalogDeferred = if (showDropsNow) {
+                            async { dropsRepository.refreshChannelDropCatalog(expectedChannelId, force = false) }
+                        } else {
+                            null
+                        }
+                        val sessionDeferred = if (showDropsNow && dropsStreamLive) {
+                            async { dropsRepository.refreshCurrentDropProgress(expectedChannelId) }
+                        } else {
+                            null
+                        }
+                        val inventoryDeferred = if (shouldRefreshInventory) {
+                            async { dropsRepository.refreshInventory() }
+                        } else {
+                            null
+                        }
+                        catalogDeferred?.await()
+                        polledSessionResult = sessionDeferred?.await()
+                        inventoryDeferred?.await()?.let { inv ->
+                            polledInventoryError = inv.error
+                        }
+                    }
+
+                    if (shouldRefreshInventory) {
+                        if (polledInventoryError == null) {
+                            inventoryFailureCount = 0
+                            nextInventoryRefreshAt = SystemClock.elapsedRealtime() + DROPS_REFRESH_MILLIS
+                        } else {
+                            inventoryFailureCount++
+                            val retryDelay = if (inventoryFailureCount == 1) {
+                                DROPS_RETRY_MILLIS
+                            } else {
+                                DROPS_MAX_RETRY_MILLIS
+                            }
+                            nextInventoryRefreshAt = SystemClock.elapsedRealtime() + retryDelay
+                        }
+                    }
+
                     if (showDropsNow && dropsStreamLive) {
-                        when (val result = dropsRepository.refreshCurrentDropProgress(expectedChannelId)) {
+                        when (val result = polledSessionResult ?: CurrentDropSessionResult.None) {
                             is CurrentDropSessionResult.Present -> {
                                 if (dropsSessionGeneration.get() == observedSessionGeneration) {
                                     dropsRepository.applyDropProgress(
@@ -4732,6 +4806,13 @@ class ChatViewModel(
                                     retainedSessionProgress = progress
                                     currentSessionResult = CurrentDropSessionResult.Present(progress)
                                     retainedSessionProgressAt = SystemClock.elapsedRealtime()
+                                    watchCreditTracker()?.recordCurrentDropSession(
+                                        dropId = progress.dropId,
+                                        currentMinutesWatched = progress.currentMinutesWatched,
+                                        requiredMinutesWatched = progress.requiredMinutesWatched,
+                                        queriedChannelId = expectedChannelId,
+                                        queriedChannelLogin = expectedChannelLogin,
+                                    )
                                 } else {
                                     retainedSessionProgress = null
                                     currentSessionResult = null
@@ -4775,24 +4856,6 @@ class ChatViewModel(
                         retainedSessionProgressAt = 0L
                     }
 
-                    var inventoryError = dropsRepository.inventory.value.error
-                    if (now >= nextInventoryRefreshAt) {
-                        val inventory = dropsRepository.refreshInventory()
-                        inventoryError = inventory.error
-                        if (inventoryError == null) {
-                            inventoryFailureCount = 0
-                            nextInventoryRefreshAt = now + DROPS_REFRESH_MILLIS
-                        } else {
-                            inventoryFailureCount++
-                            val retryDelay = if (inventoryFailureCount == 1) {
-                                DROPS_RETRY_MILLIS
-                            } else {
-                                DROPS_MAX_RETRY_MILLIS
-                            }
-                            nextInventoryRefreshAt = now + retryDelay
-                        }
-                    }
-
                     val generationBeforeProjection = dropsSessionGeneration.get()
                     if (generationBeforeProjection != observedSessionGeneration) {
                         retainedSessionProgress = null
@@ -4813,30 +4876,32 @@ class ChatViewModel(
                         return@launch
                     }
 
-                    val drops = if (showDropsNow) {
-                        val channelGameId = currentLivePlaybackGameId(expectedChannelId)
-                        dropsRepository.refreshChannelDrops(
+                    val summary = if (showDropsNow) {
+                        val channelGameId = currentLivePlaybackGameId(expectedChannelId, expectedChannelLogin)
+                        dropsRepository.refreshChannelDropsSummary(
                             expectedChannelId,
                             currentSessionResult,
                             currentSessionKey = "$expectedSessionToken:${streamId.orEmpty()}",
                             channelGameId = channelGameId,
                             isSessionCurrent = {
-                                    dropsSessionGeneration.get() == observedSessionGeneration &&
+                                dropsSessionGeneration.get() == observedSessionGeneration &&
                                     dropsStreamLive &&
                                     predictionSessionToken == expectedSessionToken &&
                                     activeChannelId == expectedChannelId &&
-                                    currentLivePlaybackGameId(expectedChannelId) == channelGameId &&
+                                    currentLivePlaybackGameId(expectedChannelId, expectedChannelLogin) == channelGameId &&
                                     applicationContext.tokenPrefs().getString(C.USER_ID, null) == expectedAccountId
                             },
                         )
                     } else {
-                        emptyList()
+                        ChannelDropsSummary()
                     }
-                    val safeDrops = if (inventoryError == null) {
-                        drops
+                    val safeDrops = if (polledInventoryError == null) {
+                        summary.drops
                     } else {
-                        drops.map { it.copy(dropInstanceId = null) }
+                        summary.drops.map { it.copy(dropInstanceId = null) }
                     }
+                    val tracker = watchCreditTracker()
+                    val statusSnap = tracker?.statusForChannel(expectedChannelId, expectedChannelLogin)
                     _dropsUiState.update { currentState ->
                         if (applicationContext.tokenPrefs().getString(C.USER_ID, null) != expectedAccountId) {
                             DropsUiState()
@@ -4845,7 +4910,7 @@ class ChatViewModel(
                                 useInventoryDropState(
                                     safeDrops,
                                     dropsRepository.inventory.value.drops,
-                                    allowClaimIds = inventoryError == null,
+                                    allowClaimIds = polledInventoryError == null,
                                 )
                             } else {
                                 val latestSessionProgress = currentState.drops
@@ -4868,12 +4933,29 @@ class ChatViewModel(
                                     }
                                 }
                             }
-                            currentState.copy(drops = committedDrops, lastError = inventoryError?.message)
+                            currentState.copy(
+                                drops = committedDrops,
+                                lastError = polledInventoryError?.message,
+                                totalWatchDrops = summary.totalWatchDrops,
+                                claimedWatchDrops = summary.claimedWatchDrops,
+                                allChannelDropsClaimed = summary.allChannelDropsClaimed,
+                                categoryMismatchGameName = summary.categoryMismatchGameName,
+                                activeCampaignEndTime = summary.activeCampaignEndTime,
+                                tierIndex = summary.tierIndex,
+                                tierTotal = summary.tierTotal,
+                                catalogSettled = true,
+                                watchStatus = statusSnap ?: currentState.watchStatus,
+                                twitchSession = tracker?.twitchDropSession?.value ?: currentState.twitchSession,
+                                lastHermesProgressAtElapsedMs = tracker?.lastHermesDropEventAtElapsedMs?.value
+                                    ?: currentState.lastHermesProgressAtElapsedMs,
+                                channelId = expectedChannelId,
+                                channelLogin = expectedChannelLogin,
+                            )
                         }
                     }
 
                     if (
-                        inventoryError == null &&
+                        polledInventoryError == null &&
                         applicationContext.prefs().getBoolean(
                             C.CHAT_DROPS_AUTO_CLAIM,
                             false,
@@ -4882,7 +4964,14 @@ class ChatViewModel(
                         dropsRepository.autoClaimCompletedDrops()
                     }
 
-                    nextDelayMillis = DROPS_REFRESH_MILLIS
+                    val hasUnstarted = safeDrops.any { !it.isClaimed && it.currentMinutesWatched == 0 }
+                    val sessionNotPresent = currentSessionResult !is CurrentDropSessionResult.Present
+                    val noPingYet = (statusSnap?.consecutiveOkPings ?: 0) == 0
+                    nextDelayMillis = if (safeDrops.isNotEmpty() && (hasUnstarted || sessionNotPresent || noPingYet)) {
+                        DROPS_FAST_REFRESH_MILLIS
+                    } else {
+                        DROPS_REFRESH_MILLIS
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -4905,7 +4994,7 @@ class ChatViewModel(
                         )
                     }
 
-                    nextDelayMillis = DROPS_REFRESH_MILLIS
+                    nextDelayMillis = DROPS_RETRY_MILLIS
                 }
             }
         }
@@ -4947,14 +5036,33 @@ class ChatViewModel(
 
             if (success) {
                 _dropsUiState.update { state ->
+                    val updatedDrops = state.drops.map { existing ->
+                        if (existing.id == drop.id) {
+                            existing.copy(
+                                isClaimed = true,
+                                dropInstanceId = null,
+                                currentMinutesWatched = maxOf(
+                                    existing.currentMinutesWatched,
+                                    existing.requiredMinutesWatched,
+                                ),
+                            )
+                        } else {
+                            existing
+                        }
+                    }
+                    val total = updatedDrops.size.takeIf { it > 0 } ?: state.totalWatchDrops
+                    val claimedCount = updatedDrops.count { it.isClaimed }
+                    val allClaimed = updatedDrops.isNotEmpty() && updatedDrops.all { it.isClaimed }
                     state.copy(
-                        drops = state.drops.filterNot {
-                            it.id == drop.id
-                        },
+                        drops = updatedDrops,
                         claimingDropId = null,
                         lastError = null,
+                        totalWatchDrops = total,
+                        claimedWatchDrops = claimedCount,
+                        allChannelDropsClaimed = allClaimed,
                     )
                 }
+                dropsWakeEvents.trySend(Unit)
 
                 dropClaimEvents.send(
                     DropClaimResult(
@@ -5007,10 +5115,8 @@ class ChatViewModel(
     }
 
     fun stopLiveChat() {
-        watchCreditSchedulerJob?.cancel()
-        watchCreditSchedulerJob = null
-        watchCreditChatSessionGeneration.incrementAndGet()
-        watchCreditStreamLive.value = null
+        dropsWatchObserverJob?.cancel()
+        dropsWatchObserverJob = null
         if (predictionPreferenceListenerRegistered) {
             applicationContext.prefs().unregisterOnSharedPreferenceChangeListener(predictionPreferenceListener)
             predictionPreferenceListenerRegistered = false
@@ -6087,10 +6193,11 @@ class ChatViewModel(
                 playbackMessage.live?.let {
                     if (it) {
                         watchCreditLive = true
-                        this@ChatViewModel.watchCreditStreamLive.value = true
                         this@ChatViewModel.dropsStreamLive = true
                         this@ChatViewModel.streamId = null
                         this@ChatViewModel.clearSessionOnlyDrops()
+                        watchCreditTracker()?.notifySingleStreamLiveStatus(channelId, channelLogin, isLive = true)
+                        dropsWakeEvents.trySend(Unit)
                         Log.d(WatchCreditTelemetry.LOG_TAG, "watch credit stream-up received; refreshing broadcastId")
                         refreshWatchCreditStreamId("stream-up")
                         onMessage(ChatMessage(
@@ -6099,10 +6206,11 @@ class ChatViewModel(
                         ))
                     } else {
                         watchCreditLive = false
-                        this@ChatViewModel.watchCreditStreamLive.value = false
                         this@ChatViewModel.dropsStreamLive = false
                         this@ChatViewModel.streamId = null
                         this@ChatViewModel.clearSessionOnlyDrops()
+                        watchCreditTracker()?.notifySingleStreamLiveStatus(channelId, channelLogin, isLive = false)
+                        dropsWakeEvents.trySend(Unit)
                         Log.d(WatchCreditTelemetry.LOG_TAG, "watch credit stream-down received; heartbeat paused")
                         onMessage(ChatMessage(
                             type = ChatMessage.NOTICE_MESSAGE,
@@ -6129,7 +6237,12 @@ class ChatViewModel(
         }
 
         override suspend fun onStreamInfo(message: JSONObject) {
-            _streamInfo.value = PubSubUtils.parseStreamInfo(message)
+            val previousGameId = _streamInfo.value?.gameId
+            val updated = PubSubUtils.parseStreamInfo(message)
+            _streamInfo.value = updated
+            if (isActiveWatchCreditSession() && updated?.gameId != previousGameId) {
+                dropsWakeEvents.trySend(Unit)
+            }
         }
 
         override suspend fun onRewardMessage(message: JSONObject) {
@@ -6451,6 +6564,13 @@ class ChatViewModel(
         }
 
         private suspend fun publishDropProgress(update: DropProgressUpdate) {
+            watchCreditTracker()?.recordHermesDropProgress(
+                dropId = update.dropId,
+                currentMinutesWatched = update.currentMinutesWatched,
+                requiredMinutesWatched = update.requiredMinutesWatched,
+                channelId = channelId,
+                channelLogin = channelLogin,
+            )
             val previous = _dropsUiState.value.drops.firstOrNull { it.id == update.dropId }
             val showDrops = applicationContext.prefs().getBoolean(C.CHAT_DROPS_SHOW, true)
             val autoClaimDrops = applicationContext.prefs().getBoolean(C.CHAT_DROPS_AUTO_CLAIM, false)
@@ -6551,6 +6671,13 @@ class ChatViewModel(
                 }
                 if (!isActiveWatchCreditSession() || dropsSessionGeneration.get() != expectedGeneration) return
                 (currentSession as? CurrentDropSessionResult.Present)?.progress?.let { progress ->
+                    watchCreditTracker()?.recordCurrentDropSession(
+                        dropId = progress.dropId,
+                        currentMinutesWatched = progress.currentMinutesWatched,
+                        requiredMinutesWatched = progress.requiredMinutesWatched,
+                        queriedChannelId = channelId,
+                        queriedChannelLogin = channelLogin,
+                    )
                     dropsRepository.applyDropProgress(
                         progress,
                         expectedUserId = accountId,
@@ -6561,9 +6688,9 @@ class ChatViewModel(
                         },
                     )
                 }
-                val drops = if (showDrops) {
-                    val channelGameId = currentLivePlaybackGameId(channelId)
-                    dropsRepository.refreshChannelDrops(
+                val summary = if (showDrops) {
+                    val channelGameId = currentLivePlaybackGameId(channelId, channelLogin)
+                    dropsRepository.refreshChannelDropsSummary(
                         channelId,
                         currentSession,
                         currentSessionKey = "$sessionToken:${this@ChatViewModel.streamId.orEmpty()}",
@@ -6571,19 +6698,19 @@ class ChatViewModel(
                         isSessionCurrent = {
                             isActiveWatchCreditSession() &&
                                 dropsStreamLive &&
-                                currentLivePlaybackGameId(channelId) == channelGameId &&
+                                currentLivePlaybackGameId(channelId, channelLogin) == channelGameId &&
                                 dropsSessionGeneration.get() == expectedGeneration
                         },
                     )
                 } else {
-                    emptyList()
+                    ChannelDropsSummary()
                 }
                 if (!isActiveWatchCreditSession() || dropsSessionGeneration.get() != expectedGeneration) return
                 val safeDrops = if (inventory.error == null) {
-                    drops
+                    summary.drops
                 } else {
-                    drops.map { it.copy(dropInstanceId = null) }
-                    }
+                    summary.drops.map { it.copy(dropInstanceId = null) }
+                }
                 if (isActiveWatchCreditSession()) {
                     _dropsUiState.update { currentState ->
                         if (!isActiveWatchCreditSession()) {
@@ -6595,6 +6722,14 @@ class ChatViewModel(
                                     dropsRepository.inventory.value.drops,
                                     allowClaimIds = inventory.error == null,
                                 ),
+                                totalWatchDrops = summary.totalWatchDrops,
+                                claimedWatchDrops = summary.claimedWatchDrops,
+                                allChannelDropsClaimed = summary.allChannelDropsClaimed,
+                                categoryMismatchGameName = summary.categoryMismatchGameName,
+                                activeCampaignEndTime = summary.activeCampaignEndTime,
+                                tierIndex = summary.tierIndex,
+                                tierTotal = summary.tierTotal,
+                                catalogSettled = true,
                             )
                         } else {
                             val committedDrops = (currentSession as? CurrentDropSessionResult.Present)
@@ -6623,9 +6758,17 @@ class ChatViewModel(
                             currentState.copy(
                                 drops = committedDrops,
                                 lastError = if (inventory.error == null) null else currentState.lastError,
+                                totalWatchDrops = summary.totalWatchDrops,
+                                claimedWatchDrops = summary.claimedWatchDrops,
+                                allChannelDropsClaimed = summary.allChannelDropsClaimed,
+                                categoryMismatchGameName = summary.categoryMismatchGameName,
+                                activeCampaignEndTime = summary.activeCampaignEndTime,
+                                tierIndex = summary.tierIndex,
+                                tierTotal = summary.tierTotal,
+                                catalogSettled = true,
                             )
+                        }
                     }
-                }
                 }
                 if (inventory.error == null &&
                     applicationContext.prefs().getBoolean(C.CHAT_DROPS_AUTO_CLAIM, false)
@@ -6674,6 +6817,12 @@ class ChatViewModel(
                 if (!resolvedStreamId.isNullOrBlank()) {
                     val previousStreamId = this@ChatViewModel.streamId
                     this@ChatViewModel.streamId = resolvedStreamId
+                    watchCreditTracker()?.notifySingleStreamLiveStatus(
+                        channelId,
+                        channelLogin,
+                        isLive = true,
+                        newStreamId = resolvedStreamId,
+                    )
                     if (!previousStreamId.isNullOrBlank() && previousStreamId != resolvedStreamId) {
                         perStreamUnavailableChannelPointRewardIds.clear()
                         this@ChatViewModel.clearSessionOnlyDrops()
@@ -8434,6 +8583,7 @@ class ChatViewModel(
 
     companion object {
         private const val PICKER_WARM_DELAY_MILLIS = 2_000L
+        private const val DROPS_FAST_REFRESH_MILLIS = 15_000L
         private const val DROPS_REFRESH_MILLIS = 60_000L
         private const val DROPS_SESSION_PROGRESS_STALE_MILLIS = DROPS_REFRESH_MILLIS * 2
         private const val DROPS_RETRY_MILLIS = 120_000L

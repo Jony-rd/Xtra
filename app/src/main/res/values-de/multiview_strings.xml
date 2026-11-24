@@ -22,10 +22,6 @@
     <string name="multiview_use_channel">Kanal verwenden</string>
     <string name="multiview_duplicate_stream">Dieser Kanal ist bereits in Multiview.</string>
     <string name="multiview_max_streams">Sie können bis zu 4 Streams ansehen.</string>
-    <string name="multiview_all_chats">Alle Chats</string>
-    <string name="multiview_channel_chat">Kanalchat</string>
-    <string name="multiview_combined_chat_description">Der kombinierte Chat ist schreibgeschützt. Wählen Sie einen Kanal zum Senden.</string>
-    <string name="multiview_combined_chat_empty">Noch keine Chatnachrichten.</string>
     <string name="multiview_audio_multiple">Audio: %d Streams</string>
     <string name="multiview_layout">Layout</string>
     <string name="multiview_layout_auto">Auto</string>
@@ -85,7 +81,6 @@
     <string name="multiview_add_streams">Streams hinzufügen</string>
     <string name="multiview_viewers">%d Zuschauer</string>
     <string name="multiview_already_added">Bereits hinzugefügt</string>
-    <string name="multiview_combined_message_description">%1$s – Chatnachricht: %2$s</string>
     <string name="multiview_background_playback">Multiview-Wiedergabe</string>
     <string name="multiview_background_playback_description">Audio wird abgespielt, während Video ausgeblendet ist.</string>
 </resources>

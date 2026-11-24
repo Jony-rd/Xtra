@@ -12,7 +12,6 @@ data class MultiviewSessionState(
     val layoutBeforeFocus: MultiviewLayoutMode? = null,
     val fillVideo: Boolean = false,
     val chatVisible: Boolean = false,
-    val combinedChat: Boolean = false,
     val chatIdentity: String? = null,
     val qualityMode: MultiviewQualityMode = MultiviewQualityMode.AUTO,
     val qualityOverrides: Map<String, String> = emptyMap(),

@@ -22,10 +22,6 @@
     <string name="multiview_use_channel">Gunakan kanal</string>
     <string name="multiview_duplicate_stream">Kanal tersebut sudah ada di multiview.</string>
     <string name="multiview_max_streams">Anda dapat menonton hingga 4 streaming.</string>
-    <string name="multiview_all_chats">Semua chat</string>
-    <string name="multiview_channel_chat">Chat kanal</string>
-    <string name="multiview_combined_chat_description">Chat gabungan hanya dapat dibaca. Pilih kanal untuk mengirim pesan.</string>
-    <string name="multiview_combined_chat_empty">Belum ada pesan chat.</string>
     <string name="multiview_audio_multiple">Audio: %d stream</string>
     <string name="multiview_layout">Tata Letak</string>
     <string name="multiview_layout_auto">Otomatis</string>
@@ -85,7 +81,6 @@
     <string name="multiview_add_streams">Tambahkan streaming</string>
     <string name="multiview_viewers">Pemirsa %d</string>
     <string name="multiview_already_added">Sudah ditambahkan</string>
-    <string name="multiview_combined_message_description">Pesan obrolan %1$s : %2$s</string>
     <string name="multiview_background_playback">Pemutaran multiview</string>
     <string name="multiview_background_playback_description">Audio diputar saat video disembunyikan.</string>
 </resources>

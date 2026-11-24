@@ -22,10 +22,6 @@
     <string name="multiview_use_channel">使用頻道</string>
     <string name="multiview_duplicate_stream">此頻道已在多視圖中。</string>
     <string name="multiview_max_streams">最多可以觀看 4 個直播。</string>
-    <string name="multiview_all_chats">所有聊天</string>
-    <string name="multiview_channel_chat">頻道聊天</string>
-    <string name="multiview_combined_chat_description">合併聊天只能檢視。請選擇頻道傳送訊息。</string>
-    <string name="multiview_combined_chat_empty">目前沒有聊天訊息。</string>
     <string name="multiview_audio_multiple">音訊： %d 串流</string>
     <string name="multiview_layout">佈局</string>
     <string name="multiview_layout_auto">汽車</string>
@@ -85,7 +81,6 @@
     <string name="multiview_add_streams">新增串流</string>
     <string name="multiview_viewers">%d 檢視器</string>
     <string name="multiview_already_added">已新增</string>
-    <string name="multiview_combined_message_description">%1$s 聊天訊息： %2$s</string>
     <string name="multiview_background_playback">多視圖播放</string>
     <string name="multiview_background_playback_description">隱藏視訊時正在播放音訊。</string>
 </resources>

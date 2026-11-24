@@ -22,10 +22,6 @@
     <string name="multiview_use_channel">チャンネルを使用</string>
     <string name="multiview_duplicate_stream">そのチャンネルはすでにマルチビューにあります。</string>
     <string name="multiview_max_streams">最大4つの配信を視聴できます。</string>
-    <string name="multiview_all_chats">すべてのチャット</string>
-    <string name="multiview_channel_chat">チャンネルチャット</string>
-    <string name="multiview_combined_chat_description">統合チャットは読み取り専用です。送信するチャンネルを選択してください。</string>
-    <string name="multiview_combined_chat_empty">まだチャットメッセージはありません。</string>
     <string name="multiview_audio_multiple">オーディオ: %d ストリーム</string>
     <string name="multiview_layout">レイアウト</string>
     <string name="multiview_layout_auto">自動</string>
@@ -85,7 +81,6 @@
     <string name="multiview_add_streams">ストリームを追加</string>
     <string name="multiview_viewers">%d ビューア</string>
     <string name="multiview_already_added">すでに追加されています</string>
-    <string name="multiview_combined_message_description">%1$s チャット メッセージ: %2$s</string>
     <string name="multiview_background_playback">マルチビュー再生</string>
     <string name="multiview_background_playback_description">ビデオが非表示になっている間、オーディオが再生されています。</string>
 </resources>

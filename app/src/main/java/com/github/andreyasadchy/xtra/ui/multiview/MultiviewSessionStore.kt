@@ -17,7 +17,6 @@ object MultiviewSessionStore {
             putNullable("layoutBeforeFocus", state.layoutBeforeFocus?.name)
             put("fillVideo", state.fillVideo)
             put("chatVisible", state.chatVisible)
-            put("combinedChat", state.combinedChat)
             putNullable("chatIdentity", state.chatIdentity)
             put("qualityMode", state.qualityMode.name)
             put("qualityOverrides", JSONObject().apply {
@@ -46,7 +45,6 @@ object MultiviewSessionStore {
                     layoutBeforeFocus = json.enumOrNull("layoutBeforeFocus"),
                     fillVideo = json.optBoolean("fillVideo", false),
                     chatVisible = json.optBoolean("chatVisible", false),
-                    combinedChat = json.optBoolean("combinedChat", false),
                     chatIdentity = json.stringOrNull("chatIdentity"),
                     qualityMode = json.enumOrDefault("qualityMode", MultiviewQualityMode.AUTO),
                     qualityOverrides = json.stringMap("qualityOverrides"),

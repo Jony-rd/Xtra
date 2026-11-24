@@ -23,10 +23,6 @@
     <string name="multiview_use_channel">Użyj kanału</string>
     <string name="multiview_duplicate_stream">Ten kanał jest już w trybie multiview.</string>
     <string name="multiview_max_streams">Możesz oglądać maksymalnie 4 transmisje.</string>
-    <string name="multiview_all_chats">Wszystkie czaty</string>
-    <string name="multiview_channel_chat">Czat na kanale</string>
-    <string name="multiview_combined_chat_description">Czat łączony jest tylko do odczytu. Wybierz kanał, do którego chcesz wysyłać wiadomości.</string>
-    <string name="multiview_combined_chat_empty">Brak jeszcze wiadomości na czacie.</string>
     <string name="multiview_layout">Układ</string>
     <string name="multiview_layout_auto">Auto</string>
     <string name="multiview_layout_grid">Siatka</string>
@@ -85,7 +81,6 @@
     <string name="multiview_add_streams">Dodaj strumienie</string>
     <string name="multiview_viewers">%d widzów</string>
     <string name="multiview_already_added">Już dodano</string>
-    <string name="multiview_combined_message_description">%1$s wiadomość na czacie: %2$s</string>
     <string name="multiview_background_playback">Odtwarzanie w wielu widokach</string>
     <string name="multiview_background_playback_description">Odtwarza dźwięk, gdy wideo jest ukryte.</string>
     <string name="multiview_raids">Przełącz transmisję podczas rajdu w multiview</string>

@@ -22,10 +22,6 @@
     <string name="multiview_use_channel">使用频道</string>
     <string name="multiview_duplicate_stream">该频道已在多视图中。</string>
     <string name="multiview_max_streams">最多可以观看 4 个直播。</string>
-    <string name="multiview_all_chats">所有聊天</string>
-    <string name="multiview_channel_chat">频道聊天</string>
-    <string name="multiview_combined_chat_description">合并聊天只能查看。请选择频道发送消息。</string>
-    <string name="multiview_combined_chat_empty">暂无聊天消息。</string>
     <string name="multiview_audio_multiple">音频： %d 流</string>
     <string name="multiview_layout">布局</string>
     <string name="multiview_layout_auto">自动</string>
@@ -85,7 +81,6 @@
     <string name="multiview_add_streams">添加流</string>
     <string name="multiview_viewers">%d 查看器</string>
     <string name="multiview_already_added">已添加</string>
-    <string name="multiview_combined_message_description">%1$s 聊天消息： %2$s</string>
     <string name="multiview_background_playback">多视图播放</string>
     <string name="multiview_background_playback_description">隐藏视频时正在播放音频。</string>
 </resources>

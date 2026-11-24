@@ -23,10 +23,6 @@
     <string name="multiview_use_channel">Použite kanál</string>
     <string name="multiview_duplicate_stream">Tento kanál je už vo viacnásobnom zobrazení.</string>
     <string name="multiview_max_streams">Môžete sledovať až 4 streamy.</string>
-    <string name="multiview_all_chats">Všetky chaty</string>
-    <string name="multiview_channel_chat">Kanálový rozhovor</string>
-    <string name="multiview_combined_chat_description">Kombinovaný chat je len na čítanie. Vyberte kanál na odosielanie správ.</string>
-    <string name="multiview_combined_chat_empty">Zatiaľ žiadne četové správy.</string>
     <string name="multiview_layout">Rozloženie</string>
     <string name="multiview_layout_auto">Auto</string>
     <string name="multiview_layout_grid">Mriežka</string>
@@ -85,7 +81,6 @@
     <string name="multiview_add_streams">Pridajte streamy</string>
     <string name="multiview_viewers">%d divákov</string>
     <string name="multiview_already_added">Už pridané</string>
-    <string name="multiview_combined_message_description">%1$s četová správa: %2$s</string>
     <string name="multiview_background_playback">Viacnásobné prehrávanie</string>
     <string name="multiview_background_playback_description">Zvuk sa prehráva, kým je video skryté.</string>
     <string name="multiview_raids">Pri raide prepnúť stream v multiview</string>

@@ -22,10 +22,6 @@
     <string name="multiview_use_channel">Utiliser la chaîne</string>
     <string name="multiview_duplicate_stream">Cette chaîne est déjà dans la multivue.</string>
     <string name="multiview_max_streams">Vous pouvez regarder jusqu’à 4 streams.</string>
-    <string name="multiview_all_chats">Tous les chats</string>
-    <string name="multiview_channel_chat">Chat de la chaîne</string>
-    <string name="multiview_combined_chat_description">Le chat combiné est en lecture seule. Choisissez une chaîne pour envoyer un message.</string>
-    <string name="multiview_combined_chat_empty">Aucun message pour le moment.</string>
     <string name="multiview_audio_multiple">Audio : flux %d</string>
     <string name="multiview_layout">Mise en page</string>
     <string name="multiview_layout_auto">Auto</string>
@@ -85,7 +81,6 @@
     <string name="multiview_add_streams">Ajouter des flux</string>
     <string name="multiview_viewers">Visionneuses %d</string>
     <string name="multiview_already_added">Déjà ajouté</string>
-    <string name="multiview_combined_message_description">Message de discussion %1$s : %2$s</string>
     <string name="multiview_background_playback">Lecture multivue</string>
     <string name="multiview_background_playback_description">L\'audio est en cours de lecture alors que la vidéo est masquée.</string>
 </resources>
