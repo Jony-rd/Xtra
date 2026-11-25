@@ -2610,13 +2610,13 @@ Tap to search everywhere</string>
     <string name="drops_wrong_game_title">Switch to %1$s</string>
     <string name="drops_wrong_game_subtitle">Channel has Drops for %1$s</string>
     <string name="drops_action_claim">Claim</string>
-    <string name="drops_action_focus">Focus</string>
+    <string name="drops_action_focus">Use</string>
     <string name="drops_action_details">Details</string>
     <string name="drops_credit_target_you">Crediting @%1$s</string>
     <string name="drops_credit_target_other">Crediting @%1$s</string>
     <string name="drops_credit_target_checking">Syncing @%1$s…</string>
     <string name="drops_status_counting">Counting 1x · #%1$d OK · %2$s · Next %3$s</string>
-    <string name="drops_status_views_only">Views 1x · #%1$d OK · Next %2$s (tap Focus for Drops)</string>
+    <string name="drops_status_views_only">Views 1x · #%1$d OK · Next %2$s (tap Use for Drops)</string>
     <string name="drops_status_buffering">Buffering (counting 1x) · Next %1$s</string>
     <string name="drops_status_starting">First ping in %1$s…</string>
     <string name="drops_status_sync_delayed">Pings OK (#%1$d) · Twitch sync delayed</string>
@@ -2639,5 +2639,5 @@ Tap to search everywhere</string>
     <string name="drops_ago_now">just now</string>
     <string name="drops_ago_seconds">%1$ds ago</string>
     <string name="drops_countdown_seconds">%1$ds</string>
-    <string name="drops_focus_switched">Drops focus switched to @%1$s</string>
+    <string name="drops_focus_switched">Drops set to @%1$s</string>
 </resources>

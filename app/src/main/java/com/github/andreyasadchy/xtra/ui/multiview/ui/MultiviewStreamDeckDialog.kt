@@ -54,6 +54,7 @@ import com.github.andreyasadchy.xtra.ui.multiview.MultiviewSessionState
 import com.github.andreyasadchy.xtra.ui.multiview.MultiviewViewModel
 import com.github.andreyasadchy.xtra.ui.multiview.playback.MultiviewLiveHealth
 import com.github.andreyasadchy.xtra.ui.multiview.playback.MultiviewPlaybackSnapshot
+import com.github.andreyasadchy.xtra.util.watch.WatchCreditStatusMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -1521,7 +1522,7 @@ object MultiviewStreamDeckDialog {
         }
         applyCardBackground()
 
-        // Row 1: #N (direct drag handle) + Avatar + Streamer Name + FPS Pill + Health Pill + Open Player + 2-Tap Remove
+        // Row 1: #N (direct drag handle) + Avatar + Streamer Name + Watch/Drops Pill + FPS Pill + Health Pill + Open Player + 2-Tap Remove
         val row1 = LinearLayout(ui.context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1724,6 +1725,32 @@ object MultiviewStreamDeckDialog {
             }
         })
 
+        val watchPill = TextView(ui.context).apply {
+            textSize = if (isGridCell) 8f else 8.5f
+            typeface = Typeface.MONOSPACE
+            setTypeface(typeface, Typeface.BOLD)
+            maxLines = 1
+            includeFontPadding = false
+            setPadding(ui.dp(4), ui.dp(2), ui.dp(4), ui.dp(2))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                marginEnd = ui.dp(3.5f)
+            }
+            setOnClickListener {
+                ui.viewModel.selectDropsPriorityChannel(stream)
+                performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                val latestHealth = try {
+                    ui.healthProvider()
+                } catch (_: Throwable) {
+                    emptyMap()
+                }
+                healthUpdaters.forEach { (id, updater) -> updater(latestHealth[id]) }
+            }
+        }
+        row1.addView(watchPill)
+
         val fpsPill = TextView(ui.context).apply {
             textSize = if (isGridCell) 8f else 8.5f
             typeface = Typeface.MONOSPACE
@@ -1767,6 +1794,55 @@ object MultiviewStreamDeckDialog {
             }
         }
         healthUpdaters[identity] = { health ->
+            val credit = ui.viewModel.watchCreditStatus(stream)
+            val isDropsTarget = credit?.isDropsPriority ?: ui.viewModel.isDropsPriorityChannel(stream)
+            val (watchLabel, watchTextHex, watchStrokeHex, watchFillHex) = when (credit?.mode) {
+                WatchCreditStatusMode.COUNTING -> if (isDropsTarget) {
+                    arrayOf("✓★", "#4ADE80", "#CCC084FC", "#80051F10")
+                } else {
+                    arrayOf("✓", "#4ADE80", "#9922C55E", "#80051F10")
+                }
+                WatchCreditStatusMode.STARTING, null -> arrayOf(
+                    if (isDropsTarget) "~★" else "~",
+                    "#FCD34D",
+                    "#B3F59E0B",
+                    "#80221604",
+                )
+                WatchCreditStatusMode.MISSING_STREAM_ID -> arrayOf(
+                    if (isDropsTarget) "…★" else "…",
+                    "#FCD34D",
+                    "#B3F59E0B",
+                    "#80221604",
+                )
+                WatchCreditStatusMode.PAUSED_USER, WatchCreditStatusMode.PAUSED_REWIND -> arrayOf(
+                    if (isDropsTarget) "⏸★" else "⏸",
+                    "#94A3B8",
+                    "#7764748B",
+                    "#800E1322",
+                )
+                WatchCreditStatusMode.PING_FAILED, WatchCreditStatusMode.OFFLINE, WatchCreditStatusMode.NO_AUTH -> arrayOf(
+                    if (isDropsTarget) "!★" else "!",
+                    "#FF7096",
+                    "#CCFF2E63",
+                    "#80260612",
+                )
+            }
+            watchPill.text = watchLabel
+            watchPill.contentDescription = when {
+                credit?.mode == WatchCreditStatusMode.COUNTING && isDropsTarget ->
+                    "Twitch counting watch credit and Drops priority"
+                credit?.mode == WatchCreditStatusMode.COUNTING ->
+                    "Twitch counting watch credit. Tap to use for Drops."
+                else ->
+                    "Tap to select stream for Drops priority"
+            }
+            watchPill.setTextColor(Color.parseColor(watchTextHex))
+            watchPill.background = GradientDrawable().apply {
+                setColor(Color.parseColor(watchFillHex))
+                cornerRadius = ui.dp(4.5f).toFloat()
+                setStroke(ui.dp(1), Color.parseColor(watchStrokeHex))
+            }
+
             val fps = health?.renderedFps
             if (fps == null) {
                 fpsPill.visibility = View.GONE

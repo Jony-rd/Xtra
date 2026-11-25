@@ -30,6 +30,7 @@ import com.github.andreyasadchy.xtra.util.TwitchApiHelper
 import com.github.andreyasadchy.xtra.util.httpProxyHost
 import com.github.andreyasadchy.xtra.util.httpProxyPort
 import com.github.andreyasadchy.xtra.util.prefs
+import com.github.andreyasadchy.xtra.util.watch.ChannelWatchCreditStatus
 import com.github.andreyasadchy.xtra.util.watch.WatchCreditTracker
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -562,6 +563,20 @@ class MultiviewViewModel(
                 channelName = raid.targetName,
                 channelImageURL = raid.targetImageURL,
             ),
+        )
+    }
+
+    fun watchCreditStatus(stream: Stream): ChannelWatchCreditStatus? =
+        watchCreditTracker?.statusForChannel(stream.channelId, stream.channelLogin)
+
+    fun isDropsPriorityChannel(stream: Stream): Boolean =
+        watchCreditTracker?.isDropsPriorityChannel(stream.channelId, stream.channelLogin) ?: false
+
+    fun selectDropsPriorityChannel(stream: Stream) {
+        val status = watchCreditTracker?.statusForChannel(stream.channelId, stream.channelLogin)
+        watchCreditTracker?.setDropsFocusChannel(
+            channelId = status?.channelId ?: stream.channelId,
+            channelLogin = status?.channelLogin ?: stream.channelLogin,
         )
     }
 
