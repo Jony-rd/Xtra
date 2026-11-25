@@ -256,6 +256,22 @@ class MultiviewQualityPolicyTest {
         assertEquals("720p60", MultiviewQualityPolicy.effectiveFormatLabel(1280, 720, 59.94f))
     }
 
+    @Test
+    fun audioOnlyOverrideProducesAudioOnlyTargetEvenUnderResourcePressure() {
+        val normal = MultiviewQualityPolicy.target(
+            input(streamCount = 4, active = false, override = MultiviewQualityPolicy.AUDIO_ONLY_LABEL),
+        )
+        val underPressure = MultiviewQualityPolicy.target(
+            input(streamCount = 4, active = true, override = "audio_only", resourcePressure = true),
+        )
+
+        assertTrue(normal.isAudioOnly)
+        assertEquals(MultiviewQualityPolicy.AUDIO_ONLY_LABEL, normal.label)
+        assertNull(normal.maxHeightPx)
+        assertTrue(underPressure.isAudioOnly)
+        assertEquals(MultiviewQualityPolicy.AUDIO_ONLY_LABEL, underPressure.label)
+    }
+
     private fun input(
         streamCount: Int,
         active: Boolean,

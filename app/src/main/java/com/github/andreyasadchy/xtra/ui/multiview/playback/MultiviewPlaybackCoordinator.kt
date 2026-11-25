@@ -464,11 +464,14 @@ class MultiviewPlaybackCoordinator(
             } else {
                 player.currentLiveOffset.takeIf { it != androidx.media3.common.C.TIME_UNSET && it >= 0L }
             }
-            val allowReading = player.playWhenReady && hasVideo &&
+            val isAudioOnly = slot.target?.isAudioOnly == true
+            val allowFpsReading = player.playWhenReady && hasVideo && !isAudioOnly &&
                 (state == Player.STATE_READY || state == Player.STATE_BUFFERING)
-            val targetFps = player.videoFormat?.frameRate?.takeIf { it > 0f }?.roundToInt()
+            val allowBufferReading = player.playWhenReady && (hasVideo || isAudioOnly) &&
+                (state == Player.STATE_READY || state == Player.STATE_BUFFERING)
+            val targetFps = if (isAudioOnly) null else player.videoFormat?.frameRate?.takeIf { it > 0f }?.roundToInt()
             val renderedFrames = player.videoDecoderCounters?.renderedOutputBufferCount?.toLong() ?: -1L
-            val renderedFps = if (!allowReading || renderedFrames < 0L) {
+            val renderedFps = if (!allowFpsReading || renderedFrames < 0L) {
                 slot.lastFpsSampleMs = 0L
                 slot.lastRenderedFrames = -1L
                 slot.lastRenderedFps = null
@@ -489,7 +492,7 @@ class MultiviewPlaybackCoordinator(
                 }
                 slot.lastRenderedFps ?: targetFps
             }
-            val reading = if (allowReading && liveOffsetMs != null) {
+            val reading = if (allowBufferReading && liveOffsetMs != null) {
                 slot.bufferHealthTrend.update(bufferMs, liveOffsetMs, nowMs)
             } else {
                 slot.bufferHealthTrend.reset()
@@ -516,7 +519,7 @@ class MultiviewPlaybackCoordinator(
                     isDecreasing = false,
                     isBuffering = true,
                     isLiveReady = false,
-                    renderedFps = if (state == Player.STATE_BUFFERING && allowReading) renderedFps else null,
+                    renderedFps = if (state == Player.STATE_BUFFERING && allowFpsReading) renderedFps else null,
                     targetFps = targetFps,
                 )
             }
@@ -1079,25 +1082,35 @@ class MultiviewPlaybackCoordinator(
         )
         if (!force && slot.target == target) return
         slot.target = target
+        if (target.isAudioOnly) {
+            slot.effectiveQualityLabel = null
+        }
         val builder = slot.player.trackSelectionParameters.buildUpon()
             .clearVideoSizeConstraints()
             .clearOverridesOfType(androidx.media3.common.C.TRACK_TYPE_VIDEO)
             .setMaxVideoFrameRate(target.maxFrameRate)
             .setMaxVideoBitrate(Int.MAX_VALUE)
-        if (target.maxWidthPx != null && target.maxHeightPx != null) {
-            builder.setMaxVideoSize(target.maxWidthPx, target.maxHeightPx)
-        }
-        target.preferredHeightPx?.let { preferredHeight ->
-            findPreferredVideoSelection(
-                slot.player,
-                preferredHeight,
-                target.preferredFrameRate ?: target.maxFrameRate,
-            )?.override?.let(builder::setOverrideForType)
+            .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_VIDEO, shouldDisableVideoTrack(slot))
+        if (!target.isAudioOnly) {
+            if (target.maxWidthPx != null && target.maxHeightPx != null) {
+                builder.setMaxVideoSize(target.maxWidthPx, target.maxHeightPx)
+            }
+            target.preferredHeightPx?.let { preferredHeight ->
+                findPreferredVideoSelection(
+                    slot.player,
+                    preferredHeight,
+                    target.preferredFrameRate ?: target.maxFrameRate,
+                )?.override?.let(builder::setOverrideForType)
+            }
         }
         slot.player.trackSelectionParameters = builder.build()
+        updateWatchCreditInput(slot)
         onSnapshot(slot.identity, slot.snapshot(target.label))
         debugLog("channel=${slot.identity} policy mode=$qualityMode streams=${slots.size} active=${slot.identity == activeIdentity} focus=${slot.identity == focusedIdentity} target=${target.label} downgrade=${slot.downgradeLevel}")
     }
+
+    private fun shouldDisableVideoTrack(slot: MultiviewPlayerSlot): Boolean =
+        slot.target?.isAudioOnly == true || slot.videoDisabledForBackground || slot.hiddenForVaft
 
     private data class PreferredVideoSelection(
         val override: TrackSelectionOverride,
@@ -1260,7 +1273,7 @@ class MultiviewPlaybackCoordinator(
             slot.hiddenForVaft = true
             slot.player.trackSelectionParameters = slot.player.trackSelectionParameters
                 .buildUpon()
-                .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_VIDEO, true)
+                .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_VIDEO, shouldDisableVideoTrack(slot))
                 .build()
         }
         updateAudio()
@@ -1272,7 +1285,7 @@ class MultiviewPlaybackCoordinator(
             slot.hiddenForVaft = false
             slot.player.trackSelectionParameters = slot.player.trackSelectionParameters
                 .buildUpon()
-                .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_VIDEO, false)
+                .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_VIDEO, shouldDisableVideoTrack(slot))
                 .build()
         }
         updateAudio()
@@ -1383,7 +1396,7 @@ class MultiviewPlaybackCoordinator(
             slot.videoDisabledForBackground = false
             slot.player.trackSelectionParameters = slot.player.trackSelectionParameters
                 .buildUpon()
-                .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_VIDEO, false)
+                .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_VIDEO, shouldDisableVideoTrack(slot))
                 .build()
         }
     }
@@ -1421,6 +1434,7 @@ class MultiviewPlaybackCoordinator(
     }
 
     private fun logSelectedFormat(slot: MultiviewPlayerSlot, format: Format?) {
+        if (slot.target?.isAudioOnly == true) return
         if (format == null || format.width <= 0 || format.height <= 0) return
         slot.effectiveQualityLabel = MultiviewQualityPolicy.effectiveFormatLabel(format.width, format.height, format.frameRate)
         onSnapshot(slot.identity, slot.snapshot(slot.effectiveQualityLabel!!))

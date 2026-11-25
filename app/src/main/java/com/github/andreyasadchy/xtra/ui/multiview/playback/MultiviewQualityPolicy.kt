@@ -23,6 +23,7 @@ data class MultiviewQualityTarget(
     val preferredFrameRate: Int? = null,
     val label: String,
     val isConstrained: Boolean,
+    val isAudioOnly: Boolean = false,
 )
 
 /**
@@ -31,9 +32,27 @@ data class MultiviewQualityTarget(
  * below the ceiling instead.
  */
 object MultiviewQualityPolicy {
+    const val AUDIO_ONLY_LABEL = "Audio only"
     private val qualityHeights = intArrayOf(360, 480, 720, 1080)
 
+    fun isAudioOnlyOverride(label: String?): Boolean {
+        val normalized = label?.trim() ?: return false
+        return normalized.equals(AUDIO_ONLY_LABEL, ignoreCase = true) ||
+            normalized.equals("audio_only", ignoreCase = true) ||
+            normalized.equals("Audio-only", ignoreCase = true)
+    }
+
     fun target(input: MultiviewQualityInput): MultiviewQualityTarget {
+        if (isAudioOnlyOverride(input.manualOverride)) {
+            return MultiviewQualityTarget(
+                maxWidthPx = null,
+                maxHeightPx = null,
+                maxFrameRate = 60,
+                label = AUDIO_ONLY_LABEL,
+                isConstrained = true,
+                isAudioOnly = true,
+            )
+        }
         val override = input.manualOverride?.let(::parseHeight)
         val sourceOverride = input.manualOverride.equals("Source", ignoreCase = true)
         val recoveryRequested = input.resourcePressure ||

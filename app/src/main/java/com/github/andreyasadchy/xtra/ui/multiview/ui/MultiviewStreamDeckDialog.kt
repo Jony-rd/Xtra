@@ -53,6 +53,7 @@ import com.github.andreyasadchy.xtra.ui.multiview.MultiviewSessionReducer
 import com.github.andreyasadchy.xtra.ui.multiview.MultiviewSessionState
 import com.github.andreyasadchy.xtra.ui.multiview.MultiviewViewModel
 import com.github.andreyasadchy.xtra.ui.multiview.playback.MultiviewLiveHealth
+import com.github.andreyasadchy.xtra.ui.multiview.playback.MultiviewQualityPolicy
 import com.github.andreyasadchy.xtra.ui.multiview.playback.MultiviewPlaybackSnapshot
 import com.github.andreyasadchy.xtra.util.watch.WatchCreditStatusMode
 import kotlinx.coroutines.CoroutineScope
@@ -1911,6 +1912,25 @@ object MultiviewStreamDeckDialog {
         val actionBtnW = ui.dp(if (isGridCell) 28 else 31)
         val actionBtnH = ui.dp(if (isGridCell) 27 else 28)
 
+        lateinit var audioOnlyBtn: ImageView
+        var refreshThisPillsRef: (() -> Unit)? = null
+        audioOnlyBtn = ImageView(ui.context).apply {
+            layoutParams = LinearLayout.LayoutParams(actionBtnW, actionBtnH).apply {
+                marginEnd = ui.dp(if (isGridCell) 4 else 5)
+            }
+            setImageResource(R.drawable.ic_media_audio)
+            setPadding(ui.dp(5.5f), ui.dp(4.5f), ui.dp(5.5f), ui.dp(6.5f))
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            contentDescription = ui.context.getString(R.string.audio_only)
+            setOnClickListener {
+                performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                ui.viewModel.toggleAudioOnly(identity)
+                refreshThisPillsRef?.invoke()
+                onMasterRefresh()
+            }
+        }
+        row1.addView(audioOnlyBtn)
+
         row1.addView(ImageView(ui.context).apply {
             layoutParams = LinearLayout.LayoutParams(actionBtnW, actionBtnH).apply {
                 marginEnd = ui.dp(if (isGridCell) 4 else 5)
@@ -2188,6 +2208,23 @@ object MultiviewStreamDeckDialog {
         fun refreshThisPills() {
             val state = ui.stateProvider()
             val overrideQuality = state.qualityOverrides[identity]
+            val isAudioOnly = MultiviewQualityPolicy.isAudioOnlyOverride(overrideQuality)
+            audioOnlyBtn.background = ui.deckRipple(
+                if (isAudioOnly) {
+                    ui.make3DKeycapInt(
+                        topColor = ColorUtils.setAlphaComponent(blendRgb(palette.primary, Color.BLACK, 0.50f), 0xEB),
+                        bottomColor = ColorUtils.setAlphaComponent(blendRgb(palette.secondary, Color.BLACK, 0.68f), 0xF2),
+                        shadowColor = Color.parseColor(COLOR_PURPLE_SHADOW),
+                        strokeColor = palette.highlight,
+                        cornerRadiusDp = 5f,
+                        shadowDepthDp = 2f,
+                    )
+                } else {
+                    ui.make3DKeycap(COLOR_UNSEL_GLASS_TOP, COLOR_UNSEL_GLASS_BOTTOM, COLOR_UNSEL_SHADOW, COLOR_UNSEL_STROKE, 5f, 2f)
+                },
+            )
+            audioOnlyBtn.setColorFilter(Color.parseColor(if (isAudioOnly) "#FFFFFF" else "#CBD5E1"))
+
             val activePlaying = ui.playbackProvider()[identity]?.qualityLabel.orEmpty()
             val targetMatch = when {
                 overrideQuality != null -> overrideQuality
@@ -2197,7 +2234,7 @@ object MultiviewStreamDeckDialog {
 
             pillViews.forEach { pill ->
                 val pTag = pill.tag as? String ?: ""
-                val isSelected = when {
+                val isSelected = !isAudioOnly && when {
                     pTag == ui.autoLabel && overrideQuality == null && activePlaying.isBlank() -> true
                     pTag == ui.autoLabel && overrideQuality == null && activePlaying.equals("AUTO", ignoreCase = true) -> true
                     pTag != ui.autoLabel && targetMatch.contains(pTag, ignoreCase = true) -> true
@@ -2227,6 +2264,7 @@ object MultiviewStreamDeckDialog {
                 ui.centerKeycapText(pill, depthDp = 2.2f, sidePadDp = 1f)
             }
         }
+        refreshThisPillsRef = ::refreshThisPills
         cardPillUpdaters.add(::refreshThisPills)
 
         val displayQualities = listOf(ui.autoLabel) + STANDARD_QUALITIES

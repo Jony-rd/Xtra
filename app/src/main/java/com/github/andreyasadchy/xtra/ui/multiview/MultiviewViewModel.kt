@@ -24,6 +24,7 @@ import com.github.andreyasadchy.xtra.repository.PlayerRepository
 import com.github.andreyasadchy.xtra.ui.multiview.playback.MultiviewPlaybackCoordinator
 import com.github.andreyasadchy.xtra.ui.multiview.playback.MultiviewPlaybackSnapshot
 import com.github.andreyasadchy.xtra.ui.multiview.playback.MultiviewQualityMode
+import com.github.andreyasadchy.xtra.ui.multiview.playback.MultiviewQualityPolicy
 import com.github.andreyasadchy.xtra.ui.multiview.ui.MultiviewLayoutMode
 import com.github.andreyasadchy.xtra.util.C
 import com.github.andreyasadchy.xtra.util.TwitchApiHelper
@@ -58,6 +59,7 @@ class MultiviewViewModel(
     private val _playback = MutableStateFlow<Map<String, MultiviewPlaybackSnapshot>>(emptyMap())
     val playback: StateFlow<Map<String, MultiviewPlaybackSnapshot>> = _playback.asStateFlow()
     private val bannerUrlCache = ConcurrentHashMap<String, String>()
+    private val previousNonAudioQualityOverrides = mutableMapOf<String, String?>()
     private var raidMonitoringJob: Job? = null
     private var raidMonitor: MultiviewRaidMonitor? = null
     private var raidMonitoringGeneration: Any? = null
@@ -225,6 +227,7 @@ class MultiviewViewModel(
                 },
             ),
         )
+        previousNonAudioQualityOverrides.keys.removeAll { it.equals(identity, true) }
         _playback.value = cleanupPlaybackSnapshots(_playback.value, identity, _state.value)
     }
 
@@ -241,6 +244,7 @@ class MultiviewViewModel(
                 next
             },
         )
+        previousNonAudioQualityOverrides.keys.removeAll { it.equals(identity, true) }
         _playback.value = cleanupPlaybackSnapshots(_playback.value, identity, _state.value)
     }
 
@@ -307,12 +311,30 @@ class MultiviewViewModel(
         // The UI already maps its localized Smart label to null. Keeping this
         // API language-neutral avoids treating a translated label as a real
         // manual quality override.
+        if (!MultiviewQualityPolicy.isAudioOnlyOverride(label)) {
+            previousNonAudioQualityOverrides.keys.removeAll { it.equals(identity, true) }
+        }
         if (label.isNullOrBlank()) {
             overrides.remove(identity)
         } else {
             overrides[identity] = label
         }
         update(_state.value.copy(qualityOverrides = overrides))
+    }
+
+    fun isAudioOnly(identity: String): Boolean {
+        val current = _state.value.qualityOverrides
+        val existingKey = current.keys.firstOrNull { it.equals(identity, true) } ?: identity
+        return MultiviewQualityPolicy.isAudioOnlyOverride(current[existingKey])
+    }
+
+    fun toggleAudioOnly(identity: String) {
+        val nextOverrides = toggleAudioOnlyOverride(
+            qualityOverrides = _state.value.qualityOverrides,
+            identity = identity,
+            previousNonAudioOverrides = previousNonAudioQualityOverrides,
+        )
+        update(_state.value.copy(qualityOverrides = nextOverrides))
     }
 
     fun setAudioVolume(identity: String, volume: Float, persist: Boolean = true) {
@@ -692,6 +714,33 @@ class MultiviewViewModel(
                 stream = initialStream,
                 initialAudioVolume = initialAudioVolume(),
             )
+        }
+
+        internal fun toggleAudioOnlyOverride(
+            qualityOverrides: Map<String, String>,
+            identity: String,
+            previousNonAudioOverrides: MutableMap<String, String?>,
+        ): Map<String, String> {
+            val overrides = qualityOverrides.toMutableMap()
+            val existingKey = overrides.keys.firstOrNull { it.equals(identity, true) } ?: identity
+            val currentOverride = overrides[existingKey]
+            if (MultiviewQualityPolicy.isAudioOnlyOverride(currentOverride)) {
+                val restored = previousNonAudioOverrides.keys
+                    .filter { it.equals(identity, true) }
+                    .mapNotNull { key -> previousNonAudioOverrides.remove(key) }
+                    .firstOrNull()
+                    ?.takeUnless { MultiviewQualityPolicy.isAudioOnlyOverride(it) || it.isBlank() }
+                if (restored != null) {
+                    overrides[existingKey] = restored
+                } else {
+                    overrides.remove(existingKey)
+                }
+            } else {
+                previousNonAudioOverrides.keys.removeAll { it.equals(identity, true) }
+                previousNonAudioOverrides[existingKey] = currentOverride
+                overrides[existingKey] = MultiviewQualityPolicy.AUDIO_ONLY_LABEL
+            }
+            return overrides
         }
 
         internal fun cleanupPlaybackSnapshots(

@@ -3,6 +3,7 @@ package com.github.andreyasadchy.xtra.ui.multiview
 import androidx.lifecycle.SavedStateHandle
 import com.github.andreyasadchy.xtra.model.ui.Stream
 import com.github.andreyasadchy.xtra.ui.multiview.playback.MultiviewPlaybackSnapshot
+import com.github.andreyasadchy.xtra.ui.multiview.playback.MultiviewQualityPolicy
 import com.github.andreyasadchy.xtra.ui.multiview.playback.MultiviewSlotStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -59,6 +60,27 @@ class MultiviewViewModelTest {
         val restoredState = applyInitialStream(recreateHandle(handle), state)
 
         assertEquals(emptyList<String>(), restoredState.identities)
+    }
+
+    @Test
+    fun toggleAudioOnlyRestoresPreviousManualAndAutoOverrides() {
+        val previous = mutableMapOf<String, String?>()
+
+        // Toggle Audio-Only on from Auto (no override), then back off -> returns to Auto
+        val autoToAudio = MultiviewViewModel.toggleAudioOnlyOverride(emptyMap(), "id:100", previous)
+        assertEquals(MultiviewQualityPolicy.AUDIO_ONLY_LABEL, autoToAudio["id:100"])
+        val audioBackToAuto = MultiviewViewModel.toggleAudioOnlyOverride(autoToAudio, "id:100", previous)
+        assertFalse(audioBackToAuto.containsKey("id:100"))
+
+        // Toggle Audio-Only on from explicit 720p60, then back off -> restores 720p60
+        val manualToAudio = MultiviewViewModel.toggleAudioOnlyOverride(
+            mapOf("id:200" to "720p60"),
+            "id:200",
+            previous,
+        )
+        assertEquals(MultiviewQualityPolicy.AUDIO_ONLY_LABEL, manualToAudio["id:200"])
+        val audioBackToManual = MultiviewViewModel.toggleAudioOnlyOverride(manualToAudio, "id:200", previous)
+        assertEquals("720p60", audioBackToManual["id:200"])
     }
 
     private fun applyInitialStream(
