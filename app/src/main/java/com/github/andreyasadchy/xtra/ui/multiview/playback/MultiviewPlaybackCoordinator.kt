@@ -1333,6 +1333,7 @@ class MultiviewPlaybackCoordinator(
                 hiddenForVaft = slot.hiddenForVaft,
                 fallbackVolume = if (slot.identity == activeIdentity) fallbackVolume else 0f,
             )
+            updateWatchCreditInput(slot)
         }
     }
 
@@ -1567,16 +1568,20 @@ class MultiviewPlaybackCoordinator(
             onNextBeatScheduled = { nextBeatMs ->
                 slot.nextWatchCreditAtElapsedMs = nextBeatMs
                 val tracker = watchCreditTracker ?: return@WatchCreditScheduler
-                val isAudioOnly = slot.target?.isAudioOnly == true || slot.videoDisabledForBackground
-                val isMuted = (audioVolumes[slot.identity] ?: 0f) <= 0.01f
+                val mode = if (nextBeatMs != null) {
+                    WatchCreditStatusMode.COUNTING
+                } else {
+                    slot.lastWatchCreditMode.takeIf { it != WatchCreditStatusMode.COUNTING }
+                        ?: WatchCreditStatusMode.PAUSED_USER
+                }
                 tracker.updateMultiviewTileStatus(
                     channelId = slot.stream.channelId,
                     channelLogin = slot.stream.channelLogin,
-                    mode = if (nextBeatMs != null) WatchCreditStatusMode.COUNTING else WatchCreditStatusMode.PAUSED_USER,
-                    isBuffering = slot.player.playbackState == Player.STATE_BUFFERING,
-                    isAudioOnly = isAudioOnly,
+                    mode = mode,
+                    isBuffering = slot.lastWatchCreditBuffering,
+                    isAudioOnly = slot.lastWatchCreditAudioOnly,
                     isBackground = backgroundPlayback,
-                    isMuted = isMuted,
+                    isMuted = slot.lastWatchCreditMuted,
                     nextPingAtElapsedMs = nextBeatMs,
                     streamId = slot.stream.id,
                     gameId = slot.stream.gameId,
@@ -1698,13 +1703,18 @@ class MultiviewPlaybackCoordinator(
             streamId == null -> WatchCreditStatusMode.MISSING_STREAM_ID
             else -> WatchCreditStatusMode.COUNTING
         }
+        val isBufferingNow = slot.player.playbackState == Player.STATE_BUFFERING
         val isAudioOnly = slot.target?.isAudioOnly == true || slot.videoDisabledForBackground
-        val isMuted = (audioVolumes[slot.identity] ?: 0f) <= 0.01f
+        val isMuted = configuredVolume(slot) <= 0.01f
+        slot.lastWatchCreditMode = mode
+        slot.lastWatchCreditBuffering = isBufferingNow
+        slot.lastWatchCreditAudioOnly = isAudioOnly
+        slot.lastWatchCreditMuted = isMuted
         watchCreditTracker?.updateMultiviewTileStatus(
             channelId = slot.stream.channelId,
             channelLogin = slot.stream.channelLogin,
             mode = mode,
-            isBuffering = slot.player.playbackState == Player.STATE_BUFFERING,
+            isBuffering = isBufferingNow,
             isAudioOnly = isAudioOnly,
             isBackground = backgroundPlayback,
             isMuted = isMuted,
@@ -1771,6 +1781,10 @@ class MultiviewPlaybackCoordinator(
         internal var watchCreditJob: Job? = null
         internal var metadataResolveJob: Job? = null
         @Volatile internal var nextWatchCreditAtElapsedMs: Long? = null
+        @Volatile internal var lastWatchCreditMode: WatchCreditStatusMode = WatchCreditStatusMode.STARTING
+        @Volatile internal var lastWatchCreditBuffering: Boolean = false
+        @Volatile internal var lastWatchCreditAudioOnly: Boolean = false
+        @Volatile internal var lastWatchCreditMuted: Boolean = false
         internal val watchCreditInput = MutableStateFlow(
             WatchCreditScheduleInput(
                 session = null,

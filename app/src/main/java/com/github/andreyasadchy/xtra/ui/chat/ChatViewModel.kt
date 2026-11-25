@@ -5012,13 +5012,6 @@ class ChatViewModel(
                                     retainedSessionProgress = progress
                                     currentSessionResult = CurrentDropSessionResult.Present(progress)
                                     retainedSessionProgressAt = SystemClock.elapsedRealtime()
-                                    watchCreditTracker()?.recordCurrentDropSession(
-                                        dropId = progress.dropId,
-                                        currentMinutesWatched = progress.currentMinutesWatched,
-                                        requiredMinutesWatched = progress.requiredMinutesWatched,
-                                        queriedChannelId = expectedChannelId,
-                                        queriedChannelLogin = expectedChannelLogin,
-                                    )
                                 } else {
                                     retainedSessionProgress = null
                                     currentSessionResult = null
@@ -5107,6 +5100,17 @@ class ChatViewModel(
                         summary.drops.map { it.copy(dropInstanceId = null) }
                     }
                     val tracker = watchCreditTracker()
+                    (currentSessionResult as? CurrentDropSessionResult.Present)?.progress?.let { sessionProg ->
+                        if (safeDrops.any { it.id == sessionProg.dropId }) {
+                            tracker?.recordCurrentDropSession(
+                                dropId = sessionProg.dropId,
+                                currentMinutesWatched = sessionProg.currentMinutesWatched,
+                                requiredMinutesWatched = sessionProg.requiredMinutesWatched,
+                                queriedChannelId = expectedChannelId,
+                                queriedChannelLogin = expectedChannelLogin,
+                            )
+                        }
+                    }
                     val statusSnap = tracker?.statusForChannel(expectedChannelId, expectedChannelLogin)
                     _dropsUiState.update { currentState ->
                         if (applicationContext.tokenPrefs().getString(C.USER_ID, null) != expectedAccountId) {
@@ -6877,13 +6881,6 @@ class ChatViewModel(
                 }
                 if (!isActiveWatchCreditSession() || dropsSessionGeneration.get() != expectedGeneration) return
                 (currentSession as? CurrentDropSessionResult.Present)?.progress?.let { progress ->
-                    watchCreditTracker()?.recordCurrentDropSession(
-                        dropId = progress.dropId,
-                        currentMinutesWatched = progress.currentMinutesWatched,
-                        requiredMinutesWatched = progress.requiredMinutesWatched,
-                        queriedChannelId = channelId,
-                        queriedChannelLogin = channelLogin,
-                    )
                     dropsRepository.applyDropProgress(
                         progress,
                         expectedUserId = accountId,
@@ -6916,6 +6913,17 @@ class ChatViewModel(
                     summary.drops
                 } else {
                     summary.drops.map { it.copy(dropInstanceId = null) }
+                }
+                (currentSession as? CurrentDropSessionResult.Present)?.progress?.let { progress ->
+                    if (safeDrops.any { it.id == progress.dropId }) {
+                        watchCreditTracker()?.recordCurrentDropSession(
+                            dropId = progress.dropId,
+                            currentMinutesWatched = progress.currentMinutesWatched,
+                            requiredMinutesWatched = progress.requiredMinutesWatched,
+                            queriedChannelId = channelId,
+                            queriedChannelLogin = channelLogin,
+                        )
+                    }
                 }
                 if (isActiveWatchCreditSession()) {
                     _dropsUiState.update { currentState ->

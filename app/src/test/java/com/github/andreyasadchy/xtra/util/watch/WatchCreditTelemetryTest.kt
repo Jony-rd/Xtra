@@ -50,6 +50,26 @@ class WatchCreditTelemetryTest {
     }
 
     @Test
+    fun minuteWatchedPayloadRespectsHiddenAndMutedFlags() {
+        val payload = WatchCreditTelemetry.buildMinuteWatchedPayload(
+            WatchCreditSession(
+                broadcastId = "broadcast-2",
+                channelId = "channel-2",
+                channelLogin = "channel2",
+                userId = "user-1",
+            ),
+            minutesLogged = 1,
+            secondsOffset = 12,
+            clientTimeMillis = 1_704_116_262_123L,
+            hidden = true,
+            muted = true,
+        )
+        val properties = (Json.parseToJsonElement(payload) as JsonArray).single().jsonObject["properties"]!!.jsonObject
+        assertEquals("true", properties["hidden"]?.jsonPrimitive?.content)
+        assertEquals("true", properties["muted"]?.jsonPrimitive?.content)
+    }
+
+    @Test
     fun directSpadeUrlParserSupportsAllKnownPropertyNames() {
         assertEquals(
             "https://spade.twitch.tv/track",

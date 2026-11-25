@@ -3601,7 +3601,9 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
             }
         }
 
+        val isMultiviewNonFocus = mvSummary != null && !mvSummary.isCurrentChannelFocus
         val syncDelayed = status != null &&
+            !isMultiviewNonFocus &&
             status.mode == WatchCreditStatusMode.COUNTING &&
             status.consecutiveOkPings >= 2 &&
             state.lastHermesProgressAtElapsedMs == null &&
@@ -3668,6 +3670,15 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
                 dotColor = 0xFFFBBF24.toInt()
                 pillRateSymbol = "1x"
                 proofMessage = getString(R.string.drops_status_buffering, nextText)
+            }
+            isMultiviewNonFocus -> {
+                dotColor = 0xFFFBBF24.toInt()
+                pillRateSymbol = "1x"
+                proofMessage = getString(
+                    R.string.drops_status_views_only,
+                    status.consecutiveOkPings.coerceAtLeast(1),
+                    nextText,
+                )
             }
             syncDelayed -> {
                 dotColor = 0xFFFBBF24.toInt()

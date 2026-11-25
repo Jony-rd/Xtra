@@ -40,6 +40,8 @@ object WatchCreditTelemetry {
         clientTimeMillis: Long = System.currentTimeMillis(),
         game: String? = null,
         gameId: String? = null,
+        hidden: Boolean = false,
+        muted: Boolean = false,
     ): String {
         require(minutesLogged > 0) { "minutesLogged must be positive" }
         require(secondsOffset in 0..59) { "secondsOffset must be in 0..59" }
@@ -55,13 +57,13 @@ object WatchCreditTelemetry {
                     // fields, even when the player has not received category metadata yet.
                     put("game", game.orEmpty())
                     put("game_id", gameId.orEmpty())
-                    put("hidden", false)
+                    put("hidden", hidden)
                     put("is_live", true)
                     put("live", true)
                     put("logged_in", true)
                     put("location", "channel")
                     put("minutes_logged", minutesLogged)
-                    put("muted", false)
+                    put("muted", muted)
                     put("player", "site")
                     put("seconds_offset", secondsOffset)
                     put("user_id", session.userId)

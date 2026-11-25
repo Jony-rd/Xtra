@@ -2616,6 +2616,7 @@ Tap to search everywhere</string>
     <string name="drops_credit_target_other">Crediting @%1$s</string>
     <string name="drops_credit_target_checking">Syncing @%1$s…</string>
     <string name="drops_status_counting">Counting 1x · #%1$d OK · %2$s · Next %3$s</string>
+    <string name="drops_status_views_only">Views 1x · #%1$d OK · Next %2$s (tap Focus for Drops)</string>
     <string name="drops_status_buffering">Buffering (counting 1x) · Next %1$s</string>
     <string name="drops_status_starting">First ping in %1$s…</string>
     <string name="drops_status_sync_delayed">Pings OK (#%1$d) · Twitch sync delayed</string>
