@@ -259,19 +259,24 @@ class EmotesFragment : Fragment() {
                 launch {
                     viewModel.pickerCatalogFor(expectedChannelId, expectedChannelLogin, usesV2).collectLatest {
                         pickerCatalog = it
+                        val resolvedKeys = viewModel.resolvedFavoriteKeysFor(it)
+                        emotesAdapter.setFavoriteKeys(resolvedKeys)
+                        twitchAdapter?.setFavoriteKeys(resolvedKeys)
                         updateList(section, emotesAdapter, twitchAdapter)
                     }
                 }
                 launch {
                     viewModel.favoriteKeys.collectLatest {
-                        emotesAdapter.setFavoriteKeys(it)
-                        twitchAdapter?.setFavoriteKeys(it)
+                        val resolvedKeys = viewModel.resolvedFavoriteKeysFor(pickerCatalog)
+                        emotesAdapter.setFavoriteKeys(resolvedKeys)
+                        twitchAdapter?.setFavoriteKeys(resolvedKeys)
                     }
                 }
             }
         }
-        emotesAdapter.setFavoriteKeys(viewModel.favoriteKeys.value)
-        twitchAdapter?.setFavoriteKeys(viewModel.favoriteKeys.value)
+        val initialResolvedKeys = viewModel.resolvedFavoriteKeysFor(pickerCatalog)
+        emotesAdapter.setFavoriteKeys(initialResolvedKeys)
+        twitchAdapter?.setFavoriteKeys(initialResolvedKeys)
         updateList(section, emotesAdapter, twitchAdapter)
     }
 
@@ -386,7 +391,8 @@ class EmotesFragment : Fragment() {
                 favoriteEmotes,
                 emotes,
                 emojis,
-                pickerCatalog?.emoteNamesById.orEmpty(),
+                viewModel.favoriteEmoteNamesById(pickerCatalog),
+                viewModel.favoriteEmoteNamesByKey(pickerCatalog),
             )
             if (favoriteDragActive) {
                 pendingFavoriteItems = items
@@ -407,7 +413,7 @@ class EmotesFragment : Fragment() {
         }
         compactLayoutPreferenceListener = preferenceListener
         preferences.registerOnSharedPreferenceChangeListener(preferenceListener)
-        adapter.setFavoriteKeys(viewModel.favoriteKeys.value)
+        adapter.setFavoriteKeys(viewModel.resolvedFavoriteKeysFor(pickerCatalog))
         adapter.setFavoriteValues(EmojiFavoritesCatalog.favoriteValues(favoriteEmotes))
         updateFavorites()
         viewLifecycleOwner.lifecycleScope.launch {
@@ -418,6 +424,7 @@ class EmotesFragment : Fragment() {
                 launch {
                     viewModel.availableFavoriteEmotes.collectLatest {
                         availableEmotes = it
+                        adapter.setFavoriteKeys(viewModel.resolvedFavoriteKeysFor(pickerCatalog))
                         updateFavorites()
                     }
                 }
@@ -427,13 +434,14 @@ class EmotesFragment : Fragment() {
                         if (it != null) {
                             availableEmotes = viewModel.availableFavoriteEmotesFor(it)
                         }
+                        adapter.setFavoriteKeys(viewModel.resolvedFavoriteKeysFor(it))
                         updateFavorites()
                     }
                 }
                 launch {
                     viewModel.favoriteEmotes.collectLatest { favorites ->
                         favoriteEmotes = favorites
-                        adapter.setFavoriteKeys(favorites.mapNotNull { it.key() }.toSet())
+                        adapter.setFavoriteKeys(viewModel.resolvedFavoriteKeysFor(pickerCatalog))
                         adapter.setFavoriteValues(EmojiFavoritesCatalog.favoriteValues(favorites))
                         updateFavorites()
                     }

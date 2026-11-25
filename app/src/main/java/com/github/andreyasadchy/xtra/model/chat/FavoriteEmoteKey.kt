@@ -61,39 +61,53 @@ object FavoriteEmoteCatalog {
         favorites: List<FavoriteEmote>,
         emotes: List<Emote>,
         namesById: Map<String, String> = emptyMap(),
-    ): List<Emote> = resolveFavorites(favorites, emotes, namesById).map { (_, emote) -> emote }
+        namesByKey: Map<FavoriteEmoteKey, String> = emptyMap(),
+    ): List<Emote> = resolveFavorites(favorites, emotes, namesById, namesByKey).map { (_, emote) -> emote }
+
+    fun resolvedFavoriteKeys(
+        favorites: List<FavoriteEmote>,
+        emotes: List<Emote>,
+        namesById: Map<String, String> = emptyMap(),
+        namesByKey: Map<FavoriteEmoteKey, String> = emptyMap(),
+    ): Set<FavoriteEmoteKey> = buildSet {
+        favorites.mapNotNullTo(this) { it.key() }
+        resolveFavorites(favorites, emotes, namesById, namesByKey)
+            .mapNotNullTo(this) { (_, emote) -> emote.favoriteKey() }
+    }
 
     /**
      * Resolves stored favorites against the emotes the picker currently offers.
      *
-     * A favorite is stored as (provider, emote id), but the picker keeps a single instance
-     * per name: channel beats personal beats global. When the viewer's favorite was saved
-     * from one of those instances, the stored id can belong to an instance the picker no
-     * longer lists, and nothing would match it by id anymore. [namesById] maps every id the
-     * current catalog knows, including the hidden scopes, to its name so such a favorite can
-     * still be resolved by name instead of silently disappearing.
+     * A favorite is stored as (provider, emote id), while the picker keeps a single sendable
+     * instance per name (Twitch > 7TV > BTTV > FFZ, and channel > personal > global). When the
+     * originally favorited instance is hidden by another scope/provider or swapped across channels,
+     * [namesByKey] and [namesById] preserve its name so third-party favorites still resolve against
+     * the live sendable emote instead of disappearing.
      */
     fun resolveFavorites(
         favorites: List<FavoriteEmote>,
         emotes: List<Emote>,
         namesById: Map<String, String> = emptyMap(),
+        namesByKey: Map<FavoriteEmoteKey, String> = emptyMap(),
     ): List<Pair<FavoriteEmote, Emote>> {
         if (favorites.isEmpty() || emotes.isEmpty()) return emptyList()
         val candidates = deduplicate(emotes)
         val byKey = HashMap<FavoriteEmoteKey, Emote>(candidates.size)
-        val byName = HashMap<String, MutableList<Emote>>()
+        val byExactName = HashMap<String, MutableList<Emote>>()
+        val byLowerName = HashMap<String, MutableList<Emote>>()
         candidates.forEach { emote ->
             val key = emote.favoriteKey()
             if (key != null && key !in byKey) byKey[key] = emote
             val name = emote.name?.trim()?.takeIf { it.isNotEmpty() } ?: return@forEach
-            byName.getOrPut(name.lowercase()) { mutableListOf() } += emote
+            byExactName.getOrPut(name) { mutableListOf() } += emote
+            byLowerName.getOrPut(name.lowercase()) { mutableListOf() } += emote
         }
         val resolved = ArrayList<Pair<FavoriteEmote, Emote>>(favorites.size)
         val usedEmoteKeys = HashSet<FavoriteEmoteKey>()
         favorites.forEach { favorite ->
             val key = favorite.key() ?: return@forEach
             val emote = byKey[key]
-                ?: nameMatchedEmote(favorite, key, byName, namesById)
+                ?: nameMatchedEmote(favorite, key, byExactName, byLowerName, namesById, namesByKey)
                 ?: return@forEach
             val emoteKey = emote.favoriteKey() ?: return@forEach
             if (usedEmoteKeys.add(emoteKey)) resolved += favorite to emote
@@ -102,45 +116,82 @@ object FavoriteEmoteCatalog {
     }
 
     /**
-     * Stored favorites that refer to [emote]. Exact ids win; otherwise a third-party emote
-     * is matched by name so that long-pressing the instance the picker shows toggles the
-     * favorite the viewer already has instead of storing a second copy of the same emote.
+     * Stored favorites that refer to [emote]. Exact ids match first; for third-party emotes
+     * (7TV/BTTV/FFZ), favorites whose known name matches [emote] are also included so long-pressing
+     * or toggling removes the underlying favorite cleanly without leaving duplicates behind.
      */
     fun favoritesForEmote(
         favorites: List<FavoriteEmote>,
         emote: Emote,
         namesById: Map<String, String> = emptyMap(),
+        namesByKey: Map<FavoriteEmoteKey, String> = emptyMap(),
     ): List<FavoriteEmote> {
         val key = emote.favoriteKey() ?: return emptyList()
         val exact = favorites.filter { favorite -> favorite.key() == key }
-        if (exact.isNotEmpty()) return exact
-        if (!supportsNameMatching(key.provider)) return emptyList()
-        val name = emote.name?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: return emptyList()
-        return favorites.filter { favorite ->
-            val favoriteKey = favorite.key() ?: return@filter false
-            favoriteKey.provider == key.provider && favoriteName(favorite, namesById) == name
+        if (!supportsNameMatching(key.provider)) return exact
+        val rawName = emote.name?.trim()?.takeIf { it.isNotEmpty() } ?: return exact
+        val thirdPartyWithNames = favorites.mapNotNull { favorite ->
+            val favoriteKey = favorite.key() ?: return@mapNotNull null
+            if (!supportsNameMatching(favoriteKey.provider)) return@mapNotNull null
+            val favoriteName = favoriteName(favorite, favoriteKey, namesById, namesByKey)
+                ?: return@mapNotNull null
+            favorite to favoriteName
         }
+        val exactCaseMatches = thirdPartyWithNames
+            .filter { (_, favoriteName) -> favoriteName == rawName }
+            .map { (favorite, _) -> favorite }
+        val nameMatches = if (exactCaseMatches.isNotEmpty()) {
+            exactCaseMatches
+        } else {
+            val lowerName = rawName.lowercase()
+            thirdPartyWithNames
+                .filter { (_, favoriteName) -> favoriteName.lowercase() == lowerName }
+                .map { (favorite, _) -> favorite }
+        }
+        if (exact.isEmpty()) return nameMatches
+        if (nameMatches.isEmpty()) return exact
+        return (exact + nameMatches).distinctBy { it.key() }
     }
 
     private fun nameMatchedEmote(
         favorite: FavoriteEmote,
         key: FavoriteEmoteKey,
-        byName: Map<String, List<Emote>>,
+        byExactName: Map<String, List<Emote>>,
+        byLowerName: Map<String, List<Emote>>,
         namesById: Map<String, String>,
+        namesByKey: Map<FavoriteEmoteKey, String>,
     ): Emote? {
         if (!supportsNameMatching(key.provider)) return null
-        val name = favoriteName(favorite, namesById) ?: return null
-        return byName[name]?.firstOrNull { it.favoriteKey()?.provider == key.provider }
+        val name = favoriteName(favorite, key, namesById, namesByKey) ?: return null
+        val exactCandidates = byExactName[name]
+            ?.filter { it.favoriteKey()?.provider?.let(::supportsNameMatching) == true }
+            .orEmpty()
+        if (exactCandidates.isNotEmpty()) {
+            return exactCandidates.firstOrNull { it.favoriteKey()?.provider == key.provider }
+                ?: exactCandidates.firstOrNull()
+        }
+        val lowerCandidates = byLowerName[name.lowercase()]
+            ?.filter { it.favoriteKey()?.provider?.let(::supportsNameMatching) == true }
+            .orEmpty()
+        return lowerCandidates.firstOrNull { it.favoriteKey()?.provider == key.provider }
+            ?: lowerCandidates.firstOrNull()
     }
 
-    private fun favoriteName(favorite: FavoriteEmote, namesById: Map<String, String>): String? {
+    private fun favoriteName(
+        favorite: FavoriteEmote,
+        key: FavoriteEmoteKey,
+        namesById: Map<String, String>,
+        namesByKey: Map<FavoriteEmoteKey, String>,
+    ): String? {
         val storedId = favorite.emoteId.trim()
         if (storedId.isEmpty()) return null
         // Older rows can store the emote name itself as the id.
-        return (namesById[storedId] ?: storedId).trim().lowercase().takeIf { it.isNotEmpty() }
+        return (namesByKey[key] ?: namesById[storedId] ?: storedId)
+            .trim()
+            .takeIf { it.isNotEmpty() }
     }
 
-    /** Only third-party emotes can change ids while keeping their name. */
+    /** Only third-party emotes (7TV/BTTV/FFZ) share text names across ids/providers. */
     private fun supportsNameMatching(provider: EmoteProvider): Boolean =
         provider == EmoteProvider.SEVENTV ||
                 provider == EmoteProvider.BTTV ||

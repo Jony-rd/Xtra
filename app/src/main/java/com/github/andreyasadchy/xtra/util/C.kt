@@ -386,6 +386,7 @@ object C {
     const val CHAT_EMOTE_AUTOCOMPLETE = "chat_emote_autocomplete"
     const val CHAT_EMOTE_RECOMMENDATIONS = "chat_emote_recommendations"
     const val CHAT_EMOTE_PICKER_TABS = "chat_emote_picker_tabs"
+    const val CHAT_FAVORITE_EMOTE_NAMES = "chat_favorite_emote_names"
     const val CHAT_QUICK_EMOTE_EMOJIS = "chat_quick_emote_emojis"
     const val CHAT_USERNAME_RECOMMENDATIONS = "chat_username_recommendations"
     const val CHAT_COMPACT_TWITCH_EMOTE_GROUPS = "chat_compact_twitch_emote_groups"

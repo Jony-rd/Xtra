@@ -40,8 +40,9 @@ internal fun favoritePickerItems(
     emotes: List<Emote>,
     emojis: List<EmojiPickerItem>,
     namesById: Map<String, String> = emptyMap(),
+    namesByKey: Map<FavoriteEmoteKey, String> = emptyMap(),
 ): List<FavoritePickerItem> {
-    val emotesByKey = FavoriteEmoteCatalog.resolveFavorites(favorites, emotes, namesById)
+    val emotesByKey = FavoriteEmoteCatalog.resolveFavorites(favorites, emotes, namesById, namesByKey)
         .mapNotNull { (favorite, emote) -> favorite.key()?.let { key -> key to emote } }
         .toMap()
     val emojisByKey = emojis.associateBy(EmojiFavoritesCatalog::key)

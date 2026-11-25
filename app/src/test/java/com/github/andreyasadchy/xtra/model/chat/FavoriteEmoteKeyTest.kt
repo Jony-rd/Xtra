@@ -175,6 +175,84 @@ class FavoriteEmoteKeyTest {
         )
     }
 
+
+    @Test
+    fun persistedNameResolvesChannelOnlyFavoriteInAnotherChannel() {
+        val channelBEmote = emote(Emote.CHANNEL_STV, "channel-b-ez", "EZ")
+        val favorite = FavoriteEmote("SEVENTV", "channel-a-ez", 1L)
+        val persistedNames = mapOf(FavoriteEmoteKey(EmoteProvider.SEVENTV, "channel-a-ez") to "EZ")
+
+        val result = FavoriteEmoteCatalog.availableFavorites(
+            favorites = listOf(favorite),
+            emotes = listOf(channelBEmote),
+            namesByKey = persistedNames,
+        )
+
+        assertEquals(listOf("channel-b-ez"), result.map { it.id })
+    }
+
+    @Test
+    fun thirdPartyFavoriteResolvesAcrossThirdPartyProvidersWhenChannelUsesAnotherProvider() {
+        val channelSevenTv = emote(Emote.CHANNEL_STV, "7tv-catjam", "catJAM")
+        val bttvFavorite = FavoriteEmote("BTTV", "bttv-catjam", 1L)
+        val persistedNames = mapOf(FavoriteEmoteKey(EmoteProvider.BTTV, "bttv-catjam") to "catJAM")
+
+        val resolved = FavoriteEmoteCatalog.availableFavorites(
+            favorites = listOf(bttvFavorite),
+            emotes = listOf(channelSevenTv),
+            namesByKey = persistedNames,
+        )
+
+        assertEquals(listOf("7tv-catjam"), resolved.map { it.id })
+        assertEquals(
+            listOf(bttvFavorite),
+            FavoriteEmoteCatalog.favoritesForEmote(
+                favorites = listOf(bttvFavorite),
+                emote = channelSevenTv,
+                namesByKey = persistedNames,
+            ),
+        )
+    }
+
+    @Test
+    fun exactCaseNameMatchWinsOverCaseInsensitiveCandidate() {
+        val lower = emote(Emote.CHANNEL_STV, "lower-id", "peped")
+        val mixed = emote(Emote.CHANNEL_STV, "mixed-id", "pepeD")
+        val favorite = FavoriteEmote("SEVENTV", "old-mixed-id", 1L)
+        val names = mapOf(FavoriteEmoteKey(EmoteProvider.SEVENTV, "old-mixed-id") to "pepeD")
+
+        val resolved = FavoriteEmoteCatalog.availableFavorites(
+            favorites = listOf(favorite),
+            emotes = listOf(lower, mixed),
+            namesByKey = names,
+        )
+
+        assertEquals(listOf("mixed-id"), resolved.map { it.id })
+    }
+
+    @Test
+    fun resolvedFavoriteKeysIncludesMatchedPickerInstanceAndToggleRemovesDuplicates() {
+        val pickerEmote = emote(Emote.CHANNEL_STV, "channel-ez", "EZ")
+        val staleExact = FavoriteEmote("SEVENTV", "channel-ez", 2L)
+        val oldAlias = FavoriteEmote("BTTV", "bttv-ez", 1L)
+        val names = mapOf(FavoriteEmoteKey(EmoteProvider.BTTV, "bttv-ez") to "EZ")
+
+        val keys = FavoriteEmoteCatalog.resolvedFavoriteKeys(
+            favorites = listOf(oldAlias),
+            emotes = listOf(pickerEmote),
+            namesByKey = names,
+        )
+        assertTrue(FavoriteEmoteKey(EmoteProvider.SEVENTV, "channel-ez") in keys)
+        assertTrue(FavoriteEmoteKey(EmoteProvider.BTTV, "bttv-ez") in keys)
+
+        val matched = FavoriteEmoteCatalog.favoritesForEmote(
+            favorites = listOf(staleExact, oldAlias),
+            emote = pickerEmote,
+            namesByKey = names,
+        )
+        assertEquals(2, matched.size)
+    }
+
     private fun emote(source: Int, id: String, name: String = "emote") = Emote(
         source = source,
         id = id,
