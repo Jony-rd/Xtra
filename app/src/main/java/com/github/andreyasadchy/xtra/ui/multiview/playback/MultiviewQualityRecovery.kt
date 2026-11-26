@@ -99,3 +99,42 @@ internal object MultiviewStallProgress {
             current.bufferedPositionMs > baseline.bufferedPositionMs + BUFFER_ADVANCE_MIN_MS
     }
 }
+
+internal enum class MultiviewNetworkRecoveryAction {
+    NONE,
+    PREPARE_EXISTING,
+    RELOAD_SOURCE,
+}
+
+internal object MultiviewNetworkRecoveryPolicy {
+    fun actionFor(
+        isOffline: Boolean,
+        isReconnectingOrUnavailable: Boolean,
+        isBuffering: Boolean,
+        isIdle: Boolean,
+        hasMediaSource: Boolean,
+        hasActiveRetryJob: Boolean,
+        hasActiveLoadJob: Boolean,
+        networkSwitchedOrRestored: Boolean,
+    ): MultiviewNetworkRecoveryAction {
+        if (hasActiveLoadJob || isOffline) return MultiviewNetworkRecoveryAction.NONE
+        if (isReconnectingOrUnavailable || hasActiveRetryJob) {
+            return if (!hasMediaSource || networkSwitchedOrRestored || isIdle) {
+                MultiviewNetworkRecoveryAction.RELOAD_SOURCE
+            } else {
+                MultiviewNetworkRecoveryAction.PREPARE_EXISTING
+            }
+        }
+        if (hasMediaSource && isIdle) {
+            return if (networkSwitchedOrRestored) {
+                MultiviewNetworkRecoveryAction.RELOAD_SOURCE
+            } else {
+                MultiviewNetworkRecoveryAction.PREPARE_EXISTING
+            }
+        }
+        if (isBuffering && networkSwitchedOrRestored) {
+            return MultiviewNetworkRecoveryAction.RELOAD_SOURCE
+        }
+        return MultiviewNetworkRecoveryAction.NONE
+    }
+}

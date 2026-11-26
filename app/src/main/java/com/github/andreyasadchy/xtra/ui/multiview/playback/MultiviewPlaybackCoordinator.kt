@@ -1183,15 +1183,32 @@ class MultiviewPlaybackCoordinator(
     }
 
     private var networkCallbackRegistered = false
+    @Volatile private var activeCallbackNetwork: Network? = null
+    @Volatile private var networkWasLost = false
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
-            onNetworkValidated()
+            val previous = activeCallbackNetwork
+            val switchedOrRestored = networkWasLost || (previous != null && previous != network)
+            activeCallbackNetwork = network
+            networkWasLost = false
+            onNetworkValidated(networkSwitchedOrRestored = switchedOrRestored)
         }
+
+        override fun onLost(network: Network) {
+            if (activeCallbackNetwork == null || activeCallbackNetwork == network) {
+                networkWasLost = true
+            }
+        }
+
         override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
             if (networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
                 networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
             ) {
-                onNetworkValidated()
+                val previous = activeCallbackNetwork
+                val switchedOrRestored = networkWasLost || (previous != null && previous != network)
+                activeCallbackNetwork = network
+                networkWasLost = false
+                onNetworkValidated(networkSwitchedOrRestored = switchedOrRestored)
             }
         }
     }
@@ -1211,21 +1228,31 @@ class MultiviewPlaybackCoordinator(
         try {
             cm.unregisterNetworkCallback(networkCallback)
             networkCallbackRegistered = false
+            activeCallbackNetwork = null
+            networkWasLost = false
         } catch (_: Throwable) {}
     }
 
-    private fun onNetworkValidated() {
+    private fun onNetworkValidated(networkSwitchedOrRestored: Boolean) {
         ensureScope().launch(Dispatchers.Main) {
             slots.values.forEach { slot ->
-                val needsRecovery = slot.player.playbackState == Player.STATE_BUFFERING ||
-                    slot.status == MultiviewSlotStatus.RECONNECTING ||
-                    slot.status == MultiviewSlotStatus.BUFFERING ||
-                    slot.retryJob?.isActive == true
-                if (needsRecovery) {
-                    Log.i(TAG, "Network validated: recovering slot ${slot.identity}")
+                val action = MultiviewNetworkRecoveryPolicy.actionFor(
+                    isOffline = slot.status == MultiviewSlotStatus.OFFLINE,
+                    isReconnectingOrUnavailable = slot.status == MultiviewSlotStatus.RECONNECTING ||
+                        slot.status == MultiviewSlotStatus.PLAYBACK_UNAVAILABLE,
+                    isBuffering = slot.player.playbackState == Player.STATE_BUFFERING ||
+                        slot.status == MultiviewSlotStatus.BUFFERING,
+                    isIdle = slot.player.playbackState == Player.STATE_IDLE,
+                    hasMediaSource = slot.hasMediaSource,
+                    hasActiveRetryJob = slot.retryJob?.isActive == true,
+                    hasActiveLoadJob = slot.loadJob?.isActive == true,
+                    networkSwitchedOrRestored = networkSwitchedOrRestored,
+                )
+                if (action != MultiviewNetworkRecoveryAction.NONE) {
+                    Log.i(TAG, "Network validated (switched=$networkSwitchedOrRestored, action=$action): recovering slot ${slot.identity}")
                     slot.bufferingWatchdogJob?.cancel()
                     slot.retryJob?.cancel()
-                    slot.reloadRequired = true
+                    slot.reloadRequired = action == MultiviewNetworkRecoveryAction.RELOAD_SOURCE
                     recoverSlot(slot, null)
                 }
             }
