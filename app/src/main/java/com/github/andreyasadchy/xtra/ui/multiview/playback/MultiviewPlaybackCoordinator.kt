@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Network
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.annotation.SuppressLint
@@ -25,6 +26,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultLivePlaybackSpeedControl
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.hls.HlsMediaSource
+import androidx.media3.exoplayer.PlayerMessage
 import androidx.media3.exoplayer.hls.HlsManifest
 import androidx.media3.exoplayer.source.LoadEventInfo
 import androidx.media3.exoplayer.source.MediaLoadData
@@ -34,11 +36,16 @@ import com.github.andreyasadchy.xtra.XtraApp
 import com.github.andreyasadchy.xtra.model.stats.ViewingPlaybackMetadata
 import com.github.andreyasadchy.xtra.model.stats.mergeViewingCategoryPatch
 import com.github.andreyasadchy.xtra.model.ui.Stream
+import com.github.andreyasadchy.xtra.player.hls.TwitchHlsPlaylistContinuityStore
 import com.github.andreyasadchy.xtra.player.hls.TwitchHlsPlaylistParserFactory
 import com.github.andreyasadchy.xtra.player.lowlatency.HttpEngineDataSource
 import com.github.andreyasadchy.xtra.player.lowlatency.OkHttpDataSource
+import com.github.andreyasadchy.xtra.repository.preload.StreamPlaybackConfiguration
 import com.github.andreyasadchy.xtra.ui.common.logVideoSurfaceBinding
 import com.github.andreyasadchy.xtra.ui.player.LiveBufferHealthTrend
+import com.github.andreyasadchy.xtra.ui.player.LivePlaybackStallRecoveryState
+import com.github.andreyasadchy.xtra.ui.player.PlaybackRenderersFactory
+import com.github.andreyasadchy.xtra.ui.player.StreamHlsMediaSourceFactory
 import com.github.andreyasadchy.xtra.ui.player.TwitchVaftController
 import com.github.andreyasadchy.xtra.util.C
 import com.github.andreyasadchy.xtra.util.HttpProxyAddress
@@ -50,7 +57,7 @@ import com.github.andreyasadchy.xtra.util.AdaptiveLivePlaybackController
 import com.github.andreyasadchy.xtra.util.AdaptiveLivePlaybackSpeedControl
 import com.github.andreyasadchy.xtra.util.LivePlaybackPolicies
 import com.github.andreyasadchy.xtra.util.LivePlaybackSettings
-import com.github.andreyasadchy.xtra.util.LivePriorityCatchUpPolicy
+import com.github.andreyasadchy.xtra.util.LivePriorityCatchUpTracker
 import com.github.andreyasadchy.xtra.util.NetworkUtils.proxyCandidates
 import com.github.andreyasadchy.xtra.util.prefs
 import com.github.andreyasadchy.xtra.util.tokenPrefs
@@ -246,6 +253,11 @@ class MultiviewPlaybackCoordinator(
         val slot = slots[identity] ?: return
         val player = slot.player
         if (player.isCurrentMediaItemLive || player.isCurrentMediaItemDynamic) {
+            val now = SystemClock.elapsedRealtime()
+            slot.lastIntentionalSeekRealtimeMs = now
+            val liveOffsetMs = player.currentLiveOffset
+                .takeIf { it != androidx.media3.common.C.TIME_UNSET && it >= 0L }
+            slot.liveCatchUpTracker.recordSeek(liveOffsetMs, now)
             player.playWhenReady = true
             player.seekToDefaultPosition()
             if (player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED) {
@@ -255,9 +267,14 @@ class MultiviewPlaybackCoordinator(
     }
 
     fun seekAllToLive() {
+        val now = SystemClock.elapsedRealtime()
         slots.values.forEach { slot ->
             val player = slot.player
             if (player.isCurrentMediaItemLive || player.isCurrentMediaItemDynamic) {
+                slot.lastIntentionalSeekRealtimeMs = now
+                val liveOffsetMs = player.currentLiveOffset
+                    .takeIf { it != androidx.media3.common.C.TIME_UNSET && it >= 0L }
+                slot.liveCatchUpTracker.recordSeek(liveOffsetMs, now)
                 player.playWhenReady = true
                 player.seekToDefaultPosition()
                 if (player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED) {
@@ -267,20 +284,67 @@ class MultiviewPlaybackCoordinator(
         }
     }
 
-    private fun scheduleBufferingWatchdog(slot: MultiviewPlayerSlot) {
+    private fun scheduleBufferingUiUpdate(slot: MultiviewPlayerSlot) {
+        if (slot.bufferingUiJob?.isActive == true) return
+        slot.bufferingUiJob = ensureScope().launch {
+            delay(BUFFERING_UI_DEBOUNCE_MS)
+            if (!isActive || slots[slot.identity] !== slot) return@launch
+            if (slot.player.playbackState == Player.STATE_BUFFERING &&
+                slot.loadJob?.isActive != true &&
+                slot.status != MultiviewSlotStatus.BUFFERING
+            ) {
+                publish(slot, MultiviewSlotStatus.BUFFERING)
+            }
+        }.also { job ->
+            job.invokeOnCompletion {
+                if (slot.bufferingUiJob === job) slot.bufferingUiJob = null
+            }
+        }
+    }
+
+    private fun scheduleBufferingWatchdog(slot: MultiviewPlayerSlot, reset: Boolean = false) {
+        if (!shouldPlayWhenReady(slot)) {
+            slot.bufferingWatchdogJob?.cancel()
+            slot.bufferingWatchdogJob = null
+            return
+        }
+        if (!reset && slot.bufferingWatchdogJob?.isActive == true) return
         slot.bufferingWatchdogJob?.cancel()
         slot.bufferingWatchdogJob = ensureScope().launch {
-            delay(WATCHDOG_BUFFERING_TIMEOUT_MS)
-            if (!isActive || slots[slot.identity] !== slot) return@launch
-            val isStalled = slot.loadJob?.isActive != true && (
-                slot.player.playbackState == Player.STATE_BUFFERING ||
-                    slot.status == MultiviewSlotStatus.BUFFERING ||
-                    slot.status == MultiviewSlotStatus.LOADING
+            var baseline = MultiviewStallSnapshot(
+                currentPositionMs = slot.player.currentPosition,
+                bufferedPositionMs = slot.player.bufferedPosition,
+            )
+            while (isActive && slots[slot.identity] === slot) {
+                delay(WATCHDOG_BUFFERING_TIMEOUT_MS)
+                if (!isActive || slots[slot.identity] !== slot) return@launch
+                val isStalled = shouldPlayWhenReady(slot) &&
+                    slot.loadJob?.isActive != true && (
+                    slot.player.playbackState == Player.STATE_BUFFERING ||
+                        slot.status == MultiviewSlotStatus.BUFFERING ||
+                        slot.status == MultiviewSlotStatus.LOADING ||
+                        (slot.hasMediaSource && slot.player.playbackState == Player.STATE_IDLE)
+                    )
+                if (!isStalled) break
+                val current = MultiviewStallSnapshot(
+                    currentPositionMs = slot.player.currentPosition,
+                    bufferedPositionMs = slot.player.bufferedPosition,
                 )
-            if (isStalled) {
-                Log.i(TAG, "channel=${slot.identity} watchdog triggered after buffering/loading timeout, recovering (playbackState=${slot.player.playbackState}, status=${slot.status})")
+                if (MultiviewStallProgress.hasAdvanced(baseline, current)) {
+                    baseline = current
+                    continue
+                }
+                Log.i(
+                    TAG,
+                    "channel=${slot.identity} watchdog triggered after buffering/loading stall timeout, recovering (playbackState=${slot.player.playbackState}, status=${slot.status})",
+                )
                 slot.reloadRequired = true
                 recoverSlot(slot, null)
+                break
+            }
+        }.also { job ->
+            job.invokeOnCompletion {
+                if (slot.bufferingWatchdogJob === job) slot.bufferingWatchdogJob = null
             }
         }
     }
@@ -311,10 +375,13 @@ class MultiviewPlaybackCoordinator(
                 (slot.player.playbackState == Player.STATE_IDLE || slot.player.playbackState == Player.STATE_ENDED)
             val missingSource = !slot.hasMediaSource && slot.loadJob?.isActive != true
             val wasSlotPlayingInBackground = wasPlayingInBackground && configuredVolume(slot) > 0f
+            val currentConfig = effectiveConfiguration(slot)
+            val staleConfig = slot.configurationFingerprint != null &&
+                slot.configurationFingerprint != currentConfig.fingerprint
             val staleStream = staleAfterIdle &&
                 (!wasSlotPlayingInBackground || slot.player.playbackState != Player.STATE_READY)
             when {
-                staleStream || stuckLoading || missingSource -> {
+                staleStream || stuckLoading || missingSource || staleConfig -> {
                     slot.reloadRequired = true
                     start(slot, force = true)
                 }
@@ -363,6 +430,12 @@ class MultiviewPlaybackCoordinator(
             suppressBackgroundVideo(slot)
             val shouldPlayInBackground = shouldPlayWhenReady(slot)
             slot.player.playWhenReady = shouldPlayInBackground
+            if (!shouldPlayInBackground) {
+                slot.bufferingUiJob?.cancel()
+                slot.bufferingUiJob = null
+                slot.bufferingWatchdogJob?.cancel()
+                slot.bufferingWatchdogJob = null
+            }
             updateViewingStats(slot, forceNotPlaying = !shouldPlayInBackground)
         }
         if (!canPlayInBackground) {
@@ -546,6 +619,9 @@ class MultiviewPlaybackCoordinator(
             liveSpeedControl.setAdaptiveTargetLiveOffsetUs(liveController.currentPolicy().targetOffsetMs * 1_000L)
         }
         val player = ExoPlayer.Builder(applicationContext).apply {
+            setRenderersFactory(
+                PlaybackRenderersFactory(applicationContext).setEnableDecoderFallback(true),
+            )
             setLoadControl(
                 AdaptiveLiveLoadControl(
                     controller = liveController,
@@ -582,20 +658,24 @@ class MultiviewPlaybackCoordinator(
                     delay(5_000L)
                     val liveOffsetMs = player.currentLiveOffset
                     val now = SystemClock.elapsedRealtime()
-                    if (player.isPlaying && player.isCurrentMediaItemDynamic && liveOffsetMs >= 0L &&
+                    if (player.isPlaying &&
+                        player.playbackState == Player.STATE_READY &&
+                        player.totalBufferedDuration > 0L &&
+                        player.isCurrentMediaItemDynamic &&
+                        liveOffsetMs >= 0L &&
                         liveOffsetMs != androidx.media3.common.C.TIME_UNSET &&
                         applicationContext.prefs().getString(
                             C.PLAYER_VAFT_PLAYBACK_PRIORITY,
                             C.VAFT_PRIORITY_LIVE,
                         ) == C.VAFT_PRIORITY_LIVE &&
-                        liveOffsetMs > LivePriorityCatchUpPolicy.thresholdMs(
-                            liveController.currentPolicy().targetOffsetMs,
-                        ) &&
-                        (slot.lastLivePriorityCatchUpRealtimeMs == Long.MIN_VALUE ||
-                            now - slot.lastLivePriorityCatchUpRealtimeMs >= LIVE_PRIORITY_CATCH_UP_COOLDOWN_MS) &&
-                        player.isCommandAvailable(Player.COMMAND_SEEK_TO_DEFAULT_POSITION)
+                        player.isCommandAvailable(Player.COMMAND_SEEK_TO_DEFAULT_POSITION) &&
+                        slot.liveCatchUpTracker.requestSeek(
+                            liveOffsetMs = liveOffsetMs,
+                            targetOffsetMs = liveController.currentPolicy().targetOffsetMs,
+                            realtimeMs = now,
+                        )
                     ) {
-                        slot.lastLivePriorityCatchUpRealtimeMs = now
+                        slot.lastIntentionalSeekRealtimeMs = now
                         player.seekToDefaultPosition()
                     }
                 }
@@ -606,13 +686,25 @@ class MultiviewPlaybackCoordinator(
                     when (playbackState) {
                         Player.STATE_BUFFERING -> {
                             slot.stableRecoveryJob?.cancel()
-                            if (slot.recordRebuffer()) {
+                            val now = SystemClock.elapsedRealtime()
+                            val canRecordRebuffer = shouldPlayWhenReady(slot) &&
+                                slot.hasMediaSource &&
+                                (now - slot.lastIntentionalSeekRealtimeMs >= SEEK_REBUFFER_GRACE_MS)
+                            if (canRecordRebuffer && slot.recordRebuffer()) {
                                 applyQuality(slot)
                             }
-                            publish(slot, MultiviewSlotStatus.BUFFERING)
+                            if (slot.status == MultiviewSlotStatus.LIVE || slot.status == MultiviewSlotStatus.LOADING) {
+                                scheduleBufferingUiUpdate(slot)
+                            } else {
+                                slot.bufferingUiJob?.cancel()
+                                slot.bufferingUiJob = null
+                                publish(slot, MultiviewSlotStatus.BUFFERING)
+                            }
                             scheduleBufferingWatchdog(slot)
                         }
                         Player.STATE_READY -> {
+                            slot.bufferingUiJob?.cancel()
+                            slot.bufferingUiJob = null
                             slot.bufferingWatchdogJob?.cancel()
                             slot.bufferingWatchdogJob = null
                             slot.liveCheckJob?.cancel()
@@ -621,17 +713,22 @@ class MultiviewPlaybackCoordinator(
                             slot.retryCount = 0
                             slot.manualRetry = false
                             publish(slot, MultiviewSlotStatus.LIVE)
-                            logSelectedFormat(slot, player.videoFormat)
+                            updateVaft(slot)
+                            logSelectedFormat(slot, selectedVideoFormat(player) ?: player.videoFormat)
                             scheduleStableQualityRecovery(slot)
                         }
                         Player.STATE_ENDED -> {
+                            slot.bufferingUiJob?.cancel()
+                            slot.bufferingUiJob = null
                             slot.bufferingWatchdogJob?.cancel()
                             slot.bufferingWatchdogJob = null
                             publish(slot, MultiviewSlotStatus.OFFLINE, retryAvailable = true)
                         }
                         Player.STATE_IDLE -> {
+                            slot.bufferingUiJob?.cancel()
+                            slot.bufferingUiJob = null
                             if (slot.hasMediaSource &&
-                                foreground &&
+                                shouldPlayWhenReady(slot) &&
                                 slot.loadJob?.isActive != true &&
                                 (slot.status == MultiviewSlotStatus.LOADING || slot.status == MultiviewSlotStatus.BUFFERING)
                             ) {
@@ -646,25 +743,34 @@ class MultiviewPlaybackCoordinator(
 
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     updateViewingStats(slot)
+                    if (isPlaying) {
+                        updateVaft(slot)
+                    }
                 }
 
                 override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
                     updateFormats(slot)
+                    updateVaft(slot)
                     val preferredHeight = slot.target?.preferredHeightPx
-                    val selectedFormat = player.videoFormat
-                    preferredHeight?.let { height ->
-                        val preferredSelection = findPreferredVideoSelection(
-                            player,
-                            height,
-                            slot.target?.preferredFrameRate ?: slot.target?.maxFrameRate ?: 60,
-                        )
-                        if (preferredSelection != null &&
-                            !selectedFormatMatches(selectedFormat, preferredSelection.format)
-                        ) {
-                            applyQuality(slot, force = true)
+                    val selectedFormat = selectedVideoFormat(player) ?: player.videoFormat
+                    if (!shouldDisableVideoTrack(slot)) {
+                        preferredHeight?.let { height ->
+                            val preferredSelection = findPreferredVideoSelection(
+                                player,
+                                height,
+                                slot.target?.preferredFrameRate ?: slot.target?.maxFrameRate ?: 60,
+                            )
+                            val alreadyOverridden = preferredSelection != null &&
+                                player.trackSelectionParameters.overrides[preferredSelection.override.mediaTrackGroup] == preferredSelection.override
+                            if (preferredSelection != null &&
+                                !alreadyOverridden &&
+                                !selectedFormatMatches(selectedFormat, preferredSelection.format)
+                            ) {
+                                applyQuality(slot, force = true)
+                            }
                         }
                     }
-                    logSelectedFormat(slot, player.videoFormat)
+                    logSelectedFormat(slot, selectedVideoFormat(player) ?: player.videoFormat)
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
@@ -672,7 +778,7 @@ class MultiviewPlaybackCoordinator(
                 }
 
                 override fun onTimelineChanged(timeline: Timeline, reason: Int) {
-                    inspectVaftState(slot)
+                    updateVaft(slot)
                 }
             })
             player.addAnalyticsListener(object : AnalyticsListener {
@@ -733,6 +839,51 @@ class MultiviewPlaybackCoordinator(
         val alternate: Boolean = false,
     )
 
+    private fun effectiveConfiguration(slot: MultiviewPlayerSlot): StreamPlaybackConfiguration {
+        val base = StreamPlaybackConfiguration.from(applicationContext)
+        return if (slot.httpProxyDisabled) {
+            base.copy(
+                proxyPlaybackAccessToken = false,
+                proxyHost = null,
+                proxyPort = null,
+                proxyBackupServers = emptyList(),
+                proxyMultivariantPlaylist = false,
+            )
+        } else {
+            base
+        }
+    }
+
+    private fun ensureHlsFactory(
+        slot: MultiviewPlayerSlot,
+        xtraModule: com.github.andreyasadchy.xtra.XtraModule,
+        configuration: StreamPlaybackConfiguration,
+    ): StreamHlsMediaSourceFactory {
+        val existing = slot.hlsFactory
+        if (existing != null && slot.configurationFingerprint == configuration.fingerprint) {
+            return existing
+        }
+        releaseActiveMediaItem(slot)
+        return StreamHlsMediaSourceFactory(
+            context = applicationContext,
+            xtraModule = xtraModule,
+            configuration = configuration,
+        ).also {
+            slot.hlsFactory = it
+            slot.configurationFingerprint = configuration.fingerprint
+        }
+    }
+
+    private fun releaseActiveMediaItem(slot: MultiviewPlayerSlot) {
+        slot.controlledVaftBadgeMessage?.cancel()
+        slot.controlledVaftBadgeMessage = null
+        slot.controlledVaftBadgeKey = null
+        slot.activeMediaId?.let { mediaId ->
+            slot.hlsFactory?.releaseMediaItem(mediaId)
+        }
+        slot.activeMediaId = null
+    }
+
     private fun start(
         slot: MultiviewPlayerSlot,
         force: Boolean = false,
@@ -743,19 +894,30 @@ class MultiviewPlaybackCoordinator(
         slot.retryJob?.cancel()
         slot.loadJob?.cancel()
         slot.liveCheckJob?.cancel()
+        slot.bufferingUiJob?.cancel()
+        slot.bufferingUiJob = null
+        slot.bufferingWatchdogJob?.cancel()
+        slot.bufferingWatchdogJob = null
         slot.target = null
         slot.effectiveQualityLabel = null
         slot.bufferHealthTrend.reset()
+        slot.liveCatchUpTracker.reset()
+        releaseActiveMediaItem(slot)
         if (force) {
             slot.player.stop()
             slot.hasMediaSource = false
             slot.reloadRequired = false
         }
-        val initialPolicy = slot.liveSettings.policies().forMode(slot.liveSettings.mode)
+        val initialConfig = effectiveConfiguration(slot)
+        val liveSettings = initialConfig.livePlaybackSettings
+        slot.liveSettings = liveSettings
+        slot.configurationFingerprint = initialConfig.fingerprint
+        val initialPolicies = liveSettings.policies()
+        val initialPolicy = initialPolicies.forMode(liveSettings.mode)
         slot.liveController.reset(
             initialPolicy = initialPolicy,
             enabled = false,
-            policies = slot.liveSettings.policies(),
+            policies = initialPolicies,
         )
         slot.liveSpeedControl.setRebufferTargetAdaptationEnabled(false)
         slot.applyLivePolicy()
@@ -764,9 +926,10 @@ class MultiviewPlaybackCoordinator(
             try {
                 val login = slot.stream.channelLogin?.trim()?.lowercase()
                     ?: throw IllegalArgumentException("missing channel login")
+                val xtraModule = (applicationContext as? XtraApp)?.xtraModule
                 val selection = requestedSelection ?: (
                     withTimeoutOrNull(PLAYLIST_LOAD_TIMEOUT_MS) {
-                        loadPlaylistUrl(slot, login)
+                        loadPlaylistUrl(slot, login, useControlledVaft = xtraModule != null)
                     } ?: throw IOException("Playlist load timed out")
                 )
                 if (!isActive || slots[slot.identity] !== slot) return@launch
@@ -777,30 +940,65 @@ class MultiviewPlaybackCoordinator(
                 slot.lastResponseCode = null
                 slot.lastMasterResponseCode = null
                 slot.lastResponseWasMaster = false
-                val liveSettings = slot.liveSettings
-                val livePolicy = liveSettings.policies().forMode(liveSettings.mode)
-                val mediaItem = MediaItem.Builder()
-                    .setUri(selection.url)
-                    .setMimeType(MimeTypes.APPLICATION_M3U8)
-                    .setLiveConfiguration(liveSettings.liveConfiguration(livePolicy))
-                    .setMediaMetadata(metadata(slot.stream))
-                    .build()
-                val source = HlsMediaSource.Factory(createDataSourceFactory(slot))
-                    .setPlaylistParserFactory(
-                        TwitchHlsPlaylistParserFactory(
-                            lowLatencyEnabled = liveSettings.lowLatencyEnabled,
-                        ),
+                slot.sourceGeneration++
+
+                val sourceConfig = effectiveConfiguration(slot)
+                val sourceLiveSettings = sourceConfig.livePlaybackSettings
+                slot.liveSettings = sourceLiveSettings
+                val preferences = applicationContext.prefs()
+                val source = if (xtraModule != null) {
+                    val hlsFactory = ensureHlsFactory(slot, xtraModule, sourceConfig)
+                    val mediaId = if (selection.customProxy) {
+                        "multiview-proxy:$login:${slot.watchGeneration}:${slot.sourceGeneration}"
+                    } else {
+                        "xtra-live:multiview:$login:${slot.watchGeneration}:${slot.sourceGeneration}"
+                    }
+                    val proxyMediaEnabled = !selection.customProxy &&
+                        !slot.httpProxyDisabled &&
+                        sourceConfig.httpProxyServers.isNotEmpty() &&
+                        preferences.getBoolean(C.PROXY_MEDIA_PLAYLIST, true)
+                    val proxyMultivariantEnabled = !selection.customProxy &&
+                        !slot.httpProxyDisabled &&
+                        sourceConfig.httpProxyServers.isNotEmpty() &&
+                        sourceConfig.proxyMultivariantPlaylist
+                    slot.httpProxyActive = proxyMediaEnabled || proxyMultivariantEnabled
+                    hlsFactory.stateFor(mediaId).proxyMediaPlaylist = proxyMediaEnabled
+                    hlsFactory.bindLiveTimelineContinuity(mediaId, slot.continuityStore)
+                    val mediaItem = hlsFactory.createLiveMediaItem(
+                        mediaId = mediaId,
+                        uri = selection.url,
+                        title = slot.stream.title,
+                        channelName = slot.stream.channelName ?: slot.stream.channelLogin,
+                        channelLogo = slot.stream.channelImage,
                     )
-                    .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(3))
-                    .createMediaSource(mediaItem)
+                    slot.activeMediaId = mediaId
+                    hlsFactory.createMediaSource(mediaItem)
+                } else {
+                    val livePolicy = sourceLiveSettings.policies().forMode(sourceLiveSettings.mode)
+                    val mediaItem = MediaItem.Builder()
+                        .setUri(selection.url)
+                        .setMimeType(MimeTypes.APPLICATION_M3U8)
+                        .setLiveConfiguration(sourceLiveSettings.liveConfiguration(livePolicy))
+                        .setMediaMetadata(metadata(slot.stream))
+                        .build()
+                    HlsMediaSource.Factory(createDataSourceFactory(slot))
+                        .setPlaylistParserFactory(
+                            TwitchHlsPlaylistParserFactory(
+                                lowLatencyEnabled = sourceLiveSettings.lowLatencyEnabled,
+                                continuityStore = slot.continuityStore,
+                            ),
+                        )
+                        .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(6))
+                        .createMediaSource(mediaItem)
+                }
                 slot.player.setMediaSource(source)
                 slot.hasMediaSource = true
                 applyQuality(slot)
                 updateAudio()
                 slot.player.prepare()
                 slot.player.playWhenReady = shouldPlayWhenReady(slot)
-                scheduleBufferingWatchdog(slot)
-                debugLog("channel=${slot.identity} playlistLoaded quality=${slot.target?.label} urlType=${if (slot.customProxy) "proxy" else "usher"} playerType=${slot.currentPlayerType ?: "custom"} alternate=${slot.usingAlternateStream} httpProxyDisabled=${slot.httpProxyDisabled}")
+                scheduleBufferingWatchdog(slot, reset = true)
+                debugLog("channel=${slot.identity} playlistLoaded quality=${slot.target?.label} urlType=${if (slot.customProxy) "proxy" else "usher"} playerType=${slot.currentPlayerType ?: "custom"} alternate=${slot.usingAlternateStream} httpProxyDisabled=${slot.httpProxyDisabled} controlledVaft=${slot.activeMediaId?.startsWith("xtra-live:") == true}")
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -809,7 +1007,11 @@ class MultiviewPlaybackCoordinator(
         }
     }
 
-    private suspend fun loadPlaylistUrl(slot: MultiviewPlayerSlot, login: String): PlaylistSelection {
+    private suspend fun loadPlaylistUrl(
+        slot: MultiviewPlayerSlot,
+        login: String,
+        useControlledVaft: Boolean,
+    ): PlaylistSelection {
         val preferences = applicationContext.prefs()
         val proxyUrl = preferences.getString(C.PLAYER_PROXY_URL, null)
         val proxyUrls = StreamPreloadPolicy.customStreamProxyUrls(proxyUrl, login)
@@ -824,7 +1026,7 @@ class MultiviewPlaybackCoordinator(
         }
 
         val primaryPlayerType = preferences.getString(C.TOKEN_PLAYER_TYPE, "site") ?: "site"
-        if (preferences.isVaftEnabled()) {
+        if (!useControlledVaft && preferences.isVaftEnabled()) {
             val cleanCandidate = loadCleanPlaylist(
                 login,
                 listOf(primaryPlayerType),
@@ -926,6 +1128,7 @@ class MultiviewPlaybackCoordinator(
         }
         if (responseCode != null && responseCode >= 400 && slot.httpProxyActive) {
             slot.httpProxyDisabled = true
+            slot.activeMediaId?.let { slot.hlsFactory?.findState(it)?.proxyMediaPlaylist = false }
             slot.retryCount = 0
             slot.manualRetry = false
             slot.reloadRequired = false
@@ -972,7 +1175,7 @@ class MultiviewPlaybackCoordinator(
             slot.lastMasterResponseCode = null
             slot.player.prepare()
             slot.player.playWhenReady = shouldPlayWhenReady(slot)
-            scheduleBufferingWatchdog(slot)
+            scheduleBufferingWatchdog(slot, reset = true)
         } else {
             slot.reloadRequired = false
             start(slot)
@@ -1104,6 +1307,12 @@ class MultiviewPlaybackCoordinator(
             }
         }
         slot.player.trackSelectionParameters = builder.build()
+        slot.activeMediaId?.let { mediaId ->
+            slot.hlsFactory?.findState(mediaId)?.controlledPlaylist?.setAlternateQualityLimit(
+                height = if (target.isAudioOnly) null else (target.preferredHeightPx ?: target.maxHeightPx),
+                frameRate = if (target.isAudioOnly) null else (target.preferredFrameRate ?: target.maxFrameRate).takeIf { it > 0 }?.toFloat(),
+            )
+        }
         updateWatchCreditInput(slot)
         onSnapshot(slot.identity, slot.snapshot(target.label))
         debugLog("channel=${slot.identity} policy mode=$qualityMode streams=${slots.size} active=${slot.identity == activeIdentity} focus=${slot.identity == focusedIdentity} target=${target.label} downgrade=${slot.downgradeLevel}")
@@ -1191,6 +1400,77 @@ class MultiviewPlaybackCoordinator(
                 }
             }
         }
+    }
+
+    private fun selectedVideoFormat(player: Player): Format? {
+        val group = player.currentTracks.groups.firstOrNull {
+            it.type == androidx.media3.common.C.TRACK_TYPE_VIDEO && it.isSelected
+        } ?: return null
+        val selected = (0 until group.length).filter(group::isTrackSelected)
+        return if (selected.size == 1) group.getTrackFormat(selected.single()) else null
+    }
+
+    private fun selectedControlledFormat(player: Player): Format? {
+        val groups = player.currentTracks.groups
+        val group = groups.firstOrNull { it.type == androidx.media3.common.C.TRACK_TYPE_VIDEO && it.isSelected }
+            ?: groups.firstOrNull { it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO && it.isSelected }
+        val selected = group?.let { (0 until it.length).filter(it::isTrackSelected) }.orEmpty()
+        return if (selected.size == 1) group?.getTrackFormat(selected.single()) else null
+    }
+
+    @androidx.media3.common.util.UnstableApi
+    private fun updateVaft(slot: MultiviewPlayerSlot) {
+        if (slots[slot.identity] !== slot) return
+        val controlled = slot.activeMediaId?.let { slot.hlsFactory?.findState(it)?.controlledPlaylist }
+        if (controlled != null) {
+            restoreVaftPlayback(slot)
+            slot.vaftAvoidanceJob?.cancel()
+            slot.primaryRestoreJob?.cancel()
+            if (!slot.player.currentTimeline.isEmpty) {
+                val window = slot.player.currentTimeline.getWindow(slot.player.currentMediaItemIndex, healthWindow)
+                controlled.selectFormat(selectedControlledFormat(slot.player))
+                val windowStartMs = window.windowStartTimeMs
+                if (windowStartMs != androidx.media3.common.C.TIME_UNSET) {
+                    val windowStartUs = windowStartMs * 1_000L
+                    val durationMs = window.durationMs.takeIf { it != androidx.media3.common.C.TIME_UNSET } ?: 0L
+                    val windowEndUs = windowStartUs + durationMs * 1_000L
+                    if (slot.player.playWhenReady) {
+                        controlled.consumeRecovery(windowStartUs, windowEndUs)?.let { _ ->
+                            val now = SystemClock.elapsedRealtime()
+                            val liveOffsetMs = slot.player.currentLiveOffset
+                                .takeIf { it != androidx.media3.common.C.TIME_UNSET && it >= 0L }
+                            slot.lastIntentionalSeekRealtimeMs = now
+                            slot.liveCatchUpTracker.recordSeek(liveOffsetMs, now)
+                            slot.player.seekToDefaultPosition()
+                        }
+                    }
+                    val epochUs = windowStartUs + slot.player.currentPosition.coerceAtLeast(0L) * 1_000L
+                    val next = controlled.nextChangeAfter(epochUs)
+                    val key = next?.let { "${slot.activeMediaId}:$it" }
+                    if (key != slot.controlledVaftBadgeKey) {
+                        slot.controlledVaftBadgeMessage?.cancel()
+                        slot.controlledVaftBadgeKey = key
+                        slot.controlledVaftBadgeMessage = next?.let { boundary ->
+                            slot.player.createMessage { _, _ ->
+                                slot.controlledVaftBadgeKey = null
+                                slot.controlledVaftBadgeMessage = null
+                                updateVaft(slot)
+                            }.setLooper(Looper.getMainLooper())
+                                .setPosition(
+                                    slot.player.currentMediaItemIndex,
+                                    ((boundary - windowStartUs) / 1_000L).coerceAtLeast(0L),
+                                )
+                                .send()
+                        }
+                    }
+                }
+            }
+            return
+        }
+        slot.controlledVaftBadgeMessage?.cancel()
+        slot.controlledVaftBadgeMessage = null
+        slot.controlledVaftBadgeKey = null
+        inspectVaftState(slot)
     }
 
     @androidx.media3.common.util.UnstableApi
@@ -1775,7 +2055,7 @@ class MultiviewPlaybackCoordinator(
         val identity: String,
         var stream: Stream,
         val player: ExoPlayer,
-        val liveSettings: LivePlaybackSettings,
+        var liveSettings: LivePlaybackSettings,
         val liveController: AdaptiveLivePlaybackController,
         val liveSpeedControl: AdaptiveLivePlaybackSpeedControl,
         val applyLivePolicy: () -> Unit,
@@ -1787,10 +2067,19 @@ class MultiviewPlaybackCoordinator(
         var retryJob: Job? = null
         var stableRecoveryJob: Job? = null
         var livePriorityCatchUpJob: Job? = null
-        var lastLivePriorityCatchUpRealtimeMs: Long = Long.MIN_VALUE
+        val liveCatchUpTracker = LivePriorityCatchUpTracker()
+        var lastIntentionalSeekRealtimeMs: Long = Long.MIN_VALUE
         var vaftAvoidanceJob: Job? = null
         var primaryRestoreJob: Job? = null
+        var bufferingUiJob: Job? = null
         var bufferingWatchdogJob: Job? = null
+        val continuityStore = TwitchHlsPlaylistContinuityStore()
+        var hlsFactory: StreamHlsMediaSourceFactory? = null
+        var configurationFingerprint: String? = null
+        var sourceGeneration: Long = 0L
+        var activeMediaId: String? = null
+        var controlledVaftBadgeMessage: PlayerMessage? = null
+        var controlledVaftBadgeKey: String? = null
         var liveCheckJob: Job? = null
         internal var watchCreditJob: Job? = null
         internal var metadataResolveJob: Job? = null
@@ -1880,8 +2169,15 @@ class MultiviewPlaybackCoordinator(
             livePriorityCatchUpJob?.cancel()
             vaftAvoidanceJob?.cancel()
             primaryRestoreJob?.cancel()
+            bufferingUiJob?.cancel()
+            bufferingUiJob = null
             bufferingWatchdogJob?.cancel()
             bufferingWatchdogJob = null
+            controlledVaftBadgeMessage?.cancel()
+            controlledVaftBadgeMessage = null
+            controlledVaftBadgeKey = null
+            activeMediaId?.let { hlsFactory?.releaseMediaItem(it) }
+            activeMediaId = null
             liveCheckJob?.cancel()
             liveCheckJob = null
             watchCreditJob?.cancel()
@@ -1901,9 +2197,10 @@ class MultiviewPlaybackCoordinator(
 
     companion object {
         private const val TAG = "MultiviewPlayback"
-        private const val LIVE_PRIORITY_CATCH_UP_COOLDOWN_MS = 15_000L
         private const val MAX_RETRIES = 6
-        private const val WATCHDOG_BUFFERING_TIMEOUT_MS = 6_000L
+        private const val BUFFERING_UI_DEBOUNCE_MS = 750L
+        private const val SEEK_REBUFFER_GRACE_MS = 3_000L
+        private const val WATCHDOG_BUFFERING_TIMEOUT_MS = LivePlaybackStallRecoveryState.DEFAULT_STALL_TIMEOUT_MS
         private const val PLAYLIST_LOAD_TIMEOUT_MS = 10_000L
         private const val STALE_PLAYLIST_IDLE_MS = 5 * 60_000L
         private const val LIVE_STATUS_CHECK_TIMEOUT_MS = 4_000L

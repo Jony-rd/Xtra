@@ -81,3 +81,21 @@ object MultiviewQualityRecovery {
         )
     }
 }
+
+internal data class MultiviewStallSnapshot(
+    val currentPositionMs: Long,
+    val bufferedPositionMs: Long,
+)
+
+internal object MultiviewStallProgress {
+    const val POSITION_ADVANCE_MIN_MS = 500L
+    const val BUFFER_ADVANCE_MIN_MS = 1_000L
+
+    fun hasAdvanced(
+        baseline: MultiviewStallSnapshot,
+        current: MultiviewStallSnapshot,
+    ): Boolean {
+        return current.currentPositionMs > baseline.currentPositionMs + POSITION_ADVANCE_MIN_MS ||
+            current.bufferedPositionMs > baseline.bufferedPositionMs + BUFFER_ADVANCE_MIN_MS
+    }
+}

@@ -16,6 +16,63 @@ object LivePriorityCatchUpPolicy {
         previousOffsetMs - currentOffsetMs >= MINIMUM_PROGRESS_MS
 }
 
+/** Tracks single-attempt progress for live catch-up seeks so stalled windows don't seek in a loop. */
+class LivePriorityCatchUpTracker(
+    private val cooldownMs: Long = DEFAULT_COOLDOWN_MS,
+    private val recoveryMarginMs: Long = DEFAULT_RECOVERY_MARGIN_MS,
+) {
+    private var lastSeekRealtimeMs: Long = Long.MIN_VALUE
+    private var lastSeekOffsetMs: Long? = null
+    private var suppressed: Boolean = false
+
+    fun reset() {
+        lastSeekRealtimeMs = Long.MIN_VALUE
+        lastSeekOffsetMs = null
+        suppressed = false
+    }
+
+    fun recordSeek(liveOffsetMs: Long?, realtimeMs: Long) {
+        lastSeekOffsetMs = liveOffsetMs
+        lastSeekRealtimeMs = realtimeMs
+        suppressed = false
+    }
+
+    fun requestSeek(
+        liveOffsetMs: Long,
+        targetOffsetMs: Long,
+        realtimeMs: Long,
+    ): Boolean {
+        if (liveOffsetMs < 0L) return false
+        if (liveOffsetMs <= targetOffsetMs + recoveryMarginMs) {
+            reset()
+        }
+        val thresholdMs = LivePriorityCatchUpPolicy.thresholdMs(targetOffsetMs)
+        if (liveOffsetMs <= thresholdMs || suppressed) return false
+
+        if (lastSeekRealtimeMs != Long.MIN_VALUE) {
+            if (realtimeMs - lastSeekRealtimeMs < cooldownMs) return false
+            val previousOffsetMs = lastSeekOffsetMs
+            if (previousOffsetMs != null &&
+                !LivePriorityCatchUpPolicy.madeProgress(previousOffsetMs, liveOffsetMs)
+            ) {
+                suppressed = true
+                return false
+            }
+        }
+
+        lastSeekOffsetMs = liveOffsetMs
+        lastSeekRealtimeMs = realtimeMs
+        return true
+    }
+
+    fun isSuppressed(): Boolean = suppressed
+
+    companion object {
+        const val DEFAULT_COOLDOWN_MS = 15_000L
+        const val DEFAULT_RECOVERY_MARGIN_MS = 2_000L
+    }
+}
+
 data class PlaybackBufferPolicy(
     val minBufferMs: Int,
     val maxBufferMs: Int,
