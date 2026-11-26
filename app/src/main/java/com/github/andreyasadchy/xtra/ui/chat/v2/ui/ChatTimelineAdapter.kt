@@ -18,6 +18,7 @@ class ChatTimelineAdapter(
     private val onMessageLongClick: ((ChatMessageId) -> Unit)? = null,
     private val onEmoteClick: ((ChatEmoteInteraction) -> Unit)? = null,
     private val onGifClick: ((ChatGifInteraction) -> Unit)? = null,
+    private val onReplyClick: ((ChatMessageId) -> Unit)? = null,
     private val onMessageClick: ((ChatMessageId) -> Unit)? = null,
     private val onEmoteLongClick: ((ChatEmoteInteraction) -> Unit)? = null,
     private val onEmoteMessageClick: ((ChatMessageId) -> Unit)? = null,
@@ -49,6 +50,7 @@ class ChatTimelineAdapter(
                 onEmoteMessageLongClick = onEmoteMessageLongClick,
             )
             it.setMessageClickCallback(onMessageClick)
+            it.setReplyClickCallback(onReplyClick)
             messageTextColor?.let(it::setTextColor)
             it.layoutParams = ViewGroup.LayoutParams(-1, -2)
         },

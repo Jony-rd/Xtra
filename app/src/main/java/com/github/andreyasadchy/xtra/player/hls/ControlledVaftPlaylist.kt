@@ -91,6 +91,8 @@ class ControlledVaftPlaylist(
         val createdMs = SystemClock.elapsedRealtime()
         var recoveryEpochUs: Long? = null
         var recoveryAtWindowEnd = false
+        var pruneBeforeEpochUs: Long? = null
+        var recoveryTriggeredMs = Long.MIN_VALUE
         var resolved: Resolution? = null
         var generation = 0L
         var qualityRefresh: Job? = null
@@ -213,6 +215,7 @@ class ControlledVaftPlaylist(
         val exact = sameKind.firstOrNull { formats[it.key] == format }
             ?: sameKind.singleOrNull { format.id != null && formats[it.key]?.id == format.id }
             ?: matching.singleOrNull()
+            ?: sameKind.filter { formats[it.key]?.height == format.height && format.height > 0 }.singleOrNull()
         exact?.value?.let { currentFeed = it }
         if (BuildConfig.DEBUG && lastSelectedFormat != format) {
             Log.d("XtraVaftFeed", "event=active_rendition channel=$channel height=${format.height} idToken=${format.id?.hashCode()} " +
@@ -266,6 +269,17 @@ class ControlledVaftPlaylist(
         val format = formats[route(uri)] ?: throw IOException("Controlled live rendition is missing its format")
         val feed = feeds.getOrPut(route(uri)) { Feed() }
         return synchronized(feed) {
+            val pollNow = SystemClock.elapsedRealtime()
+            feed.pruneBeforeEpochUs?.let { threshold ->
+                if (feed.recoveryEpochUs == null ||
+                    (feed.recoveryTriggeredMs != Long.MIN_VALUE && pollNow - feed.recoveryTriggeredMs >= 4_000L)
+                ) {
+                    feed.published.removeAll { it.epochUs < threshold }
+                    feed.pruneBeforeEpochUs = null
+                    feed.recoveryEpochUs = null
+                    feed.recoveryTriggeredMs = Long.MIN_VALUE
+                }
+            }
             feed.primaryVaftRanges = TwitchVaftDetector.visibleBoundaries(playlist).filter { it.basis == "date_range" }
             if (currentFeed == null && format.height > 0) currentFeed = feed
             val blocked = if (context.prefs().isVaftEnabled()) marked(playlist) else playlist.segments.map { false }
@@ -698,7 +712,7 @@ class ControlledVaftPlaylist(
         }
         val before = probe.published.lastOrNull()?.sequence
         append(probe, candidate.playlist, candidate.playerType, blocked, anchor, candidate.format)
-        recoverExpiredWindow(probe, candidate.playlist, blocked, SystemClock.elapsedRealtime(), candidate.playerType, candidate.format)
+        recoverExpiredWindow(probe, candidate.playlist, blocked, SystemClock.elapsedRealtime(), candidate.playerType, candidate.format, isProbe = true)
         val currentTail = feed.published.lastOrNull()
         // A fresh response may still end at the current tail while the next segment
         // is being produced. Keep that healthy route and its verified trailing parts.
@@ -708,7 +722,8 @@ class ControlledVaftPlaylist(
     }
 
     private fun recoverExpiredWindow(feed: Feed, raw: HlsMediaPlaylist, blocked: List<Boolean>, now: Long,
-                                     type: String = primaryType, format: Format? = null) {
+                                     type: String = primaryType, format: Format? = null,
+                                     isProbe: Boolean = false) {
         val previous = feed.published.lastOrNull() ?: return
         if (!raw.hasProgramDateTime) return
         val first = raw.segments.firstOrNull() ?: return
@@ -731,9 +746,17 @@ class ControlledVaftPlaylist(
         append(replacement, raw, type, blocked, format = format)
         val fresh = replacement.published.dropWhile { it.epochUs < raw.startTimeUs + raw.segments[index].relativeStartTimeUs }
         if (fresh.isEmpty()) return
-        // Keep the old sequence available until the player receives the new timeline
-        // and seeks. Evicting it here races the loader into BEHIND_LIVE_WINDOW.
-        if (!prioritizeLive) feed.published.clear()
+        // Keep the old sequence available only for the active feed until the player receives the
+        // new timeline and seeks; clear stale inactive feeds (e.g. quality switches) immediately.
+        val switchingInactiveFeed = !isProbe && currentFeed != null && feed !== currentFeed
+        if (!prioritizeLive || switchingInactiveFeed) {
+            feed.published.clear()
+            feed.pruneBeforeEpochUs = null
+            feed.recoveryTriggeredMs = Long.MIN_VALUE
+        } else {
+            feed.pruneBeforeEpochUs = fresh.first().epochUs
+            feed.recoveryTriggeredMs = now
+        }
         feed.generation++
         feed.resolving?.cancel()
         feed.candidate = null
@@ -785,8 +808,9 @@ class ControlledVaftPlaylist(
             val previous = feed.published.lastOrNull()
             val proposed = origin + segment.relativeStartTimeUs
             val nextEpoch = previous?.let { it.epochUs + it.segment.durationUs } ?: proposed
-            if (blocked[index] && (previous == null || proposed + segment.durationUs > nextEpoch + 2_000L)) return true
-            if (previous != null && abs(proposed - nextEpoch) > 2_000L) {
+            val continuityToleranceUs = if (overlap != null) 2_000L else 500_000L
+            if (blocked[index] && (previous == null || proposed + segment.durationUs > nextEpoch + continuityToleranceUs)) return true
+            if (previous != null && abs(proposed - nextEpoch) > continuityToleranceUs) {
                 if (proposed < nextEpoch) continue
                 if (BuildConfig.DEBUG) Log.d("XtraVaftFeed", "event=wait_for_continuity channel=$channel deltaUs=${proposed - nextEpoch}")
                 break
@@ -923,7 +947,8 @@ class ControlledVaftPlaylist(
         }.orEmpty()
         if (BuildConfig.DEBUG && parts.isNotEmpty()) Log.d("XtraVaftFeed", "event=prefetch_publish channel=$channel parts=${parts.size}")
         return HlsMediaPlaylist(
-            raw.playlistType, raw.baseUri, emptyList(), C.TIME_UNSET, false, first.epochUs,
+            // Keep the source tags available to playback diagnostics; the published segments are filtered separately.
+            raw.playlistType, raw.baseUri, raw.tags, C.TIME_UNSET, false, first.epochUs,
             true, first.discontinuity, first.sequence, raw.version,
             ((published.maxOf { it.segment.durationUs } + 999_999L) / 1_000_000L) * 1_000_000L,
             tail?.partTargetDurationUs?.takeIf { parts.isNotEmpty() } ?: C.TIME_UNSET,
@@ -999,7 +1024,7 @@ class ControlledVaftPlaylist(
                             }
                             val before = probe.published.lastOrNull()?.sequence
                             append(probe, source, type, blocked, contentAnchor(feed, source, blocked))
-                            recoverExpiredWindow(probe, source, blocked, SystemClock.elapsedRealtime(), type, selected.format)
+                            recoverExpiredWindow(probe, source, blocked, SystemClock.elapsedRealtime(), type, selected.format, isProbe = true)
                             if (probe.published.lastOrNull()?.sequence != before) {
                                 replacementCatalogs[type] = (replacementCatalogs[type].orEmpty() + selected.format).distinct()
                                 selectedCandidate = Candidate(type, selected.url, source, selected.format)

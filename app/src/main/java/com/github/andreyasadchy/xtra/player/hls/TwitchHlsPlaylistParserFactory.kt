@@ -83,7 +83,7 @@ private fun HlsMediaPlaylist.copyWithStartTimeUs(startTimeUs: Long): HlsMediaPla
 )
 
 @androidx.media3.common.util.UnstableApi
-private data class ProgramDateTimeContinuityAdjustment(
+internal data class ProgramDateTimeContinuityAdjustment(
     val playlist: HlsMediaPlaylist,
     val shiftMs: Long,
     val source: String,
@@ -101,6 +101,11 @@ class TwitchHlsPlaylistContinuityStore {
 
     @Volatile
     private var delegate: TwitchHlsPlaylistContinuityStore? = null
+
+    internal fun previousExact(cacheKey: String): CachedMediaPlaylist? {
+        delegate?.let { return it.previousExact(cacheKey) }
+        return recentMediaPlaylists[cacheKey]
+    }
 
     internal fun previous(cacheKey: String): CachedMediaPlaylist? {
         delegate?.let { return it.previous(cacheKey) }
@@ -140,7 +145,7 @@ class TwitchHlsPlaylistContinuityStore {
     }
 
     private companion object {
-        const val MAX_CACHED_MEDIA_PLAYLISTS = 8
+        const val MAX_CACHED_MEDIA_PLAYLISTS = 32
     }
 }
 
@@ -212,14 +217,15 @@ class TwitchHlsPlaylistParserFactory(
                 )
             }
             val cacheKey = playlistCacheKey(uri)
-            val cachedPrevious = continuityStore.previous(cacheKey)
-            val continuityPrevious = previousMediaPlaylist ?: cachedPrevious?.playlist
-            val continuityPreviousParsedAtMs = cachedPrevious
-                ?.takeIf { cached ->
-                    continuityPrevious?.mediaSequence == cached.playlist.mediaSequence &&
-                        continuityPrevious.startTimeUs == cached.playlist.startTimeUs
-                }
-                ?.parsedAtElapsedRealtimeMs
+            val exactCached = continuityStore.previousExact(cacheKey)
+            val fallbackCached = if (exactCached == null) continuityStore.previous(cacheKey) else null
+            val sameRenditionContinuity = exactCached != null
+            // Prefer raw pre-transform playlists from continuityStore so synthetic VAFT sequences
+            // or recovery gaps passed back via Media3's previousMediaPlaylist cannot corrupt PDT math.
+            val continuityPrevious = exactCached?.playlist
+                ?: fallbackCached?.playlist
+                ?: previousMediaPlaylist?.takeIf(::isContiguousRawPlaylist)
+            val continuityPreviousParsedAtMs = (exactCached ?: fallbackCached)?.parsedAtElapsedRealtimeMs
             val parsedAtElapsedRealtimeMs = SystemClock.elapsedRealtime()
             val playlistBeforeInterstitialRestore = parsed as? HlsMediaPlaylist
             if (playlistBeforeInterstitialRestore != null) {
@@ -235,8 +241,10 @@ class TwitchHlsPlaylistParserFactory(
                 updatedPlaylist = parsed as? HlsMediaPlaylist,
                 previousParsedAtElapsedRealtimeMs = continuityPreviousParsedAtMs,
                 parsedAtElapsedRealtimeMs = parsedAtElapsedRealtimeMs,
+                allowSequenceGapContinuity = sameRenditionContinuity,
             )
             if (continuityAdjustment != null) parsed = continuityAdjustment.playlist
+            val preTransformMediaPlaylist = parsed as? HlsMediaPlaylist
             val programDateTimeShiftMs = continuityAdjustment?.shiftMs
             val compatible = transform(uri, TwitchMultivariantPlaylistCompatibility.apply(
                 parsed = parsed,
@@ -289,9 +297,9 @@ class TwitchHlsPlaylistParserFactory(
                     ?.takeIf { collectExpandedDiagnostics },
                 programDateTimeShiftSource = continuityAdjustment?.source,
             )
-            if (compatibleMediaPlaylist?.hasProgramDateTime == true) {
+            if (preTransformMediaPlaylist?.hasProgramDateTime == true) {
                 continuityStore.record(cacheKey, CachedMediaPlaylist(
-                    compatibleMediaPlaylist,
+                    preTransformMediaPlaylist,
                     parsedAtElapsedRealtimeMs,
                 ))
             }
@@ -386,69 +394,88 @@ class TwitchHlsPlaylistParserFactory(
         )
     }
 
-    /** Keep an overlapping segment on its existing timeline when its server PDT has shifted. */
-    private fun preserveProgramDateTimeContinuity(
-        previousPlaylist: HlsMediaPlaylist?,
-        updatedPlaylist: HlsMediaPlaylist?,
-        previousParsedAtElapsedRealtimeMs: Long?,
-        parsedAtElapsedRealtimeMs: Long,
-    ): ProgramDateTimeContinuityAdjustment? {
-        if (previousPlaylist == null || updatedPlaylist?.hasProgramDateTime != true) return null
-        val sequenceOffset = updatedPlaylist.mediaSequence - previousPlaylist.mediaSequence
-        if (sequenceOffset < 0L) return null
-
-        val continuousStartTimeUs: Long
-        val source: String
-        if (sequenceOffset < previousPlaylist.segments.size) {
-            val overlap = previousPlaylist.segments[sequenceOffset.toInt()]
-            continuousStartTimeUs = previousPlaylist.startTimeUs + overlap.relativeStartTimeUs
-            source = "overlap_continuity"
-        } else {
-            val missingSequenceCount = sequenceOffset - previousPlaylist.segments.size
-            if (missingSequenceCount > MAX_MISSING_SEQUENCE_COUNT) return null
-            val averageSegmentDurationUs = previousPlaylist.segments
-                .takeLast(5)
-                .map { it.durationUs }
-                .filter { it > 0L }
-                .takeIf { it.isNotEmpty() }
-                ?.average()
-                ?.toLong()
-                ?.takeIf { it > 0L }
-                ?: return null
-            val previousParsedAtMs = previousParsedAtElapsedRealtimeMs ?: return null
-            val expectedAdvanceUs = sequenceOffset * averageSegmentDurationUs
-            val actualAdvanceUs = (parsedAtElapsedRealtimeMs - previousParsedAtMs)
-                .coerceAtLeast(0L) * 1_000L
-            val previousWindowDurationUs = previousPlaylist.durationUs
-                .takeIf { it != C.TIME_UNSET }
-                ?: previousPlaylist.segments.sumOf { it.durationUs }
-            val updatedWindowDurationUs = updatedPlaylist.durationUs
-                .takeIf { it != C.TIME_UNSET }
-                ?: updatedPlaylist.segments.sumOf { it.durationUs }
-            val expectedElapsedUs = (expectedAdvanceUs - previousWindowDurationUs + updatedWindowDurationUs)
-                .coerceAtLeast(0L)
-            val toleranceUs = maxOf(15_000_000L, expectedElapsedUs / 4L)
-            if (kotlin.math.abs(actualAdvanceUs - expectedElapsedUs) > toleranceUs) return null
-            val estimatedMissingDurationUs = missingSequenceCount * averageSegmentDurationUs
-            val estimatedShiftUs = updatedPlaylist.startTimeUs -
-                (previousPlaylist.endTimeUs + estimatedMissingDurationUs)
-            if (kotlin.math.abs(estimatedShiftUs) < maxOf(2_000_000L, averageSegmentDurationUs)) return null
-            continuousStartTimeUs = previousPlaylist.endTimeUs + estimatedMissingDurationUs
-            source = "sequence_gap_continuity"
-        }
-        val shiftUs = updatedPlaylist.startTimeUs - continuousStartTimeUs
-        if (shiftUs == 0L) return null
-        return ProgramDateTimeContinuityAdjustment(
-            playlist = updatedPlaylist.copyWithStartTimeUs(continuousStartTimeUs),
-            shiftMs = shiftUs / 1_000L,
-            source = source,
-        )
-    }
-
     private fun playlistCacheKey(uri: Uri): String = uri.buildUpon().clearQuery().build().toString()
 
-    private companion object {
-        const val MAX_MISSING_SEQUENCE_COUNT = 300L
+    internal companion object {
+        private const val MAX_MISSING_SEQUENCE_COUNT = 300L
+        private const val MAX_INTERNAL_SEGMENT_GAP_US = 2_000_000L
+        private const val MAX_CROSS_RENDITION_PDT_SHIFT_US = 30_000_000L
+
+        internal fun isContiguousRawPlaylist(playlist: HlsMediaPlaylist): Boolean {
+            if (!playlist.hasProgramDateTime || playlist.segments.isEmpty()) return false
+            var expectedRelativeUs = 0L
+            for (segment in playlist.segments) {
+                if (kotlin.math.abs(segment.relativeStartTimeUs - expectedRelativeUs) > MAX_INTERNAL_SEGMENT_GAP_US) {
+                    return false
+                }
+                expectedRelativeUs = segment.relativeStartTimeUs + segment.durationUs
+            }
+            return true
+        }
+
+        /** Keep an overlapping segment on its existing timeline when its server PDT has shifted. */
+        internal fun preserveProgramDateTimeContinuity(
+            previousPlaylist: HlsMediaPlaylist?,
+            updatedPlaylist: HlsMediaPlaylist?,
+            previousParsedAtElapsedRealtimeMs: Long?,
+            parsedAtElapsedRealtimeMs: Long,
+            allowSequenceGapContinuity: Boolean = true,
+        ): ProgramDateTimeContinuityAdjustment? {
+            if (previousPlaylist == null || updatedPlaylist?.hasProgramDateTime != true) return null
+            if (!isContiguousRawPlaylist(previousPlaylist) || updatedPlaylist.segments.isEmpty()) return null
+            val sequenceOffset = updatedPlaylist.mediaSequence - previousPlaylist.mediaSequence
+            if (sequenceOffset < 0L) return null
+
+            val continuousStartTimeUs: Long
+            val source: String
+            if (sequenceOffset < previousPlaylist.segments.size) {
+                val overlap = previousPlaylist.segments[sequenceOffset.toInt()]
+                continuousStartTimeUs = previousPlaylist.startTimeUs + overlap.relativeStartTimeUs
+                if (!allowSequenceGapContinuity &&
+                    kotlin.math.abs(updatedPlaylist.startTimeUs - continuousStartTimeUs) > MAX_CROSS_RENDITION_PDT_SHIFT_US
+                ) {
+                    return null
+                }
+                source = "overlap_continuity"
+            } else {
+                if (!allowSequenceGapContinuity) return null
+                val missingSequenceCount = sequenceOffset - previousPlaylist.segments.size
+                if (missingSequenceCount > MAX_MISSING_SEQUENCE_COUNT) return null
+                val averageSegmentDurationUs = previousPlaylist.segments
+                    .takeLast(5)
+                    .map { it.durationUs }
+                    .filter { it > 0L }
+                    .takeIf { it.isNotEmpty() }
+                    ?.average()
+                    ?.toLong()
+                    ?.takeIf { it > 0L }
+                    ?: return null
+                val previousParsedAtMs = previousParsedAtElapsedRealtimeMs ?: return null
+                val expectedAdvanceUs = sequenceOffset * averageSegmentDurationUs
+                val actualAdvanceUs = (parsedAtElapsedRealtimeMs - previousParsedAtMs)
+                    .coerceAtLeast(0L) * 1_000L
+                val previousWindowDurationUs = previousPlaylist.segments.sumOf { it.durationUs }
+                val updatedWindowDurationUs = updatedPlaylist.segments.sumOf { it.durationUs }
+                val previousWindowEndUs = previousPlaylist.startTimeUs + previousWindowDurationUs
+                val expectedElapsedUs = (expectedAdvanceUs - previousWindowDurationUs + updatedWindowDurationUs)
+                    .coerceAtLeast(0L)
+                val toleranceUs = maxOf(15_000_000L, expectedElapsedUs / 4L)
+                if (kotlin.math.abs(actualAdvanceUs - expectedElapsedUs) > toleranceUs) return null
+                val estimatedMissingDurationUs = missingSequenceCount * averageSegmentDurationUs
+                val estimatedShiftUs = updatedPlaylist.startTimeUs -
+                    (previousWindowEndUs + estimatedMissingDurationUs)
+                if (kotlin.math.abs(estimatedShiftUs) < maxOf(2_000_000L, averageSegmentDurationUs)) return null
+                continuousStartTimeUs = previousWindowEndUs + estimatedMissingDurationUs
+                source = "sequence_gap_continuity"
+            }
+            val shiftUs = updatedPlaylist.startTimeUs - continuousStartTimeUs
+            if (shiftUs == 0L) return null
+            return ProgramDateTimeContinuityAdjustment(
+                playlist = updatedPlaylist.copyWithStartTimeUs(continuousStartTimeUs),
+                shiftMs = shiftUs / 1_000L,
+                source = source,
+            )
+        }
     }
 }
 

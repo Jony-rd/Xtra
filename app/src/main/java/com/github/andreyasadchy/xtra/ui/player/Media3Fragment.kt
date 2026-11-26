@@ -20,7 +20,6 @@ import android.view.SurfaceView
 import android.view.View
 import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.annotation.OptIn
@@ -77,6 +76,7 @@ import com.github.andreyasadchy.xtra.ui.player.clip.LiveClipBufferManager
 import com.github.andreyasadchy.xtra.player.hls.TwitchHlsPlaylistParserFactory
 import com.github.andreyasadchy.xtra.repository.preload.StreamPreloadPolicy
 import com.github.andreyasadchy.xtra.util.C
+import com.github.andreyasadchy.xtra.util.LivePlaybackSettings
 import com.github.andreyasadchy.xtra.util.TwitchApiHelper
 import com.github.andreyasadchy.xtra.util.getAlertDialogBuilder
 import com.github.andreyasadchy.xtra.util.httpProxyHost
@@ -170,6 +170,7 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost, ClipEditor
                 null
             }
         }
+    private val liveCatchUpHintPresses = mutableListOf<Long>()
     private var playerListener: Player.Listener? = null
     private val mediaControllerListener = object : MediaController.Listener {
         override fun onCustomCommand(
@@ -2896,6 +2897,7 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost, ClipEditor
     }
 
     override fun fastForward() {
+        maybeShowLiveCatchUpHint()
         val controller = player ?: return
         val seekStepMs = transportSeekIncrementMs(LiveTapSeekDirection.FORWARD)
         if (handleLiveTransportSeek(LiveTapSeekDirection.FORWARD, seekStepMs)) {
@@ -2920,6 +2922,41 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost, ClipEditor
             )
         }
         controller.seekForward()
+    }
+
+    private fun maybeShowLiveCatchUpHint() {
+        val preferences = requireContext().prefs()
+        if (videoType != STREAM || isLiveRewindActiveOrSwitching() ||
+            preferences.getString(C.PLAYER_VAFT_PLAYBACK_PRIORITY, C.VAFT_PRIORITY_LIVE) == C.VAFT_PRIORITY_LIVE
+        ) return
+
+        val nowWallClockMs = System.currentTimeMillis()
+        val lastShownAtMs = preferences.getLong(C.PLAYER_LIVE_PRIORITY_HINT_LAST_SHOWN_AT, 0L)
+        if (nowWallClockMs - lastShownAtMs < LIVE_CATCH_UP_HINT_COOLDOWN_MS) return
+
+        val controller = player ?: return
+        if (!controller.playWhenReady) return
+        val liveOffsetMs = controller.currentLiveOffset
+            .takeIf { it != Media3C.TIME_UNSET && it >= 0L } ?: return
+        val playbackSettings = LivePlaybackSettings.fromPreferences(preferences)
+        val targetOffsetMs = playbackSettings.policies()
+            .forMode(playbackSettings.mode)
+            .targetOffsetMs
+        if (liveOffsetMs - targetOffsetMs < LIVE_CATCH_UP_HINT_MIN_DELAY_BEYOND_TARGET_MS) return
+
+        val nowElapsedMs = SystemClock.elapsedRealtime()
+        liveCatchUpHintPresses.removeAll { nowElapsedMs - it > LIVE_CATCH_UP_HINT_WINDOW_MS }
+        liveCatchUpHintPresses += nowElapsedMs
+        if (liveCatchUpHintPresses.size < LIVE_CATCH_UP_HINT_REQUIRED_PRESSES) return
+
+        preferences.edit { putLong(C.PLAYER_LIVE_PRIORITY_HINT_LAST_SHOWN_AT, nowWallClockMs) }
+        liveCatchUpHintPresses.clear()
+        Snackbar.make(binding.playerLayout, R.string.player_live_catch_up_hint, Snackbar.LENGTH_LONG)
+            .setAction(R.string.settings) {
+                openPlayerSettingsAtPreference(C.PLAYER_VAFT_PLAYBACK_PRIORITY)
+            }
+            .setDuration(LIVE_CATCH_UP_HINT_DURATION_MS)
+            .show()
     }
 
     override fun seek(position: Long) {
@@ -3860,25 +3897,31 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost, ClipEditor
                     return@addListener
                 }
                 if (result.get().resultCode == SessionResult.RESULT_SUCCESS) {
-                    val tags = result.get().extras.getStringArray(PlaybackService.RESULT)?.joinToString("\n")
-                    if (!tags.isNullOrBlank()) {
-                        requireContext().getAlertDialogBuilder().apply {
-                            setView(NestedScrollView(context).apply {
-                                addView(HorizontalScrollView(context).apply {
-                                    addView(TextView(context).apply {
-                                        text = tags
-                                        textSize = 12F
-                                        setTextIsSelectable(true)
-                                    })
-                                })
+                    val tags = result.get().extras.getStringArray(PlaybackService.RESULT)?.joinToString("\n").orEmpty()
+                    val hasTags = tags.isNotBlank()
+                    requireContext().getAlertDialogBuilder().apply {
+                        setTitle(
+                            if (mediaPlaylist) R.string.show_media_playlist_tags
+                            else R.string.show_multivariant_playlist_tags,
+                        )
+                        setView(NestedScrollView(context).apply {
+                            addView(TextView(context).apply {
+                                text = if (hasTags) tags else getString(R.string.playlist_tags_unavailable)
+                                textSize = 12F
+                                setTextIsSelectable(true)
+                                setHorizontallyScrolling(false)
+                                val padding = (16 * resources.displayMetrics.density).toInt()
+                                setPadding(padding, padding, padding, padding)
                             })
+                        })
+                        if (hasTags) {
                             setNegativeButton(R.string.copy_clip) { _, _ ->
                                 val clipboard = ContextCompat.getSystemService(requireContext(), ClipboardManager::class.java)
                                 clipboard?.setPrimaryClip(ClipData.newPlainText("label", tags))
                             }
-                            setPositiveButton(android.R.string.ok, null)
-                        }.show()
-                    }
+                        }
+                        setPositiveButton(android.R.string.ok, null)
+                    }.show()
                 }
             }, ContextCompat.getMainExecutor(requireContext()))
         }
@@ -6416,6 +6459,11 @@ class Media3Fragment : Media3PlayerFragment(), PlaybackVideoInfoHost, ClipEditor
         private const val LIVE_SURFACE_RESTORE_TIMEOUT_MS = 4_000L
         private const val LIVE_REWIND_STATE_SYNC_POLL_ATTEMPTS = 32
         private const val LIVE_REWIND_STATE_SYNC_POLL_INTERVAL_MS = 200L
+        private const val LIVE_CATCH_UP_HINT_MIN_DELAY_BEYOND_TARGET_MS = 2_000L
+        private const val LIVE_CATCH_UP_HINT_WINDOW_MS = 20 * 60_000L
+        private const val LIVE_CATCH_UP_HINT_REQUIRED_PRESSES = 3
+        private const val LIVE_CATCH_UP_HINT_COOLDOWN_MS = 7 * 24 * 60 * 60_000L
+        private const val LIVE_CATCH_UP_HINT_DURATION_MS = 8_000
         private const val CLIP_EDITOR_COVER_TIMEOUT_MS = 5_000L
         private const val QUALITY_RETRY_DELAY_MS = 500L
         private const val RESUME_QUALITY_CONFIRMATION_TIMEOUT_MS = 5_000L

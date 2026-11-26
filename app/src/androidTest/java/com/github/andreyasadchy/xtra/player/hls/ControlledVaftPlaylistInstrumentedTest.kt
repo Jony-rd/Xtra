@@ -433,6 +433,33 @@ class ControlledVaftPlaylistInstrumentedTest {
             assertEquals(ControlledVaftPlaylist.Recovery(prioritizeLive = true),
                 controlled.consumeRecovery(after.startTimeUs, after.startTimeUs + after.durationUs))
             assertNull(controlled.consumeRecovery(after.startTimeUs, after.startTimeUs + after.durationUs))
+            val trimmed = publish(controlled, media(101..105))
+            assertTrue(
+                "Consumed recovery must prune stale pre-gap segments",
+                trimmed.startTimeUs >= epoch + 200_000_000L,
+            )
+        } finally { controlled.close() }
+    }
+
+    @Test fun inactiveRenditionRecoveryClearsStaleWindowImmediately() = withPlaybackPriority(XtraC.VAFT_PRIORITY_LIVE) {
+        val controlled = controlled(Network())
+        try {
+            val secondUri = Uri.parse("https://fixture.invalid/secondary.m3u8")
+            val dualMaster = parse("""
+                #EXTM3U
+                #EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1280x720,FRAME-RATE=60,CODECS="avc1.4d401f"
+                primary.m3u8
+                #EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=256x144,FRAME-RATE=30,CODECS="avc1.4d401f"
+                secondary.m3u8
+            """.trimIndent()) as HlsMultivariantPlaylist
+            controlled.transform(uri, dualMaster)
+            publish(controlled, media(0..2))
+            controlled.transform(secondUri, parse(media(0..2), secondUri))
+            val recoveredSecondary = controlled.transform(secondUri, parse(media(100..104), secondUri)) as HlsMediaPlaylist
+            assertTrue(
+                "Switching to an expired inactive rendition must not retain the old stale window",
+                recoveredSecondary.startTimeUs >= epoch + 200_000_000L,
+            )
         } finally { controlled.close() }
     }
 }
