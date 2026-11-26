@@ -44,7 +44,10 @@ import com.github.andreyasadchy.xtra.repository.preload.StreamPlaybackConfigurat
 import com.github.andreyasadchy.xtra.ui.common.logVideoSurfaceBinding
 import com.github.andreyasadchy.xtra.ui.player.LiveBufferHealthTrend
 import com.github.andreyasadchy.xtra.ui.player.LivePlaybackStallRecoveryState
+import com.github.andreyasadchy.xtra.ui.player.PlaybackContract
 import com.github.andreyasadchy.xtra.ui.player.PlaybackRenderersFactory
+import com.github.andreyasadchy.xtra.ui.player.SmoothHlsQualityPolicy
+import com.github.andreyasadchy.xtra.ui.player.SmoothHlsTrackSelector
 import com.github.andreyasadchy.xtra.ui.player.StreamHlsMediaSourceFactory
 import com.github.andreyasadchy.xtra.ui.player.TwitchVaftController
 import com.github.andreyasadchy.xtra.util.C
@@ -618,10 +621,12 @@ class MultiviewPlaybackCoordinator(
         val applyLivePolicy = {
             liveSpeedControl.setAdaptiveTargetLiveOffsetUs(liveController.currentPolicy().targetOffsetMs * 1_000L)
         }
+        val qualityPolicy = SmoothHlsQualityPolicy()
         val player = ExoPlayer.Builder(applicationContext).apply {
             setRenderersFactory(
                 PlaybackRenderersFactory(applicationContext).setEnableDecoderFallback(true),
             )
+            setTrackSelector(SmoothHlsTrackSelector(applicationContext, qualityPolicy))
             setLoadControl(
                 AdaptiveLiveLoadControl(
                     controller = liveController,
@@ -650,6 +655,7 @@ class MultiviewPlaybackCoordinator(
             liveController = liveController,
             liveSpeedControl = liveSpeedControl,
             applyLivePolicy = applyLivePolicy,
+            qualityPolicy = qualityPolicy,
             watchGeneration = watchGeneration,
             watchCreditInitialDelayMs = watchCreditInitialDelayMs,
         ).also { slot ->
@@ -710,6 +716,7 @@ class MultiviewPlaybackCoordinator(
                             slot.liveCheckJob?.cancel()
                             slot.liveCheckJob = null
                             slot.markReady()
+                            slot.recoveringBehindLiveWindow = false
                             slot.retryCount = 0
                             slot.manualRetry = false
                             publish(slot, MultiviewSlotStatus.LIVE)
@@ -902,6 +909,7 @@ class MultiviewPlaybackCoordinator(
         slot.effectiveQualityLabel = null
         slot.bufferHealthTrend.reset()
         slot.liveCatchUpTracker.reset()
+        slot.recoveringBehindLiveWindow = false
         releaseActiveMediaItem(slot)
         if (force) {
             slot.player.stop()
@@ -1056,6 +1064,23 @@ class MultiviewPlaybackCoordinator(
 
     private fun handlePlayerError(slot: MultiviewPlayerSlot, error: PlaybackException) {
         Log.w(TAG, "channel=${slot.identity} player error code=${error.errorCodeName}", error)
+        if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW &&
+            !slot.recoveringBehindLiveWindow
+        ) {
+            slot.recoveringBehindLiveWindow = true
+            val now = SystemClock.elapsedRealtime()
+            val liveOffsetMs = slot.player.currentLiveOffset
+                .takeIf { it != androidx.media3.common.C.TIME_UNSET && it >= 0L }
+            slot.lastIntentionalSeekRealtimeMs = now
+            slot.liveCatchUpTracker.recordSeek(liveOffsetMs, now)
+            slot.reloadRequired = false
+            Log.i(TAG, "channel=${slot.identity} recovering from behind-live-window error")
+            slot.player.seekToDefaultPosition()
+            slot.player.prepare()
+            slot.player.playWhenReady = shouldPlayWhenReady(slot)
+            scheduleBufferingWatchdog(slot, reset = true)
+            return
+        }
         val responseCode = slot.lastResponseCode ?: extractResponseCode(error)
         slot.reloadRequired = true
         // A 404 from the master playlist or Usher response is authoritative evidence that the channel ended
@@ -1312,6 +1337,16 @@ class MultiviewPlaybackCoordinator(
         )
         if (!force && slot.target == target) return
         slot.target = target
+        val manualOverride = qualityOverrides[slot.identity]
+        val desiredQualityName = when {
+            target.isAudioOnly -> PlaybackContract.AUTO_QUALITY
+            manualOverride.equals(PlaybackContract.SOURCE_QUALITY, ignoreCase = true) ->
+                PlaybackContract.SOURCE_QUALITY
+            target.preferredHeightPx != null ->
+                "${target.preferredHeightPx}p${target.preferredFrameRate ?: target.maxFrameRate}"
+            else -> PlaybackContract.AUTO_QUALITY
+        }
+        slot.qualityPolicy.set(desiredQualityName)
         if (target.isAudioOnly) {
             slot.effectiveQualityLabel = null
         }
@@ -2086,6 +2121,7 @@ class MultiviewPlaybackCoordinator(
         val liveController: AdaptiveLivePlaybackController,
         val liveSpeedControl: AdaptiveLivePlaybackSpeedControl,
         val applyLivePolicy: () -> Unit,
+        val qualityPolicy: SmoothHlsQualityPolicy,
         val watchGeneration: Long,
         val watchCreditInitialDelayMs: Long,
     ) {
@@ -2149,6 +2185,7 @@ class MultiviewPlaybackCoordinator(
         var reloadRequired: Boolean = false
         var effectiveQualityLabel: String? = null
         var manualRetry: Boolean = false
+        var recoveringBehindLiveWindow: Boolean = false
         var shouldPlay: Boolean = true
         var hasMediaSource: Boolean = false
         var status: MultiviewSlotStatus = MultiviewSlotStatus.LOADING
