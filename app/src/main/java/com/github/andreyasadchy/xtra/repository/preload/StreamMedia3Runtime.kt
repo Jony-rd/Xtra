@@ -654,6 +654,7 @@ class StreamMedia3Runtime(
         return generation.builder.buildExoPlayer(
             ExoPlayer.Builder(playerContext).apply {
                 configure(generation.adaptiveLiveController, generation.adaptiveLiveLoadControl)
+                setVideoChangeFrameRateStrategy(androidx.media3.common.C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
             },
         ).also {
             // Claim this runtime generation before playback can deliver audio.
@@ -678,6 +679,7 @@ class StreamMedia3Runtime(
             )
             setAudioAttributes(AudioAttributes.DEFAULT, false)
             setHandleAudioBecomingNoisy(false)
+            setVideoChangeFrameRateStrategy(androidx.media3.common.C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
         }.build().apply {
             setTrackSelectionParameters(trackSelectionParameters)
             volume = 0f

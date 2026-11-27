@@ -6,6 +6,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import androidx.coordinatorlayout.widget.CoordinatorLayout
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
@@ -23,12 +24,17 @@ import androidx.paging.PagingDataAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.github.andreyasadchy.xtra.R
 import com.github.andreyasadchy.xtra.databinding.FragmentGamesBinding
+import com.github.andreyasadchy.xtra.databinding.SortBarBinding
 import com.github.andreyasadchy.xtra.model.ui.Game
 import com.github.andreyasadchy.xtra.model.ui.Tag
 import com.github.andreyasadchy.xtra.ui.common.GamesAdapter
 import com.github.andreyasadchy.xtra.ui.common.PagedListFragment
 import com.github.andreyasadchy.xtra.ui.view.GridPage
+import com.github.andreyasadchy.xtra.ui.browse.BrowsePagerFragment
+import com.github.andreyasadchy.xtra.ui.common.FragmentHost
 import com.github.andreyasadchy.xtra.ui.common.Scrollable
+import com.github.andreyasadchy.xtra.ui.common.Sortable
+import com.github.andreyasadchy.xtra.ui.common.isCurrentSortPage
 import com.github.andreyasadchy.xtra.ui.games.GamesViewModel.Companion.GamesViewModelFactory
 import com.github.andreyasadchy.xtra.ui.login.TwitchWebLoginActivity
 import com.github.andreyasadchy.xtra.ui.main.MainActivity
@@ -45,9 +51,10 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
-class GamesFragment : PagedListFragment(), Scrollable, GamesSortDialog.OnFilter {
+class GamesFragment : PagedListFragment(), Scrollable, Sortable, GamesSortDialog.OnFilter {
 
     override val initializeWithoutNetwork = true
 
@@ -56,6 +63,7 @@ class GamesFragment : PagedListFragment(), Scrollable, GamesSortDialog.OnFilter 
     private val args: GamesFragmentArgs by navArgs()
     private val viewModel: GamesViewModel by viewModels { GamesViewModelFactory }
     private lateinit var pagingAdapter: PagingDataAdapter<Game, out RecyclerView.ViewHolder>
+    private var sortBarJob: Job? = null
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         _binding = FragmentGamesBinding.inflate(inflater, container, false)
@@ -64,8 +72,14 @@ class GamesFragment : PagedListFragment(), Scrollable, GamesSortDialog.OnFilter 
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        val hostedInBrowsePager = parentFragment is BrowsePagerFragment
         with(binding) {
             val activity = requireActivity() as MainActivity
+            coordinatorLayout.forwardScrollToParent = hostedInBrowsePager
+            if (hostedInBrowsePager) {
+                appBar.visibility = View.GONE
+                (recyclerViewLayout.root.layoutParams as? CoordinatorLayout.LayoutParams)?.behavior = null
+            }
             val isLoggedIn = !TwitchApiHelper.getGQLHeaders(requireContext(), true)[C.HEADER_TOKEN].isNullOrBlank() ||
                     !TwitchApiHelper.getHelixHeaders(requireContext())[C.HEADER_TOKEN].isNullOrBlank()
             val navController = findNavController()
@@ -113,15 +127,17 @@ class GamesFragment : PagedListFragment(), Scrollable, GamesSortDialog.OnFilter 
                 }
             }
             ViewCompat.setOnApplyWindowInsetsListener(view) { _, windowInsets ->
-                val insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
-                toolbar.updateLayoutParams<ViewGroup.MarginLayoutParams> {
-                    topMargin = insets.top
+                if (!hostedInBrowsePager) {
+                    val insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+                    toolbar.updateLayoutParams<ViewGroup.MarginLayoutParams> {
+                        topMargin = insets.top
+                    }
                 }
                 if (activity.findViewById<LinearLayout>(R.id.navBarContainer)?.isVisible == false) {
                     val systemBars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
                     recyclerViewLayout.recyclerView.updatePadding(bottom = systemBars.bottom)
                 }
-                WindowInsetsCompat.CONSUMED
+                if (hostedInBrowsePager) windowInsets else WindowInsetsCompat.CONSUMED
             }
         }
         pagingAdapter = GamesAdapter(this, adaptSingleColumn = true) { addTag(it) }
@@ -172,29 +188,43 @@ class GamesFragment : PagedListFragment(), Scrollable, GamesSortDialog.OnFilter 
                 it.visibility = View.GONE
             }
         }
-        with(binding) {
-            sortBar.root.visibility = View.VISIBLE
-            sortBar.root.setOnClickListener {
-                val tags = viewModel.tags.mapNotNull { tag ->
-                    if (tag.id != null && tag.name != null) {
-                        tag.id to tag.name
-                    } else null
-                }.toMap()
-                GamesSortDialog.newInstance(
-                    tagIds = tags.keys.toTypedArray(),
-                    tagNames = tags.values.toTypedArray(),
-                ).show(childFragmentManager, null)
-            }
-            sortBar.sortText.visibility = View.GONE
-            viewLifecycleOwner.lifecycleScope.launch {
-                repeatOnLifecycle(Lifecycle.State.STARTED) {
-                    viewModel.filtersText.collectLatest {
-                        if (it != null) {
-                            sortBar.filtersText.visibility = View.VISIBLE
-                            sortBar.filtersText.text = it
-                        } else {
-                            sortBar.filtersText.visibility = View.GONE
-                        }
+        if (parentFragment !is BrowsePagerFragment) {
+            setupSortBar(binding.sortBar)
+        }
+    }
+
+    override fun setupSortBar(sortBar: SortBarBinding) {
+        if (_binding == null || view == null) return
+        val hostedInBrowsePager = parentFragment is BrowsePagerFragment
+        if (hostedInBrowsePager && (parentFragment as? FragmentHost)?.currentFragment !== this) return
+        sortBar.root.visibility = View.VISIBLE
+        sortBar.sortText.visibility = View.GONE
+        sortBar.filtersText.text = viewModel.filtersText.value
+        sortBar.filtersText.isVisible = viewModel.filtersText.value != null
+        sortBar.root.setOnClickListener {
+            if (hostedInBrowsePager && !isCurrentSortPage()) return@setOnClickListener
+            val tags = viewModel.tags.mapNotNull { tag ->
+                if (tag.id != null && tag.name != null) {
+                    tag.id to tag.name
+                } else null
+            }.toMap()
+            GamesSortDialog.newInstance(
+                tagIds = tags.keys.toTypedArray(),
+                tagNames = tags.values.toTypedArray(),
+            ).show(childFragmentManager, null)
+        }
+        sortBarJob?.cancel()
+        sortBarJob = viewLifecycleOwner.lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.filtersText.collectLatest {
+                    if (hostedInBrowsePager && (parentFragment as? FragmentHost)?.currentFragment !== this@GamesFragment) {
+                        return@collectLatest
+                    }
+                    if (it != null) {
+                        sortBar.filtersText.visibility = View.VISIBLE
+                        sortBar.filtersText.text = it
+                    } else {
+                        sortBar.filtersText.visibility = View.GONE
                     }
                 }
             }
@@ -236,7 +266,9 @@ class GamesFragment : PagedListFragment(), Scrollable, GamesSortDialog.OnFilter 
 
     override fun scrollToTop() {
         with(binding) {
-            appBar.setExpanded(true, true)
+            if (parentFragment !is BrowsePagerFragment) {
+                appBar.setExpanded(true, true)
+            }
             recyclerViewLayout.recyclerView.scrollToPosition(0)
         }
     }
@@ -261,6 +293,8 @@ class GamesFragment : PagedListFragment(), Scrollable, GamesSortDialog.OnFilter 
     }
 
     override fun onDestroyView() {
+        sortBarJob?.cancel()
+        sortBarJob = null
         viewModel.clearVisibleFeed()
         super.onDestroyView()
         _binding = null

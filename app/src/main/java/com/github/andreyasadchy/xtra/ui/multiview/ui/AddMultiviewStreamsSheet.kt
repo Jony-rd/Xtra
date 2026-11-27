@@ -11,11 +11,9 @@ import androidx.lifecycle.lifecycleScope
 import androidx.paging.LoadState
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.github.andreyasadchy.xtra.R
-import com.github.andreyasadchy.xtra.XtraApp
 import com.github.andreyasadchy.xtra.databinding.FragmentAddMultiviewStreamsBinding
 import com.github.andreyasadchy.xtra.model.ui.Stream
 import com.github.andreyasadchy.xtra.repository.streamfeed.RefreshReason
-import com.github.andreyasadchy.xtra.ui.common.StreamPreloadViewportController
 import com.github.andreyasadchy.xtra.ui.common.StreamsCompactAdapter
 import com.github.andreyasadchy.xtra.ui.following.streams.FollowedStreamsViewModel
 import com.github.andreyasadchy.xtra.ui.multiview.MultiviewFragment
@@ -33,7 +31,6 @@ class AddMultiviewStreamsSheet : BottomSheetDialogFragment() {
     }
     private val selected = linkedMapOf<String, Stream>()
     private lateinit var adapter: StreamsCompactAdapter
-    private lateinit var streamPreloadViewportController: StreamPreloadViewportController
     private var excluded: Set<String> = emptySet()
     private var maxSelection = 1
     private var submitted = false
@@ -64,15 +61,13 @@ class AddMultiviewStreamsSheet : BottomSheetDialogFragment() {
             isStreamExcluded = { stableIdentity(it) in excluded },
             isStreamSelected = { stableIdentity(it) in selected },
         )
-        binding.streamList.layoutManager = LinearLayoutManager(requireContext())
-        binding.streamList.adapter = adapter
-        streamPreloadViewportController = StreamPreloadViewportController(
-            fragment = this,
-            coordinator = (requireActivity().application as XtraApp).xtraModule.streamPreloadCoordinator,
-            viewportKey = "multiview-picker-streams",
-            recyclerView = binding.streamList,
-            streamAtPosition = adapter::peek,
-        ).also { it.start() }
+        binding.streamList.apply {
+            layoutManager = LinearLayoutManager(requireContext())
+            itemAnimator = null
+            setHasFixedSize(true)
+            setItemViewCacheSize(12)
+            this.adapter = this@AddMultiviewStreamsSheet.adapter
+        }
         binding.pickerLimit.text = getString(R.string.multiview_picker_limit, maxSelection)
         binding.cancelButton.setOnClickListener { dismiss() }
         binding.addButton.setOnClickListener { submitSelection() }
@@ -107,23 +102,10 @@ class AddMultiviewStreamsSheet : BottomSheetDialogFragment() {
 
     override fun onStart() {
         super.onStart()
+        dialog?.window?.setDimAmount(0.88f)
         dialog?.findViewById<View>(MaterialR.id.design_bottom_sheet)?.let { sheet ->
             BottomSheetBehavior.from(sheet).state = BottomSheetBehavior.STATE_EXPANDED
         }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        if (::streamPreloadViewportController.isInitialized) {
-            streamPreloadViewportController.onResume()
-        }
-    }
-
-    override fun onPause() {
-        if (::streamPreloadViewportController.isInitialized) {
-            streamPreloadViewportController.onPause()
-        }
-        super.onPause()
     }
 
     private fun toggleSelection(stream: Stream) {
@@ -188,9 +170,6 @@ class AddMultiviewStreamsSheet : BottomSheetDialogFragment() {
     }
 
     override fun onDestroyView() {
-        if (::streamPreloadViewportController.isInitialized) {
-            streamPreloadViewportController.stop()
-        }
         _binding?.streamList?.adapter = null
         _binding = null
         super.onDestroyView()

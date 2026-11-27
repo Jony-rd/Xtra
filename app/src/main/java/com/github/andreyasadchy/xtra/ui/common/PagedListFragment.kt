@@ -53,6 +53,7 @@ abstract class PagedListFragment : BaseNetworkFragment() {
             // The RecyclerView is sized by the fixed fragment container, not
             // by its children. Avoid remeasuring the parent as rows change.
             recyclerView.setHasFixedSize(true)
+            recyclerView.setItemViewCacheSize(8)
             if (requireContext().isTelevision()) {
                 recyclerView.clipChildren = false
                 recyclerView.clipToPadding = false
@@ -65,6 +66,10 @@ abstract class PagedListFragment : BaseNetworkFragment() {
                     StreamThumbnailRefreshSignal.requestForceRefresh()
                     onRefresh()
                 }
+            }
+            ViewCompat.setOnApplyWindowInsetsListener(topInsetGuard) { _, windowInsets ->
+                updateTopInsetGuard(binding)
+                windowInsets
             }
             root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
                 updateTopInsetGuard(binding)
@@ -112,6 +117,7 @@ abstract class PagedListFragment : BaseNetworkFragment() {
             // holders alive and add extra layout/draw work during refreshes.
             recyclerView.itemAnimator = null
             recyclerView.setHasFixedSize(true)
+            recyclerView.setItemViewCacheSize(8)
             if (requireContext().isTelevision()) {
                 recyclerView.clipChildren = false
                 recyclerView.clipToPadding = false
@@ -119,6 +125,10 @@ abstract class PagedListFragment : BaseNetworkFragment() {
                 recyclerView.setPadding(padding, padding, padding, padding)
             }
             setupPagingControls(binding, pagingAdapter, enableSwipeRefresh)
+            ViewCompat.setOnApplyWindowInsetsListener(topInsetGuard) { _, windowInsets ->
+                updateTopInsetGuard(binding)
+                windowInsets
+            }
             root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
                 updateTopInsetGuard(binding)
             }

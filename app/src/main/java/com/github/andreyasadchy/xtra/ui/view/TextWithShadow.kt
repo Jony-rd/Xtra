@@ -12,7 +12,11 @@ class TextWithShadow : AppCompatTextView {
     constructor(context: Context, attrs: AttributeSet, defStyleAttr: Int) : super(context, attrs, defStyleAttr)
 
     override fun onDraw(canvas: Canvas) {
-        for (i in 0..6) {
+        if (background != null) {
+            super.onDraw(canvas)
+            return
+        }
+        for (i in 0..1) {
             super.onDraw(canvas)
         }
     }

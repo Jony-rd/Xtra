@@ -30,6 +30,8 @@ class StreamPreloadViewportController(
     private var scrollingReported = false
     private var started = false
     private var publishPosted = false
+    private val viewportRect = Rect()
+    private val childRect = Rect()
     private val publishRunnable = Runnable {
         publishPosted = false
         publish()
@@ -42,11 +44,17 @@ class StreamPreloadViewportController(
         }
 
         override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
-            requestPublish()
+            updateScrollingState()
+            if (!isScrolling()) requestPublish()
         }
     }
-    private val scrollChangedListener = ViewTreeObserver.OnScrollChangedListener { requestPublish() }
-    private val layoutChangeListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> requestPublish() }
+    private val scrollChangedListener = ViewTreeObserver.OnScrollChangedListener {
+        updateScrollingState()
+        if (!isScrolling()) requestPublish()
+    }
+    private val layoutChangeListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+        if (!isScrolling()) requestPublish()
+    }
     private val attachStateListener = object : View.OnAttachStateChangeListener {
         override fun onViewAttachedToWindow(view: View) {
             requestPublish()
@@ -126,10 +134,13 @@ class StreamPreloadViewportController(
             previewCoordinator.detachViewport(viewportKey)
             return
         }
-        val viewportRect = Rect()
+        if (isScrolling()) {
+            updateScrollingState()
+            return
+        }
         if (!recyclerView.getGlobalVisibleRect(viewportRect) || viewportRect.width() <= 0 || viewportRect.height() <= 0) {
-            coordinator?.updateViewport(viewportKey, emptyList(), scrolling = isScrolling())
-            previewCoordinator.updateViewport(viewportKey, emptyList(), scrolling = isScrolling())
+            coordinator?.updateViewport(viewportKey, emptyList(), scrolling = false)
+            previewCoordinator.updateViewport(viewportKey, emptyList(), scrolling = false)
             return
         }
         val horizontal = (recyclerView.layoutManager as? LinearLayoutManager)?.orientation == RecyclerView.HORIZONTAL
@@ -142,7 +153,6 @@ class StreamPreloadViewportController(
                 if (position == RecyclerView.NO_POSITION) return@repeat
                 val stream = streamAtPosition?.invoke(position)
                 if (stream == null && previewAtPosition == null) return@repeat
-                val childRect = Rect()
                 if (!child.getGlobalVisibleRect(childRect)) return@repeat
                 val fullArea = (child.width.toLong() * child.height.toLong()).coerceAtLeast(1L)
                 val visibleArea = childRect.width().toLong() * childRect.height().toLong()

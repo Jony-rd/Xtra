@@ -6,6 +6,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import androidx.coordinatorlayout.widget.CoordinatorLayout
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
@@ -25,13 +26,19 @@ import androidx.recyclerview.widget.RecyclerView
 import com.github.andreyasadchy.xtra.R
 import com.github.andreyasadchy.xtra.XtraApp
 import com.github.andreyasadchy.xtra.databinding.FragmentGamesBinding
+import com.github.andreyasadchy.xtra.databinding.SortBarBinding
 import com.github.andreyasadchy.xtra.model.ui.GameSort
 import com.github.andreyasadchy.xtra.model.ui.SavedFilter
 import com.github.andreyasadchy.xtra.model.ui.Stream
 import com.github.andreyasadchy.xtra.ui.common.PagedListFragment
 import com.github.andreyasadchy.xtra.ui.view.GridPage
 import com.github.andreyasadchy.xtra.ui.common.PagerScrollStateAware
+import com.github.andreyasadchy.xtra.ui.browse.BrowsePagerFragment
+import com.github.andreyasadchy.xtra.ui.common.FragmentHost
 import com.github.andreyasadchy.xtra.ui.common.Scrollable
+import com.github.andreyasadchy.xtra.ui.common.Sortable
+import com.github.andreyasadchy.xtra.ui.common.collectSelectedSortBar
+import com.github.andreyasadchy.xtra.ui.common.isCurrentSortPage
 import com.github.andreyasadchy.xtra.ui.common.StreamsAdapter
 import com.github.andreyasadchy.xtra.ui.common.StreamsCompactAdapter
 import com.github.andreyasadchy.xtra.ui.common.StreamsSortDialog
@@ -53,9 +60,10 @@ import com.github.andreyasadchy.xtra.util.prefs
 import com.github.andreyasadchy.xtra.util.tokenPrefs
 import com.github.andreyasadchy.xtra.repository.streamfeed.RefreshReason
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
-class TopStreamsFragment : PagedListFragment(), Scrollable, PagerScrollStateAware, StreamsSortDialog.OnFilter {
+class TopStreamsFragment : PagedListFragment(), Scrollable, Sortable, PagerScrollStateAware, StreamsSortDialog.OnFilter {
 
     override val initializeWithoutNetwork = true
 
@@ -66,6 +74,7 @@ class TopStreamsFragment : PagedListFragment(), Scrollable, PagerScrollStateAwar
     private lateinit var pagingAdapter: PagingDataAdapter<Stream, out RecyclerView.ViewHolder>
     private lateinit var streamFeedScreenController: StreamFeedScreenController
     private lateinit var streamPreloadViewportController: StreamPreloadViewportController
+    private var sortBarJob: Job? = null
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         _binding = FragmentGamesBinding.inflate(inflater, container, false)
@@ -74,8 +83,14 @@ class TopStreamsFragment : PagedListFragment(), Scrollable, PagerScrollStateAwar
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        val hostedInBrowsePager = parentFragment is BrowsePagerFragment
         with(binding) {
             val activity = requireActivity() as MainActivity
+            coordinatorLayout.forwardScrollToParent = hostedInBrowsePager
+            if (hostedInBrowsePager) {
+                appBar.visibility = View.GONE
+                (recyclerViewLayout.root.layoutParams as? CoordinatorLayout.LayoutParams)?.behavior = null
+            }
             val isLoggedIn = !TwitchApiHelper.getGQLHeaders(requireContext(), true)[C.HEADER_TOKEN].isNullOrBlank() ||
                     !TwitchApiHelper.getHelixHeaders(requireContext())[C.HEADER_TOKEN].isNullOrBlank()
             val navController = findNavController()
@@ -123,15 +138,17 @@ class TopStreamsFragment : PagedListFragment(), Scrollable, PagerScrollStateAwar
                 }
             }
             ViewCompat.setOnApplyWindowInsetsListener(view) { _, windowInsets ->
-                val insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
-                toolbar.updateLayoutParams<ViewGroup.MarginLayoutParams> {
-                    topMargin = insets.top
+                if (!hostedInBrowsePager) {
+                    val insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+                    toolbar.updateLayoutParams<ViewGroup.MarginLayoutParams> {
+                        topMargin = insets.top
+                    }
                 }
                 if (activity.findViewById<LinearLayout>(R.id.navBarContainer)?.isVisible == false) {
                     val systemBars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
                     recyclerViewLayout.recyclerView.updatePadding(bottom = systemBars.bottom)
                 }
-                WindowInsetsCompat.CONSUMED
+                if (hostedInBrowsePager) windowInsets else WindowInsetsCompat.CONSUMED
             }
         }
         pagingAdapter = if (requireContext().prefs().getString(C.COMPACT_STREAMS, "disabled") != "disabled") {
@@ -223,30 +240,47 @@ class TopStreamsFragment : PagedListFragment(), Scrollable, PagerScrollStateAwar
                 it.visibility = View.GONE
             }
         }
-        with(binding) {
-            sortBar.root.visibility = View.VISIBLE
-            sortBar.root.setOnClickListener {
-                StreamsSortDialog.newInstance(
-                    sort = viewModel.sort,
-                    tags = viewModel.tags,
-                    languages = viewModel.languages
-                ).show(childFragmentManager, null)
-            }
+        if (parentFragment !is BrowsePagerFragment) {
+            setupSortBar(binding.sortBar)
+        }
+    }
+
+    override fun setupSortBar(sortBar: SortBarBinding) {
+        if (_binding == null || view == null) return
+        val hostedInBrowsePager = parentFragment is BrowsePagerFragment
+        if (hostedInBrowsePager && (parentFragment as? FragmentHost)?.currentFragment !== this) return
+        sortBar.root.visibility = View.VISIBLE
+        sortBar.sortText.visibility = View.VISIBLE
+        sortBar.sortText.text = viewModel.sortText.value
+        sortBar.filtersText.text = viewModel.filtersText.value
+        sortBar.filtersText.isVisible = viewModel.filtersText.value != null
+        sortBar.root.setOnClickListener {
+            if (hostedInBrowsePager && !isCurrentSortPage()) return@setOnClickListener
+            StreamsSortDialog.newInstance(
+                sort = viewModel.sort,
+                tags = viewModel.tags,
+                languages = viewModel.languages,
+            ).show(childFragmentManager, null)
+        }
+        sortBarJob?.cancel()
+        sortBarJob = if (hostedInBrowsePager) {
+            collectSelectedSortBar(sortBar, viewModel.sortText, viewModel.filtersText)
+        } else {
             viewLifecycleOwner.lifecycleScope.launch {
                 repeatOnLifecycle(Lifecycle.State.STARTED) {
-                    viewModel.sortText.collectLatest {
-                        sortBar.sortText.text = it
+                    launch {
+                        viewModel.sortText.collectLatest {
+                            sortBar.sortText.text = it
+                        }
                     }
-                }
-            }
-            viewLifecycleOwner.lifecycleScope.launch {
-                repeatOnLifecycle(Lifecycle.State.STARTED) {
-                    viewModel.filtersText.collectLatest {
-                        if (it != null) {
-                            sortBar.filtersText.visibility = View.VISIBLE
-                            sortBar.filtersText.text = it
-                        } else {
-                            sortBar.filtersText.visibility = View.GONE
+                    launch {
+                        viewModel.filtersText.collectLatest {
+                            if (it != null) {
+                                sortBar.filtersText.visibility = View.VISIBLE
+                                sortBar.filtersText.text = it
+                            } else {
+                                sortBar.filtersText.visibility = View.GONE
+                            }
                         }
                     }
                 }
@@ -345,7 +379,9 @@ class TopStreamsFragment : PagedListFragment(), Scrollable, PagerScrollStateAwar
 
     override fun scrollToTop() {
         with(binding) {
-            appBar.setExpanded(true, true)
+            if (parentFragment !is BrowsePagerFragment) {
+                appBar.setExpanded(true, true)
+            }
             recyclerViewLayout.recyclerView.scrollToPosition(0)
         }
     }
@@ -381,6 +417,8 @@ class TopStreamsFragment : PagedListFragment(), Scrollable, PagerScrollStateAwar
     }
 
     override fun onDestroyView() {
+        sortBarJob?.cancel()
+        sortBarJob = null
         if (::streamFeedScreenController.isInitialized) {
             streamFeedScreenController.onDestroyView()
         }

@@ -1672,9 +1672,9 @@ class MainActivity : AppCompatActivity() {
         lastReturnButtonStreamIds = avatarIds
         val container = binding.multiviewAvatarsContainer
         container.removeAllViews()
-        val sizePx = (22 * resources.displayMetrics.density).toInt()
-        val marginPx = (4 * resources.displayMetrics.density).toInt()
-        val cornerRadius = 4 * resources.displayMetrics.density
+        val sizePx = (32 * resources.displayMetrics.density).toInt()
+        val marginPx = (6 * resources.displayMetrics.density).toInt()
+        val cornerRadius = 7 * resources.displayMetrics.density
         streams.take(4).forEach { stream ->
             val iv = ImageView(this).apply {
                 layoutParams = LinearLayout.LayoutParams(sizePx, sizePx).apply {

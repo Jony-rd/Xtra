@@ -36,6 +36,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.github.andreyasadchy.xtra.R
+import com.github.andreyasadchy.xtra.XtraApp
 import com.github.andreyasadchy.xtra.databinding.FragmentMultiviewBinding
 import com.github.andreyasadchy.xtra.databinding.PlayerVolumeBinding
 import com.github.andreyasadchy.xtra.model.ui.Stream
@@ -162,13 +163,17 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             AddMultiviewStreamsSheet.RESULT_KEY,
             viewLifecycleOwner,
         ) { _, result ->
+            setVideoGridVisibleForSheet(true)
             unlockControls()
             result.parcelableArrayList<Stream>(AddMultiviewStreamsSheet.RESULT_STREAMS)?.let(viewModel::addStreams)
         }
         childFragmentManager.setFragmentResultListener(
             AddMultiviewStreamsSheet.DISMISSED_KEY,
             viewLifecycleOwner,
-        ) { _, _ -> unlockControls() }
+        ) { _, _ ->
+            setVideoGridVisibleForSheet(true)
+            unlockControls()
+        }
 
         val initialStreams = arguments?.parcelableArrayList<Stream>(ARG_STREAMS)
         val initialStream = arguments?.parcelable<Stream>(ARG_STREAM)
@@ -236,6 +241,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     override fun onStart() {
         super.onStart()
         if ((activity as? MainActivity)?.playerFragment != null) return
+        (requireContext().applicationContext as XtraApp).xtraModule.streamPreviewCoordinator
+            .setMultiviewPlaybackActive(true)
+        setVideoGridVisibleForSheet(childFragmentManager.findFragmentByTag(AddMultiviewStreamsSheet.TAG) == null)
         enterImmersiveMode()
         (activity as? MainActivity)?.prepareMultiviewPictureInPicture()
         viewModel.onStart()
@@ -243,6 +251,9 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
     override fun onStop() {
         MultiviewStreamDeckDialog.dismiss()
+        setVideoGridVisibleForSheet(true)
+        (requireContext().applicationContext as XtraApp).xtraModule.streamPreviewCoordinator
+            .setMultiviewPlaybackActive(false)
         exitImmersiveMode()
         if ((activity as? MainActivity)?.playerFragment != null) {
             suppressBackgroundOnNextStop = false
@@ -314,6 +325,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     }
 
     override fun onDestroyView() {
+        (requireContext().applicationContext as XtraApp).xtraModule.streamPreviewCoordinator
+            .setMultiviewPlaybackActive(false)
         MultiviewStreamDeckDialog.dismiss()
         viewModel.stopRaidMonitoring()
         swipeGestureController?.release(restoreBrightness = true)
@@ -769,6 +782,10 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         revealControls()
     }
 
+    private fun setVideoGridVisibleForSheet(visible: Boolean) {
+        _binding?.videoGrid?.visibility = if (visible) View.VISIBLE else View.INVISIBLE
+    }
+
     private fun showAddStreamSheet() {
         val freeSlots = MAX_STREAMS - latestState.streams.size
         if (freeSlots <= 0) {
@@ -777,6 +794,7 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         }
         revealControls()
         lockControls()
+        setVideoGridVisibleForSheet(false)
         AddMultiviewStreamsSheet.newInstance(latestState.identities, freeSlots)
             .show(childFragmentManager, AddMultiviewStreamsSheet.TAG)
     }

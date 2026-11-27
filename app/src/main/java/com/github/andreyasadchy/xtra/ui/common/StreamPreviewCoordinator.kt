@@ -107,6 +107,7 @@ class StreamPreviewCoordinator(
     private var pagerResumeJob: Job? = null
     private var handoffLogin: String? = null
     private var playbackSuppressesPreviews = false
+    private var multiviewSuppressesPreviews = false
     private val lifecycleReconciler = StreamPreviewLifecycleReconciler(
         lifecycle = previewLifecycle,
         schedule = ::scheduleLifecycleReconciliation,
@@ -260,7 +261,19 @@ class StreamPreviewCoordinator(
     fun onPlaybackReturned(playerStillOpen: Boolean) {
         playbackSuppressesPreviews = playerStillOpen
         stopPreview()
-        if (!playerStillOpen) scheduleSelection()
+        if (!playerStillOpen && !multiviewSuppressesPreviews) scheduleSelection()
+    }
+
+    fun setMultiviewPlaybackActive(active: Boolean) {
+        if (multiviewSuppressesPreviews == active) return
+        multiviewSuppressesPreviews = active
+        if (active) {
+            stopPreview()
+            releaseSharedPreviewPlayer()
+            hideViewportSurfaces()
+        } else if (!playbackSuppressesPreviews) {
+            scheduleSelection()
+        }
     }
 
     fun isPreviewing(channelLogin: String): Boolean =
@@ -428,7 +441,7 @@ class StreamPreviewCoordinator(
     }
 
     private fun canStartPreview(): Boolean {
-        if (playbackSuppressesPreviews) return false
+        if (playbackSuppressesPreviews || multiviewSuppressesPreviews) return false
 
         val isPlayerFullscreen = streamFeedRefreshCoordinator.isPlayerFullscreen
         val isPlayerActive = streamFeedRefreshCoordinator.isPlayerActive

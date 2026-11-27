@@ -642,6 +642,7 @@ class MultiviewPlaybackCoordinator(
                 false,
             )
             setHandleAudioBecomingNoisy(false)
+            setVideoChangeFrameRateStrategy(androidx.media3.common.C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
         }.build()
         val watchGeneration = nextWatchGeneration++
         val staggerSlot = nextWatchCreditStaggerSlot++ % WATCH_CREDIT_STAGGER_SLOTS
