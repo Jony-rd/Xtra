@@ -318,7 +318,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
     private var dropMetaTextView: TextView? = null
     private var dropMultiviewPeersTextView: TextView? = null
     private var dropMinimizeView: ImageButton? = null
-    private var dropCalloutMinimized = false
+    private var dropCalloutMinimized = true
     private var dropTickerJob: Job? = null
     private var userGestureActive = false
 
@@ -566,11 +566,7 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
         displayedPinnedMessageId = savedInstanceState?.getString(KEY_DISPLAYED_PINNED_MESSAGE_ID)
         pinnedMessageMinimized = savedInstanceState?.getBoolean(KEY_PINNED_MESSAGE_MINIMIZED) ?: false
         pinnedExpansionChangedByUser = savedInstanceState?.getBoolean(KEY_PINNED_EXPANSION_CHANGED_BY_USER) ?: false
-        val dropCalloutPreferences = requireContext().prefs()
-        dropCalloutMinimized = dropCalloutPreferences.getBoolean(
-            PREF_DROP_CALLOUT_MINIMIZED,
-            savedInstanceState?.getBoolean(KEY_DROP_CALLOUT_MINIMIZED) ?: false,
-        )
+        dropCalloutMinimized = savedInstanceState?.getBoolean(KEY_DROP_CALLOUT_MINIMIZED, true) ?: true
         setupEmotePickerSizing()
         setupDropCallout()
         val chatSessionManager = (requireContext().applicationContext as XtraApp).xtraModule.chatSessionManager
@@ -3814,9 +3810,6 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
     private fun setDropCalloutMinimized(minimized: Boolean, animate: Boolean) {
         if (dropCalloutMinimized == minimized) return
         dropCalloutMinimized = minimized
-        requireContext().prefs().edit()
-            .putBoolean(PREF_DROP_CALLOUT_MINIMIZED, dropCalloutMinimized)
-            .apply()
         updateDropCallout(viewModel.dropsUiState.value, animateLayoutChange = animate)
     }
     private fun updateDropImage(
@@ -4830,7 +4823,6 @@ class ChatFragment : BaseNetworkFragment(), MessageClickedDialog.OnButtonClickLi
         private const val KEY_PINNED_MESSAGE_MINIMIZED = "pinnedMessageMinimized"
         private const val KEY_PINNED_EXPANSION_CHANGED_BY_USER = "pinnedExpansionChangedByUser"
         private const val KEY_DROP_CALLOUT_MINIMIZED = "dropCalloutMinimized"
-        private const val PREF_DROP_CALLOUT_MINIMIZED = "chat_drop_callout_minimized"
         private const val COMPACT_OVERLAY_VIEWPORT_HEIGHT_DP = 640f
         private const val KEY_V2_FOLLOW_MODE = "chatV2FollowMode"
         private const val KEY_V2_NEW_MESSAGE_COUNT = "chatV2NewMessageCount"
