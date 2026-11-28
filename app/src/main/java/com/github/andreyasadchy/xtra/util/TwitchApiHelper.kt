@@ -347,18 +347,33 @@ object TwitchApiHelper {
             officialUserId = officialSession?.userId,
             credential = credential,
         )
-        if (auth.accessToken != null) {
+        val baseHeaders = if (auth.accessToken != null) {
             val personalized = getPersonalizedRecommendationGQLHeaders(
                 context = context,
                 clientId = auth.clientId,
                 accessToken = auth.accessToken,
                 clientSessionId = clientSessionId,
             )
-            if (personalized.isNotEmpty()) return personalized
-            val fallback = getGQLHeaders(context, true)
-            if (!fallback[C.HEADER_TOKEN].isNullOrBlank()) return fallback
+            when {
+                personalized.isNotEmpty() -> personalized
+                else -> getGQLHeaders(context, true).takeUnless { it[C.HEADER_TOKEN].isNullOrBlank() }
+                    ?: getPublicRecommendationGQLHeaders(context, clientSessionId)
+            }
+        } else {
+            getPublicRecommendationGQLHeaders(context, clientSessionId)
         }
-        return getPublicRecommendationGQLHeaders(context, clientSessionId)
+        val acceptLanguage = acceptLanguageHeader() ?: return baseHeaders
+        return buildMap(baseHeaders.size + 1) {
+            putAll(baseHeaders)
+            put("Accept-Language", acceptLanguage)
+        }
+    }
+
+    internal fun acceptLanguageHeader(locale: Locale = Locale.getDefault()): String? {
+        val language = locale.language.trim()
+        if (language.isEmpty()) return null
+        val country = locale.country.trim()
+        return if (country.isNotEmpty()) "$language-$country,$language;q=0.9" else language
     }
 
     /** Headers for the public recommendation fallback; never includes Authorization. */

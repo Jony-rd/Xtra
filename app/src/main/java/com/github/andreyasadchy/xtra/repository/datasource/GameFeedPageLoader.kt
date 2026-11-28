@@ -7,6 +7,7 @@ import com.github.andreyasadchy.xtra.repository.HelixRepository
 import com.github.andreyasadchy.xtra.util.C
 import kotlinx.coroutines.CancellationException
 import java.io.IOException
+import kotlin.uuid.Uuid
 
 data class GameFeedCursor(
     val api: String,
@@ -33,10 +34,13 @@ class TwitchGameFeedPageLoader(
     private val pageSize: Int = 30,
 ) : GameFeedPageLoader {
     private var api: String? = null
+    @Volatile
+    private var browseSessionId: String = Uuid.random().toString()
 
     override suspend fun load(cursor: GameFeedCursor?): GameFeedPage {
         if (cursor != null) return loadFromApi(cursor)
         api = null
+        browseSessionId = Uuid.random().toString()
         return try {
             api = C.GQL
             loadFromApi(null)
@@ -69,7 +73,7 @@ class TwitchGameFeedPageLoader(
     private suspend fun gqlQueryLoad(cursor: String?): GameFeedPage {
         val response = graphQLRepository.loadRecommendedTopGames(
             networkLibrary = networkLibrary,
-            headers = gqlHeaders(),
+            headers = gqlHeaders().withBrowseSessionId(browseSessionId),
             sort = "RELEVANCE",
             tags = tags,
             first = pageSize,
@@ -113,7 +117,7 @@ class TwitchGameFeedPageLoader(
     private suspend fun gqlLoad(cursor: String?): GameFeedPage {
         val response = graphQLRepository.loadTopGames(
             networkLibrary = networkLibrary,
-            headers = gqlHeaders(),
+            headers = gqlHeaders().withBrowseSessionId(browseSessionId),
             tags = tags,
             limit = pageSize,
             cursor = cursor,
@@ -154,4 +158,11 @@ class TwitchGameFeedPageLoader(
         )
     }
 
+    private fun Map<String, String>.withBrowseSessionId(sessionId: String): Map<String, String> {
+        if (!get("Client-Integrity").isNullOrBlank()) return this
+        return buildMap(size + 1) {
+            putAll(this@withBrowseSessionId)
+            put("Client-Session-Id", sessionId)
+        }
+    }
 }

@@ -92,7 +92,7 @@ internal class IntegrityAwareGqlExecutor<T>(
                 ?: throw MissingAuthenticationException("authenticated Twitch GQL")
         }
 
-        val response = send(request.headers)
+        val response = send(request.headers.withCallerContext(fallbackHeaders))
         if (!isFailedIntegrityCheck(response)) return response
         log("integrity_rejected", DiagnosticsSeverity.WARN, "integrity_rejected")
 
@@ -102,7 +102,7 @@ internal class IntegrityAwareGqlExecutor<T>(
             currentRequest()?.let { newerRequest ->
                 log("identity_superseded", DiagnosticsSeverity.INFO, "newer_identity_available")
                 onRetry()
-                val retried = send(newerRequest.headers)
+                val retried = send(newerRequest.headers.withCallerContext(fallbackHeaders))
                 val retryFailed = isFailedIntegrityCheck(retried)
                 log(
                     "integrity_retry_result",
@@ -147,7 +147,7 @@ internal class IntegrityAwareGqlExecutor<T>(
             return response
         }
         onRetry()
-        val retried = send(refreshedRequest.headers)
+        val retried = send(refreshedRequest.headers.withCallerContext(fallbackHeaders))
         val retryFailed = isFailedIntegrityCheck(retried)
         log(
             "integrity_retry_result",
@@ -155,5 +155,17 @@ internal class IntegrityAwareGqlExecutor<T>(
             if (retryFailed) "integrity_rejected" else "success",
         )
         return retried
+    }
+
+    private fun Map<String, String>.withCallerContext(fallbackHeaders: Map<String, String>): Map<String, String> {
+        val acceptLanguage = fallbackHeaders["Accept-Language"]?.takeIf { it.isNotBlank() }
+        val fallbackSession = fallbackHeaders["Client-Session-Id"]?.takeIf { it.isNotBlank() }
+            ?.takeIf { get("Client-Session-Id").isNullOrBlank() }
+        if (acceptLanguage == null && fallbackSession == null) return this
+        return buildMap(size + 2) {
+            putAll(this@withCallerContext)
+            acceptLanguage?.let { put("Accept-Language", it) }
+            fallbackSession?.let { put("Client-Session-Id", it) }
+        }
     }
 }

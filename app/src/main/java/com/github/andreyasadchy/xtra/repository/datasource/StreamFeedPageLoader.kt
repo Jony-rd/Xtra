@@ -16,6 +16,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlin.time.Instant
+import kotlin.uuid.Uuid
 
 /**
  * A page cursor carries the API that created it. Twitch cursors are not
@@ -145,9 +146,14 @@ class TopStreamsPageLoader(
     private val pageSize: Int = 30,
 ) : StreamFeedPageLoader {
     private var api: String? = null
+    @Volatile
+    private var browseSessionId: String = Uuid.random().toString()
 
     override suspend fun load(cursor: StreamFeedCursor?): StreamFeedPage {
-        if (cursor == null) api = null
+        if (cursor == null) {
+            api = null
+            browseSessionId = Uuid.random().toString()
+        }
         val page = if (cursor != null) {
             loadFromApi(cursor)
         } else if (api == null) {
@@ -183,7 +189,7 @@ class TopStreamsPageLoader(
     }
 
     private suspend fun gqlQueryLoad(cursor: String?): StreamFeedPage {
-        val headers = gqlHeaders()
+        val headers = gqlHeaders().withBrowseSessionId(browseSessionId)
         if (gqlSort == "RELEVANCE") {
             val (response, personalItems) = coroutineScope {
                 val streamsDeferred = async {
@@ -305,7 +311,7 @@ class TopStreamsPageLoader(
     }
 
     private suspend fun gqlLoad(cursor: String?): StreamFeedPage {
-        val headers = gqlHeaders()
+        val headers = gqlHeaders().withBrowseSessionId(browseSessionId)
         val (response, personalItems) = coroutineScope {
             val streamsDeferred = async {
                 graphQLRepository.loadTopStreams(
@@ -396,6 +402,14 @@ class TopStreamsPageLoader(
         personal.forEach(::appendUnique)
         directory.forEach(::appendUnique)
         return merged
+    }
+
+    private fun Map<String, String>.withBrowseSessionId(sessionId: String): Map<String, String> {
+        if (!get("Client-Integrity").isNullOrBlank()) return this
+        return buildMap(size + 1) {
+            putAll(this@withBrowseSessionId)
+            put("Client-Session-Id", sessionId)
+        }
     }
 
     private suspend fun helixLoad(cursor: String?): StreamFeedPage {

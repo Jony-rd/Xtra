@@ -1532,6 +1532,8 @@ class GraphQLRepository(
                 put("after", cursor)
                 putJsonObject("recommendationsContext") {
                     put("platform", "web")
+                    put("clientApp", "twilight")
+                    put("location", "directory")
                 }
                 put("requestID", "JIRA-VXP-2397")
             }
@@ -1567,6 +1569,8 @@ class GraphQLRepository(
                 put("after", cursor)
                 putJsonObject("recommendationsContext") {
                     put("platform", "web")
+                    put("clientApp", "twilight")
+                    put("location", "directory")
                 }
                 put("requestID", "JIRA-VXP-2397")
             }
@@ -1597,6 +1601,8 @@ class GraphQLRepository(
                     put("sort", sort ?: "RELEVANCE")
                     putJsonObject("recommendationsContext") {
                         put("platform", "web")
+                        put("clientApp", "twilight")
+                        put("location", "directory")
                     }
                     put("requestID", "JIRA-VXP-2397")
                     putJsonArray("tags") {
@@ -1638,6 +1644,8 @@ class GraphQLRepository(
                     if (sort == null || sort == "RELEVANCE") {
                         putJsonObject("recommendationsContext") {
                             put("platform", "web")
+                            put("clientApp", "twilight")
+                            put("location", "directory")
                         }
                         put("requestID", "JIRA-VXP-2397")
                     }
