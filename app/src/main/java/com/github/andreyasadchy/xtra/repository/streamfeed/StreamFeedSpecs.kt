@@ -37,7 +37,7 @@ object StreamFeedSpecs {
                 gqlLanguages = apiLanguages.takeIf { it.isNotEmpty() },
                 gqlSort = querySortName(sort),
                 tags = apiTags.takeIf { it.isNotEmpty() },
-                gqlHeaders = { TwitchApiHelper.getGQLHeaders(context, true) },
+                gqlHeaders = { TwitchApiHelper.getBrowseGQLHeaders(context) },
                 graphQLRepository = graphQLRepository,
                 helixHeaders = { TwitchApiHelper.getHelixHeaders(context) },
                 helixRepository = helixRepository,

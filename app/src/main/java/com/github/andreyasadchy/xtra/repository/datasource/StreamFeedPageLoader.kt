@@ -8,10 +8,13 @@ import com.github.andreyasadchy.xtra.repository.StreamCreatedAtHydrator
 import com.github.andreyasadchy.xtra.repository.GraphQLRepository
 import com.github.andreyasadchy.xtra.repository.HelixRepository
 import com.github.andreyasadchy.xtra.repository.LocalChannelFollowsRepository
+import com.github.andreyasadchy.xtra.repository.parsePersonalSections
 import com.github.andreyasadchy.xtra.ui.common.StreamsSortDialog
 import com.github.andreyasadchy.xtra.util.C
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlin.time.Instant
 
 /**
@@ -180,9 +183,78 @@ class TopStreamsPageLoader(
     }
 
     private suspend fun gqlQueryLoad(cursor: String?): StreamFeedPage {
+        val headers = gqlHeaders()
+        if (gqlSort == "RELEVANCE") {
+            val (response, personalItems) = coroutineScope {
+                val streamsDeferred = async {
+                    graphQLRepository.loadRecommendedTopStreams(
+                        networkLibrary = networkLibrary,
+                        headers = headers,
+                        sort = gqlSort,
+                        tags = tags,
+                        languages = gqlLanguages,
+                        first = pageSize,
+                        cursor = cursor,
+                    )
+                }
+                val personalDeferred = if (shouldBlendPersonalSections(cursor, headers)) {
+                    async { loadPersonalSectionStreams(headers) }
+                } else {
+                    null
+                }
+                streamsDeferred.await() to (personalDeferred?.await() ?: emptyList())
+            }
+            val data = response.data?.streams
+                ?: throw IOException(
+                    buildString {
+                        append("Recommended TopStreams returned no stream data")
+                        response.errors
+                            ?.mapNotNull { it.message }
+                            ?.takeIf { it.isNotEmpty() }
+                            ?.let { messages ->
+                                append(": ")
+                                append(messages.joinToString("; "))
+                            }
+                    }
+                )
+            val edges = data.edges.orEmpty()
+            val directoryItems = edges.mapNotNull { edge ->
+                edge?.node?.let { node ->
+                    Stream(
+                        id = node.id,
+                        channelId = node.broadcaster?.id,
+                        channelLogin = node.broadcaster?.login,
+                        channelName = node.broadcaster?.displayName,
+                        channelImageURL = node.broadcaster?.profileImageURL,
+                        gameId = node.game?.id,
+                        gameSlug = node.game?.slug,
+                        gameName = node.game?.displayName,
+                        title = node.broadcaster?.broadcastSettings?.title,
+                        thumbnailURL = node.previewImageURL,
+                        createdAt = node.createdAt,
+                        viewerCount = node.viewersCount,
+                        tags = node.freeformTags?.mapNotNull { tag -> tag?.name },
+                    ).takeIf { it.channelId != null || it.channelLogin != null }
+                }
+            }
+            val hydratedPersonal = if (personalItems.any { it.createdAt.isNullOrBlank() }) {
+                streamCreatedAtHydrator.hydrateMissingCreatedAt(personalItems, networkLibrary, headers)
+            } else {
+                personalItems
+            }
+            return StreamFeedPage(
+                items = mergeTopStreams(hydratedPersonal, directoryItems),
+                nextCursor = nextStreamFeedCursor(
+                    api = C.GQL,
+                    currentCursor = cursor,
+                    candidate = edges.lastOrNull()?.cursor,
+                    hasNextPage = data.pageInfo?.hasNextPage,
+                ),
+            )
+        }
         val response = graphQLRepository.loadQueryTopStreams(
             networkLibrary,
-            gqlHeaders(),
+            headers,
             gqlQuerySort,
             tags,
             gqlQueryLanguages,
@@ -234,19 +306,29 @@ class TopStreamsPageLoader(
 
     private suspend fun gqlLoad(cursor: String?): StreamFeedPage {
         val headers = gqlHeaders()
-        val response = graphQLRepository.loadTopStreams(
-            networkLibrary,
-            headers,
-            gqlSort,
-            tags,
-            gqlLanguages,
-            pageSize,
-            cursor,
-        )
+        val (response, personalItems) = coroutineScope {
+            val streamsDeferred = async {
+                graphQLRepository.loadTopStreams(
+                    networkLibrary,
+                    headers,
+                    gqlSort,
+                    tags,
+                    gqlLanguages,
+                    pageSize,
+                    cursor,
+                )
+            }
+            val personalDeferred = if (shouldBlendPersonalSections(cursor, headers)) {
+                async { loadPersonalSectionStreams(headers) }
+            } else {
+                null
+            }
+            streamsDeferred.await() to (personalDeferred?.await() ?: emptyList())
+        }
         val data = response.data?.streams
             ?: throw persistedStreamDataError("TopStreams persisted query", response.errors)
         val edges = data.edges
-        val items = edges.mapNotNull { edge ->
+        val directoryItems = edges.mapNotNull { edge ->
             edge.node.let { node ->
                 Stream(
                     id = node.id,
@@ -265,6 +347,7 @@ class TopStreamsPageLoader(
                 ).takeIf { it.channelId != null || it.channelLogin != null }
             }
         }
+        val items = mergeTopStreams(personalItems, directoryItems)
         return StreamFeedPage(
             items = streamCreatedAtHydrator.hydrateMissingCreatedAt(items, networkLibrary, headers),
             nextCursor = nextStreamFeedCursor(
@@ -274,6 +357,45 @@ class TopStreamsPageLoader(
                 hasNextPage = data.pageInfo?.hasNextPage,
             ),
         )
+    }
+
+    private fun shouldBlendPersonalSections(cursor: String?, headers: Map<String, String>): Boolean =
+        cursor == null &&
+            (gqlSort == null || gqlSort == "RELEVANCE") &&
+            tags.isNullOrEmpty() &&
+            gqlLanguages.isNullOrEmpty() &&
+            !headers[C.HEADER_TOKEN].isNullOrBlank()
+
+    private suspend fun loadPersonalSectionStreams(headers: Map<String, String>): List<Stream> {
+        return try {
+            parsePersonalSections(graphQLRepository.loadPersonalSections(networkLibrary, headers))
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            emptyList()
+        }
+    }
+
+    private fun mergeTopStreams(personal: List<Stream>, directory: List<Stream>): List<Stream> {
+        if (personal.isEmpty()) return directory
+        val seenChannelIds = HashSet<String>()
+        val seenLogins = HashSet<String>()
+        val seenStreamIds = HashSet<String>()
+        val merged = ArrayList<Stream>(personal.size + directory.size)
+        fun appendUnique(stream: Stream) {
+            val channelId = stream.channelId?.takeIf { it.isNotBlank() }
+            val login = stream.channelLogin?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+            val streamId = stream.id?.takeIf { it.isNotBlank() }
+            if (channelId != null && channelId in seenChannelIds) return
+            if (login != null && login in seenLogins) return
+            if (streamId != null && streamId in seenStreamIds) return
+            channelId?.let(seenChannelIds::add)
+            login?.let(seenLogins::add)
+            streamId?.let(seenStreamIds::add)
+            merged.add(stream)
+        }
+        personal.forEach(::appendUnique)
+        directory.forEach(::appendUnique)
+        return merged
     }
 
     private suspend fun helixLoad(cursor: String?): StreamFeedPage {

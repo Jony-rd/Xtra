@@ -163,7 +163,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             AddMultiviewStreamsSheet.RESULT_KEY,
             viewLifecycleOwner,
         ) { _, result ->
-            setVideoGridVisibleForSheet(true)
+            (requireContext().applicationContext as XtraApp).xtraModule.streamPreviewCoordinator
+                .setMultiviewPickerActive(false)
             unlockControls()
             result.parcelableArrayList<Stream>(AddMultiviewStreamsSheet.RESULT_STREAMS)?.let(viewModel::addStreams)
         }
@@ -171,7 +172,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
             AddMultiviewStreamsSheet.DISMISSED_KEY,
             viewLifecycleOwner,
         ) { _, _ ->
-            setVideoGridVisibleForSheet(true)
+            (requireContext().applicationContext as XtraApp).xtraModule.streamPreviewCoordinator
+                .setMultiviewPickerActive(false)
             unlockControls()
         }
 
@@ -241,9 +243,10 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     override fun onStart() {
         super.onStart()
         if ((activity as? MainActivity)?.playerFragment != null) return
-        (requireContext().applicationContext as XtraApp).xtraModule.streamPreviewCoordinator
-            .setMultiviewPlaybackActive(true)
-        setVideoGridVisibleForSheet(childFragmentManager.findFragmentByTag(AddMultiviewStreamsSheet.TAG) == null)
+        (requireContext().applicationContext as XtraApp).xtraModule.streamPreviewCoordinator.apply {
+            setMultiviewPlaybackActive(true)
+            setMultiviewPickerActive(childFragmentManager.findFragmentByTag(AddMultiviewStreamsSheet.TAG) != null)
+        }
         enterImmersiveMode()
         (activity as? MainActivity)?.prepareMultiviewPictureInPicture()
         viewModel.onStart()
@@ -251,9 +254,10 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
 
     override fun onStop() {
         MultiviewStreamDeckDialog.dismiss()
-        setVideoGridVisibleForSheet(true)
-        (requireContext().applicationContext as XtraApp).xtraModule.streamPreviewCoordinator
-            .setMultiviewPlaybackActive(false)
+        (requireContext().applicationContext as XtraApp).xtraModule.streamPreviewCoordinator.apply {
+            setMultiviewPickerActive(false)
+            setMultiviewPlaybackActive(false)
+        }
         exitImmersiveMode()
         if ((activity as? MainActivity)?.playerFragment != null) {
             suppressBackgroundOnNextStop = false
@@ -325,8 +329,10 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
     }
 
     override fun onDestroyView() {
-        (requireContext().applicationContext as XtraApp).xtraModule.streamPreviewCoordinator
-            .setMultiviewPlaybackActive(false)
+        (requireContext().applicationContext as XtraApp).xtraModule.streamPreviewCoordinator.apply {
+            setMultiviewPickerActive(false)
+            setMultiviewPlaybackActive(false)
+        }
         MultiviewStreamDeckDialog.dismiss()
         viewModel.stopRaidMonitoring()
         swipeGestureController?.release(restoreBrightness = true)
@@ -782,10 +788,6 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         revealControls()
     }
 
-    private fun setVideoGridVisibleForSheet(visible: Boolean) {
-        _binding?.videoGrid?.visibility = if (visible) View.VISIBLE else View.INVISIBLE
-    }
-
     private fun showAddStreamSheet() {
         val freeSlots = MAX_STREAMS - latestState.streams.size
         if (freeSlots <= 0) {
@@ -794,7 +796,8 @@ class MultiviewFragment : Fragment(R.layout.fragment_multiview) {
         }
         revealControls()
         lockControls()
-        setVideoGridVisibleForSheet(false)
+        (requireContext().applicationContext as XtraApp).xtraModule.streamPreviewCoordinator
+            .setMultiviewPickerActive(true)
         AddMultiviewStreamsSheet.newInstance(latestState.identities, freeSlots)
             .show(childFragmentManager, AddMultiviewStreamsSheet.TAG)
     }

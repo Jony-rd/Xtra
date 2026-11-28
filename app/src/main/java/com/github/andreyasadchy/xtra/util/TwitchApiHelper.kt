@@ -10,7 +10,9 @@ import android.text.format.DateUtils
 import com.github.andreyasadchy.xtra.BuildConfig
 import com.github.andreyasadchy.xtra.R
 import com.github.andreyasadchy.xtra.XtraApp
+import com.github.andreyasadchy.xtra.repository.auth.AuthSessionStore
 import com.github.andreyasadchy.xtra.repository.auth.GeckoGqlIdentity
+import com.github.andreyasadchy.xtra.repository.recommendationAuthFor
 import java.math.RoundingMode
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
@@ -332,6 +334,32 @@ object TwitchApiHelper {
         accessToken = accessToken,
         clientSessionId = clientSessionId,
     )
+
+    /** Headers for Browse directory recommendation queries (personalized when signed in, public otherwise). */
+    fun getBrowseGQLHeaders(
+        context: Context,
+        clientSessionId: String = Uuid.random().toString(),
+    ): Map<String, String> {
+        val sessionStore = AuthSessionStore(context.prefs(), context.tokenPrefs())
+        val officialSession = sessionStore.read()
+        val credential = officialSession?.let { sessionStore.readPrivateGqlCredential(it.accessToken) }
+        val auth = recommendationAuthFor(
+            officialUserId = officialSession?.userId,
+            credential = credential,
+        )
+        if (auth.accessToken != null) {
+            val personalized = getPersonalizedRecommendationGQLHeaders(
+                context = context,
+                clientId = auth.clientId,
+                accessToken = auth.accessToken,
+                clientSessionId = clientSessionId,
+            )
+            if (personalized.isNotEmpty()) return personalized
+            val fallback = getGQLHeaders(context, true)
+            if (!fallback[C.HEADER_TOKEN].isNullOrBlank()) return fallback
+        }
+        return getPublicRecommendationGQLHeaders(context, clientSessionId)
+    }
 
     /** Headers for the public recommendation fallback; never includes Authorization. */
     fun getPublicRecommendationGQLHeaders(

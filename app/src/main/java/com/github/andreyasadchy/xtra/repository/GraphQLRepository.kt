@@ -99,6 +99,7 @@ import com.github.andreyasadchy.xtra.model.gql.game.GameClipsResponse
 import com.github.andreyasadchy.xtra.model.gql.game.GameStreamsResponse
 import com.github.andreyasadchy.xtra.model.gql.game.GameVideosResponse
 import com.github.andreyasadchy.xtra.model.gql.game.GamesResponse
+import com.github.andreyasadchy.xtra.model.gql.game.RecommendedTopGamesResponse
 import com.github.andreyasadchy.xtra.model.gql.playlist.PlaybackAccessTokenResponse
 import com.github.andreyasadchy.xtra.model.gql.search.SearchChannelsResponse
 import com.github.andreyasadchy.xtra.model.gql.search.SearchGameTagsResponse
@@ -106,6 +107,7 @@ import com.github.andreyasadchy.xtra.model.gql.search.SearchGamesResponse
 import com.github.andreyasadchy.xtra.model.gql.search.SearchStreamTagsResponse
 import com.github.andreyasadchy.xtra.model.gql.search.SearchVideosResponse
 import com.github.andreyasadchy.xtra.model.gql.schedule.StreamScheduleResponse
+import com.github.andreyasadchy.xtra.model.gql.stream.RecommendedTopStreamsResponse
 import com.github.andreyasadchy.xtra.model.gql.stream.StreamsResponse
 import com.github.andreyasadchy.xtra.model.gql.stream.ViewerCountResponse
 import com.github.andreyasadchy.xtra.model.gql.tag.TagResponse
@@ -1508,7 +1510,78 @@ class GraphQLRepository(
         json.decodeFromString<TagResponse>(sendPersistedQuery(networkLibrary, headers, body))
     }
 
-    suspend fun loadTopGames(networkLibrary: String?, headers: Map<String, String>, tags: List<String>?, limit: Int?, cursor: String?): GamesResponse = withContext(Dispatchers.IO) {
+    suspend fun loadRecommendedTopGames(
+        networkLibrary: String?,
+        headers: Map<String, String>,
+        sort: String?,
+        tags: List<String>?,
+        first: Int?,
+        cursor: String?,
+    ): RecommendedTopGamesResponse = withContext(Dispatchers.IO) {
+        val body = buildJsonObject {
+            put("operationName", "TopGames")
+            put("query", RECOMMENDED_TOP_GAMES_QUERY)
+            putJsonObject("variables") {
+                put("sort", sort ?: "RELEVANCE")
+                if (tags.isNullOrEmpty()) {
+                    put("tags", JsonNull)
+                } else {
+                    putJsonArray("tags") { tags.forEach { add(it) } }
+                }
+                put("first", first)
+                put("after", cursor)
+                putJsonObject("recommendationsContext") {
+                    put("platform", "web")
+                }
+                put("requestID", "JIRA-VXP-2397")
+            }
+        }.toString()
+        json.decodeFromString<RecommendedTopGamesResponse>(sendPersistedQuery(networkLibrary, headers, body))
+    }
+
+    suspend fun loadRecommendedTopStreams(
+        networkLibrary: String?,
+        headers: Map<String, String>,
+        sort: String?,
+        tags: List<String>?,
+        languages: List<String>?,
+        first: Int?,
+        cursor: String?,
+    ): RecommendedTopStreamsResponse = withContext(Dispatchers.IO) {
+        val body = buildJsonObject {
+            put("operationName", "TopStreams")
+            put("query", RECOMMENDED_TOP_STREAMS_QUERY)
+            putJsonObject("variables") {
+                put("sort", sort ?: "RELEVANCE")
+                if (tags.isNullOrEmpty()) {
+                    put("tags", JsonNull)
+                } else {
+                    putJsonArray("tags") { tags.forEach { add(it) } }
+                }
+                if (languages.isNullOrEmpty()) {
+                    put("languages", JsonNull)
+                } else {
+                    putJsonArray("languages") { languages.forEach { add(it) } }
+                }
+                put("first", first)
+                put("after", cursor)
+                putJsonObject("recommendationsContext") {
+                    put("platform", "web")
+                }
+                put("requestID", "JIRA-VXP-2397")
+            }
+        }.toString()
+        json.decodeFromString<RecommendedTopStreamsResponse>(sendPersistedQuery(networkLibrary, headers, body))
+    }
+
+    suspend fun loadTopGames(
+        networkLibrary: String?,
+        headers: Map<String, String>,
+        tags: List<String>?,
+        limit: Int?,
+        cursor: String?,
+        sort: String? = "RELEVANCE",
+    ): GamesResponse = withContext(Dispatchers.IO) {
         val body = buildJsonObject {
             putJsonObject("extensions") {
                 putJsonObject("persistedQuery") {
@@ -1521,7 +1594,11 @@ class GraphQLRepository(
                 put("cursor", cursor)
                 put("limit", limit)
                 putJsonObject("options") {
-                    put("sort", "VIEWER_COUNT")
+                    put("sort", sort ?: "RELEVANCE")
+                    putJsonObject("recommendationsContext") {
+                        put("platform", "web")
+                    }
+                    put("requestID", "JIRA-VXP-2397")
                     putJsonArray("tags") {
                         tags?.forEach {
                             add(it)
@@ -1557,6 +1634,12 @@ class GraphQLRepository(
                         tags?.forEach {
                             add(it)
                         }
+                    }
+                    if (sort == null || sort == "RELEVANCE") {
+                        putJsonObject("recommendationsContext") {
+                            put("platform", "web")
+                        }
+                        put("requestID", "JIRA-VXP-2397")
                     }
                     put("sort", sort)
                 }
@@ -2390,6 +2473,67 @@ class GraphQLRepository(
     }
 
     private companion object {
+        const val RECOMMENDED_TOP_GAMES_QUERY = """
+            query TopGames(${'$'}sort: GameSort, ${'$'}tags: [String!], ${'$'}first: Int, ${'$'}after: Cursor, ${'$'}recommendationsContext: RecommendationsContext, ${'$'}requestID: ID) {
+              games(first: ${'$'}first, after: ${'$'}after, options: { sort: ${'$'}sort, tags: ${'$'}tags, recommendationsContext: ${'$'}recommendationsContext, requestID: ${'$'}requestID }) {
+                edges {
+                  cursor
+                  node {
+                    boxArtURL
+                    broadcastersCount
+                    displayName
+                    id
+                    slug
+                    tags(tagType: CONTENT) {
+                      id
+                      localizedName
+                    }
+                    viewersCount
+                  }
+                }
+                pageInfo {
+                  hasNextPage
+                }
+              }
+            }
+        """
+
+        const val RECOMMENDED_TOP_STREAMS_QUERY = """
+            query TopStreams(${'$'}sort: StreamSort, ${'$'}tags: [String!], ${'$'}languages: [Language!], ${'$'}first: Int, ${'$'}after: Cursor, ${'$'}recommendationsContext: RecommendationsContext, ${'$'}requestID: ID) {
+              streams(first: ${'$'}first, after: ${'$'}after, options: { sort: ${'$'}sort, freeformTags: ${'$'}tags, broadcasterLanguages: ${'$'}languages, recommendationsContext: ${'$'}recommendationsContext, requestID: ${'$'}requestID }) {
+                edges {
+                  cursor
+                  node {
+                    broadcaster {
+                      broadcastSettings {
+                        title
+                      }
+                      displayName
+                      id
+                      login
+                      profileImageURL(width: 300)
+                    }
+                    createdAt
+                    freeformTags {
+                      name
+                    }
+                    game {
+                      displayName
+                      id
+                      slug
+                    }
+                    id
+                    previewImageURL
+                    viewersCount
+                  }
+                }
+                pageInfo {
+                  hasNextPage
+                }
+              }
+            }
+        """
+
         const val PERSONAL_SECTIONS_QUERY = """
             query PersonalSections(${'$'}input: PersonalSectionInput!) {
               personalSections(input: ${'$'}input) {

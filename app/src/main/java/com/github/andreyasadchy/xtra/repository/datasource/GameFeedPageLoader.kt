@@ -67,14 +67,26 @@ class TwitchGameFeedPageLoader(
     }
 
     private suspend fun gqlQueryLoad(cursor: String?): GameFeedPage {
-        val response = graphQLRepository.loadQueryTopGames(
+        val response = graphQLRepository.loadRecommendedTopGames(
             networkLibrary = networkLibrary,
             headers = gqlHeaders(),
+            sort = "RELEVANCE",
             tags = tags,
             first = pageSize,
-            after = cursor,
+            cursor = cursor,
         )
-        val data = response.data?.games ?: error("Top games response did not contain games")
+        val data = response.data?.games ?: throw IOException(
+            buildString {
+                append("Top games response did not contain games")
+                response.errors
+                    ?.mapNotNull { it.message }
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.let { messages ->
+                        append(": ")
+                        append(messages.joinToString("; "))
+                    }
+            }
+        )
         val edges = data.edges.orEmpty()
         return GameFeedPage(
             items = edges.mapNotNull { edge ->
@@ -86,7 +98,9 @@ class TwitchGameFeedPageLoader(
                         boxArtURL = game.boxArtURL,
                         viewerCount = game.viewersCount,
                         broadcasterCount = game.broadcastersCount,
-                        tags = game.tags?.map { tag -> Tag(tag.id, tag.localizedName) },
+                        tags = game.tags?.mapNotNull { tag ->
+                            tag?.let { Tag(it.id, it.localizedName) }
+                        },
                     )
                 }
             },

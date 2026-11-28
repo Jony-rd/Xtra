@@ -108,6 +108,7 @@ class StreamPreviewCoordinator(
     private var handoffLogin: String? = null
     private var playbackSuppressesPreviews = false
     private var multiviewSuppressesPreviews = false
+    private var multiviewPickerActive = false
     private val lifecycleReconciler = StreamPreviewLifecycleReconciler(
         lifecycle = previewLifecycle,
         schedule = ::scheduleLifecycleReconciliation,
@@ -267,12 +268,27 @@ class StreamPreviewCoordinator(
     fun setMultiviewPlaybackActive(active: Boolean) {
         if (multiviewSuppressesPreviews == active) return
         multiviewSuppressesPreviews = active
-        if (active) {
+        if (!active) {
+            multiviewPickerActive = false
+        }
+        if (active && !multiviewPickerActive) {
             stopPreview()
             releaseSharedPreviewPlayer()
             hideViewportSurfaces()
         } else if (!playbackSuppressesPreviews) {
             scheduleSelection()
+        }
+    }
+
+    fun setMultiviewPickerActive(active: Boolean) {
+        if (multiviewPickerActive == active) return
+        multiviewPickerActive = active
+        if (active) {
+            if (!playbackSuppressesPreviews) scheduleSelection()
+        } else if (multiviewSuppressesPreviews) {
+            stopPreview()
+            releaseSharedPreviewPlayer()
+            hideViewportSurfaces()
         }
     }
 
@@ -441,7 +457,7 @@ class StreamPreviewCoordinator(
     }
 
     private fun canStartPreview(): Boolean {
-        if (playbackSuppressesPreviews || multiviewSuppressesPreviews) return false
+        if (playbackSuppressesPreviews || (multiviewSuppressesPreviews && !multiviewPickerActive)) return false
 
         val isPlayerFullscreen = streamFeedRefreshCoordinator.isPlayerFullscreen
         val isPlayerActive = streamFeedRefreshCoordinator.isPlayerActive
@@ -710,11 +726,16 @@ class StreamPreviewCoordinator(
         }.build()
 
     private fun currentCandidates(): List<StreamPreviewCandidate> =
-        viewports.values.flatMap { it.candidates }
-            .mapNotNull { candidate -> candidate.takeIf { it.previewIdentity != null } }
+        if (multiviewSuppressesPreviews && multiviewPickerActive) {
+            viewports[MULTIVIEW_PICKER_VIEWPORT_KEY]?.candidates.orEmpty()
+        } else {
+            viewports.values.flatMap { it.candidates }
+        }.mapNotNull { candidate -> candidate.takeIf { it.previewIdentity != null } }
 
     private fun maxActivePreviews(candidates: Collection<StreamPreviewCandidate> = currentCandidates()): Int =
-        if (StreamPreviewPolicy.allowsMultiplePreviews(context)) {
+        if (multiviewSuppressesPreviews) {
+            1
+        } else if (StreamPreviewPolicy.allowsMultiplePreviews(context)) {
             candidates
                 .mapNotNullTo(mutableSetOf(), StreamPreviewCandidate::previewIdentity)
                 .size
@@ -932,5 +953,6 @@ class StreamPreviewCoordinator(
     private companion object {
         const val PAGER_PREVIEW_RESUME_DELAY_MS = 100L
         const val PLAYER_FAILURE_RETRY_MS = 10_000L
+        const val MULTIVIEW_PICKER_VIEWPORT_KEY = "multiview-picker-streams"
     }
 }
